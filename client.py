@@ -3,10 +3,11 @@ import os
 from tinkoff.invest import Client
 from tinkoff.invest.constants import INVEST_GRPC_API_SANDBOX
 from tinkoff.invest.constants import INVEST_GRPC_API
+from tinkoff.invest import InstrumentIdType
 
 TOKEN = os.environ["INVEST_TOKEN"]
-SRC_ACCOUNT = '2141399550'
-DST_ACCOUNT = '2193248994'
+DST_ACCOUNT = '2141399550'
+SRC_ACCOUNT = '2193248994'
 
 class AutoRepeater:
 
@@ -22,7 +23,7 @@ class AutoRepeater:
         result = 'blocked ' + self.moneyToString(blocked)
         return result
 
-    def shareToString(self, share):
+    def noMoneyToString(self, share):
         result = share.name+'('+share.ticker+')'
         return result
 
@@ -35,12 +36,15 @@ class AutoRepeater:
         result += ' - ' + str(self.currencyToFloat(position))
         return result
 
+    def getQuantityPosition(self, position):
+        return position.quantity.units+position.quantity.nano/1000000000.
+
     def postitonToString(self, position):
         if position.instrument_type == 'currency':
             return self.currencyToString(position)
         elif position.instrument_type == 'share' or position.instrument_type == 'etf':
             instrument = self.get_instrument(position.instrument_uid)
-            return self.shareToString(instrument)+' - '+ str(position.quantity.units+position.quantity.nano/1000000000.) +' - '+self.currencyToString(position)
+            return self.noMoneyToString(instrument)+' - '+ str(self.getQuantityPosition(position)) +' - '+self.currencyToString(position)
         else:
             return str(position)
 
@@ -63,8 +67,8 @@ class AutoRepeater:
             print('total: '+str(total))
             print('============')
 
-        for response in self.client.operations_stream.positions_stream(accounts=[SRC_ACCOUNT]):
-#            if response.position is not None and len(response.position.securities)>0 and response.position.securities[0].blocked==0:
+        for response in self.client.operations_stream.positions_stream(accounts=[SRC_ACCOUNT,DST_ACCOUNT]):
+            if (response.position is not None and response.position.account_id==SRC_ACCOUNT and len(response.position.securities)>0 and response.position.securities[0].blocked==0) or (response.position is not None and response.position.account_id==DST_ACCOUNT):
                 print("src account")
                 portfolio_src = self.client.operations.get_portfolio(account_id=SRC_ACCOUNT)
                 total_src = 0.0
@@ -72,7 +76,7 @@ class AutoRepeater:
                 for position in portfolio_src.positions:
                     print(self.postitonToString(position))
                     if position.instrument_type != 'currency':
-                        src_positions[position.instrument_uid] = position.quantity.units+position.quantity.nano/1000000000.
+                        src_positions[position.instrument_uid] = position
                     total_src += self.currencyToFloat(position)
                 print('total: '+str(total_src))
 
@@ -83,7 +87,7 @@ class AutoRepeater:
                 for position in portfolio_dst.positions:
                     print(self.postitonToString(position))
                     if position.instrument_type != 'currency':
-                        dst_positions[position.instrument_uid] = position.quantity.units+position.quantity.nano/1000000000.
+                        dst_positions[position.instrument_uid] = position
                     total_dst += self.currencyToFloat(position)
                 print('total: '+str(total_dst))
 
@@ -91,21 +95,25 @@ class AutoRepeater:
                 target_positions = {}
 
                 for instrument_id in src_positions.keys():
-                    target_positions[instrument_id] = ratio*src_positions[instrument_id]
+                    position = src_positions[instrument_id]
+                    target_positions[instrument_id] = ratio*self.getQuantityPosition(position)
 
                 for instrument_id in dst_positions.keys():
-                    instrument = self.get_instrument(instrument_id)
+                    instrument = self.client.instruments.get_instrument_by(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID ,id=instrument_id).instrument
+                    position = dst_positions[instrument_id]
                     if instrument_id not in target_positions.keys():
-                        print('Продать: ' + self.shareToString(instrument) + str(dst_positions[instrument_id]))
-                    elif target_positions[instrument_id]<dst_positions[instrument_id]:
-                        print('Продать: ' + self.shareToString(instrument) + str(dst_positions[instrument_id]-target_positions[instrument_id]))
+                        print('Продать: ' + self.noMoneyToString(instrument) + ' ' + str(round(self.getQuantityPosition(position)/instrument.lot)) + ' лотов')
+                    elif target_positions[instrument_id]<self.getQuantityPosition(position):
+                        print('Продать: ' + self.noMoneyToString(instrument) + ' ' +  str(round((self.getQuantityPosition(position)-target_positions[instrument_id])/instrument.lot)) + ' лотов')
 
                 for instrument_id in target_positions.keys():
-                    instrument = self.get_instrument(instrument_id)
+                    instrument = self.client.instruments.get_instrument_by(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID ,id=instrument_id).instrument
                     if instrument_id not in dst_positions.keys():
-                        print('Купить: ' + self.shareToString(instrument) + str(target_positions[instrument_id]))
-                    elif target_positions[instrument_id]>dst_positions[instrument_id]:
-                        print('Купить: ' + self.shareToString(instrument) + str(target_positions[instrument_id]-dst_positions[instrument_id]))
+                        position = src_positions[instrument_id]
+                        print('Купить: ' + self.noMoneyToString(instrument) + ' ' +  str(round(target_positions[instrument_id]/instrument.lot))+ ' лотов')
+                    elif target_positions[instrument_id]>self.getQuantityPosition(dst_positions[instrument_id]):
+                        position = dst_positions[instrument_id]
+                        print('Купить: ' + self.noMoneyToString(instrument) + ' ' +  str(round((target_positions[instrument_id]-self.getQuantityPosition(position))/instrument.lot))+' лотов')
 
 
 def main():
