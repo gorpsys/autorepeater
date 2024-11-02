@@ -6,12 +6,13 @@ from tinkoff.invest.constants import INVEST_GRPC_API
 from tinkoff.invest import InstrumentIdType
 from tinkoff.invest import OrderDirection
 from tinkoff.invest import OrderType
-from tinkoff.invest import PriceType
+from datetime import *
 
 
 TOKEN = os.environ["INVEST_TOKEN"]
 DST_ACCOUNT = '2141399550'
 SRC_ACCOUNT = '2193248994'
+DST_MONEY_RESERVED = 0.005
 
 class AutoRepeater:
 
@@ -96,6 +97,7 @@ class AutoRepeater:
             if position.instrument_type != 'currency':
                 dst_positions[position.instrument_uid] = position
             total_dst += self.currencyToFloat(position)
+        total_dst = total_dst*(1-DST_MONEY_RESERVED)
         print('total: '+str(total_dst))
 
         ratio = total_dst/total_src
@@ -140,10 +142,16 @@ class AutoRepeater:
         self.printAllPortfolio()
 
         self.syncAccounts(SRC_ACCOUNT,DST_ACCOUNT)
+
+        date = datetime.now()
         
         for response in self.client.operations_stream.positions_stream(accounts=[SRC_ACCOUNT,DST_ACCOUNT]):
-            if (response.position is not None and response.position.account_id==SRC_ACCOUNT and len(response.position.securities)>0 and response.position.securities[0].blocked==0) or (response.position is not None and response.position.account_id==DST_ACCOUNT):
+            if response.position is not None and response.position.account_id==SRC_ACCOUNT and len(response.position.securities)>0 and response.position.securities[0].blocked==0:
                 self.syncAccounts(SRC_ACCOUNT,DST_ACCOUNT)
+            elif response.position is not None and response.position.account_id==DST_ACCOUNT and response.position.date.replace(tzinfo=None) - date < timedelta(seconds=10):
+                date = response.position.date
+                self.syncAccounts(SRC_ACCOUNT,DST_ACCOUNT)
+
                         
 
 
