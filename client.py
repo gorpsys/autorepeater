@@ -6,12 +6,10 @@ from tinkoff.invest.constants import INVEST_GRPC_API
 from tinkoff.invest import InstrumentIdType
 from tinkoff.invest import OrderDirection
 from tinkoff.invest import OrderType
-from datetime import *
-
+import datetime
+import argparse
 
 TOKEN = os.environ["INVEST_TOKEN"]
-DST_ACCOUNT = '2141399550'
-SRC_ACCOUNT = '2193248994'
 DST_MONEY_RESERVED = 0.005
 
 class AutoRepeater:
@@ -137,28 +135,34 @@ class AutoRepeater:
                     print(self.client.orders.post_order(instrument_id=instrument_id,quantity=quantity,direction=OrderDirection.ORDER_DIRECTION_BUY,account_id=DST_ACCOUNT,order_type=OrderType.ORDER_TYPE_BESTPRICE).order_id)
 
 
-    def mainflow(self):
+    def mainflow(self, src, dst):
 
         self.printAllPortfolio()
 
-        self.syncAccounts(SRC_ACCOUNT,DST_ACCOUNT)
+        self.syncAccounts(src,dst)
 
-        date = datetime.now()
+        date = datetime.datetime.now()
         
-        for response in self.client.operations_stream.positions_stream(accounts=[SRC_ACCOUNT,DST_ACCOUNT]):
-            if response.position is not None and response.position.account_id==SRC_ACCOUNT and len(response.position.securities)>0 and response.position.securities[0].blocked==0:
-                self.syncAccounts(SRC_ACCOUNT,DST_ACCOUNT)
-            elif response.position is not None and response.position.account_id==DST_ACCOUNT and response.position.date.replace(tzinfo=None) - date < timedelta(seconds=10):
+        for response in self.client.operations_stream.positions_stream(accounts=[src,dst]):
+            if response.position is not None and response.position.account_id==src and len(response.position.securities)>0 and response.position.securities[0].blocked==0:
+                self.syncAccounts(src,dst)
+            elif response.position is not None and response.position.account_id==dst and response.position.date.replace(tzinfo=None) - date < timedelta(seconds=10):
                 date = response.position.date
-                self.syncAccounts(SRC_ACCOUNT,DST_ACCOUNT)
+                self.syncAccounts(src,dst)
 
                         
 
 
 def main():
+    parser = argparse.ArgumentParser(description="autorepeater")
+    parser.add_argument("src", help="id счёта источника")
+    parser.add_argument("dst", help="id счёта назначения")
+    
+    args = parser.parse_args()
+
     with Client(token=TOKEN, target=INVEST_GRPC_API) as client:
         autorepeater = AutoRepeater(client)
-        autorepeater.mainflow()
+        autorepeater.mainflow(args.src, args.dst)
 
 if __name__ == "__main__":
     main()
