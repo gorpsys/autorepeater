@@ -7,6 +7,8 @@ from tinkoff.invest.constants import INVEST_GRPC_API
 from tinkoff.invest import InstrumentIdType
 from tinkoff.invest import OrderDirection
 from tinkoff.invest import OrderType
+from tinkoff.invest import SecurityTradingStatus
+from tinkoff.invest import RequestError
 
 TOKEN = os.environ["INVEST_TOKEN"]
 DST_MONEY_RESERVED = 0.005
@@ -50,16 +52,16 @@ def get_quantity_position(position):
     """get quantity from position"""
     return position.quantity.units + position.quantity.nano / 1000000000.
 
+
 def check_triggers(position, src_account, dst_account):
     """check triggers for sync accounts"""
-    return (position is not None and position.account_id
-                    == src_account and len(position.securities) > 0
-                    and position.securities[0].blocked == 0
-                ) or (position is not None
-                      and position.account_id == dst_account
-                      and len(position.securities) == 0
+    return (position is not None and position.account_id == src_account
+            and len(position.securities) > 0 and position.securities[0].blocked
+            == 0) or (position is not None and position.account_id
+                      == dst_account and len(position.securities) == 0
                       and position.money[0].blocked_value.units == 0
                       and position.money[0].blocked_value.nano == 0)
+
 
 class AutoRepeater:
     """Main class for automatically repeating operations of one account over another account."""
@@ -145,6 +147,9 @@ class AutoRepeater:
             instrument = self.client.instruments.get_instrument_by(
                 id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
                 id=item_id).instrument
+            if (instrument.trading_status
+                != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING):
+                continue
             if item_id not in target_positions:
                 quantity = round(
                     get_quantity_position(item_value) / instrument.lot)
@@ -183,6 +188,9 @@ class AutoRepeater:
             instrument = self.client.instruments.get_instrument_by(
                 id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
                 id=item_id).instrument
+            if (instrument.trading_status
+                != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING):
+                continue
             if item_id not in dst_positions:
                 position = src_positions[item_id]
                 quantity = round(item_value / instrument.lot)
@@ -233,12 +241,19 @@ class AutoRepeater:
 
     def mainflow(self, src, dst):
         """sync accounts when changing"""
-        self.sync_accounts(src, dst)
+        try:
+            self.sync_accounts(src, dst)
+        except RequestError as err:
+            print(err)
 
-        for response in self.client.operations_stream.positions_stream(
-                accounts=[src, dst]):
-            if check_triggers(response.position, src, dst):
-                self.sync_accounts(src, dst)
+        while True:
+            try:
+                for response in self.client.operations_stream.positions_stream(
+                        accounts=[src, dst]):
+                    if check_triggers(response.position, src, dst):
+                        self.sync_accounts(src, dst)
+            except RequestError as err:
+                print(err)
 
 
 def main():
