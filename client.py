@@ -1,6 +1,7 @@
 """A robot for automatically repeating operations of one account over another account"""
 import os
 import argparse
+import dataclasses
 
 from tinkoff.invest import Client
 from tinkoff.invest.constants import INVEST_GRPC_API
@@ -12,6 +13,7 @@ from tinkoff.invest import RequestError
 
 TOKEN = os.environ["INVEST_TOKEN"]
 DST_MONEY_RESERVED = 0.005
+THRESHOLD = 0.001
 
 
 def money_to_string(money):
@@ -34,10 +36,17 @@ def no_money_to_string(share):
 
 
 def currency_to_float(position):
-    """convert position price value to float"""
+    """convert position full price value to float"""
     result = (position.current_price.units + position.current_price.nano /
               1000000000.) * (position.quantity.units +
                               position.quantity.nano / 1000000000.)
+    return result
+
+
+def currency_to_float_price(position):
+    """convert position price value to float"""
+    result = (position.current_price.units +
+              position.current_price.nano / 1000000000.)
     return result
 
 
@@ -63,8 +72,32 @@ def check_triggers(position, src_account, dst_account):
                       and position.money[0].blocked_value.nano == 0)
 
 
+def get_max_sum_positions_price(sell_orders_params, buy_orders_params,
+                                src_positions, dst_positions):
+    """get max sum orders price for buy or sell orders"""
+    total_sell = 0
+    for order_params in sell_orders_params:
+        position = dst_positions[order_params.instrument_id]
+        total_sell += currency_to_float_price(position) * order_params.quantity
+
+    total_buy = 0
+    for order_params in buy_orders_params:
+        position = src_positions[order_params.instrument_id]
+        total_buy += currency_to_float_price(position) * order_params.quantity
+
+    return max(total_sell, total_buy)
+
+
 class AutoRepeater:
     """Main class for automatically repeating operations of one account over another account."""
+
+    @dataclasses.dataclass
+    class OrderParams:
+        """struct for order params"""
+        instrument_id: str
+        quantity: int
+        direction: OrderDirection
+        order_type: OrderType
 
     def __init__(self, client):
         self.client = client
@@ -139,16 +172,17 @@ class AutoRepeater:
         print('total: ' + str(total_dst))
 
         ratio = total_dst / total_src
-        return (src_positions, dst_positions, ratio)
+        return (src_positions, dst_positions, ratio, total_dst)
 
-    def sell_positions(self, dst_account_id, dst_positions, target_positions):
-        """sell extra positions from dst accounts"""
+    def calc_sell_positions(self, dst_positions, target_positions):
+        """calc extra positions from dst accounts for sell"""
+        result = []
         for item_id, item_value in dst_positions.items():
             instrument = self.client.instruments.get_instrument_by(
                 id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
                 id=item_id).instrument
-            if (instrument.trading_status
-                != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING):
+            if (instrument.trading_status != SecurityTradingStatus.
+                    SECURITY_TRADING_STATUS_NORMAL_TRADING):
                 continue
             if item_id not in target_positions:
                 quantity = round(
@@ -156,40 +190,36 @@ class AutoRepeater:
                 if quantity > 0:
                     print('Продать: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
-                    if not self.debug:
-                        print(
-                            self.client.orders.post_order(
-                                instrument_id=item_id,
-                                quantity=quantity,
-                                direction=OrderDirection.ORDER_DIRECTION_SELL,
-                                account_id=dst_account_id,
-                                order_type=OrderType.ORDER_TYPE_BESTPRICE).
-                            order_id)
+                    result.append(
+                        AutoRepeater.OrderParams(
+                            instrument_id=item_id,
+                            quantity=quantity,
+                            direction=OrderDirection.ORDER_DIRECTION_SELL,
+                            order_type=OrderType.ORDER_TYPE_BESTPRICE))
             elif target_positions[item_id] < get_quantity_position(item_value):
                 quantity = round((get_quantity_position(item_value) -
                                   target_positions[item_id]) / instrument.lot)
                 if quantity > 0:
                     print('Продать: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
-                    if not self.debug:
-                        print(
-                            self.client.orders.post_order(
-                                instrument_id=item_id,
-                                quantity=quantity,
-                                direction=OrderDirection.ORDER_DIRECTION_SELL,
-                                account_id=dst_account_id,
-                                order_type=OrderType.ORDER_TYPE_BESTPRICE).
-                            order_id)
+                    result.append(
+                        AutoRepeater.OrderParams(
+                            instrument_id=item_id,
+                            quantity=quantity,
+                            direction=OrderDirection.ORDER_DIRECTION_SELL,
+                            order_type=OrderType.ORDER_TYPE_BESTPRICE))
+        return result
 
-    def buy_positions(self, dst_account_id, src_positions, dst_positions,
-                      target_positions):
-        """buy missing positions for dst account"""
+    def calc_buy_positions(self, src_positions, dst_positions,
+                           target_positions):
+        """calc missing positions from dst account for buy"""
+        result = []
         for item_id, item_value in target_positions.items():
             instrument = self.client.instruments.get_instrument_by(
                 id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
                 id=item_id).instrument
-            if (instrument.trading_status
-                != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING):
+            if (instrument.trading_status != SecurityTradingStatus.
+                    SECURITY_TRADING_STATUS_NORMAL_TRADING):
                 continue
             if item_id not in dst_positions:
                 position = src_positions[item_id]
@@ -197,15 +227,12 @@ class AutoRepeater:
                 if quantity > 0:
                     print('Купить: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
-                    if not self.debug:
-                        print(
-                            self.client.orders.post_order(
-                                instrument_id=item_id,
-                                quantity=quantity,
-                                direction=OrderDirection.ORDER_DIRECTION_BUY,
-                                account_id=dst_account_id,
-                                order_type=OrderType.ORDER_TYPE_BESTPRICE).
-                            order_id)
+                    result.append(
+                        AutoRepeater.OrderParams(
+                            instrument_id=item_id,
+                            quantity=quantity,
+                            direction=OrderDirection.ORDER_DIRECTION_BUY,
+                            order_type=OrderType.ORDER_TYPE_BESTPRICE))
             elif item_value > get_quantity_position(dst_positions[item_id]):
                 position = dst_positions[item_id]
                 quantity = round(
@@ -214,30 +241,57 @@ class AutoRepeater:
                 if quantity > 0:
                     print('Купить: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
-                    if not self.debug:
-                        print(
-                            self.client.orders.post_order(
-                                instrument_id=item_id,
-                                quantity=quantity,
-                                direction=OrderDirection.ORDER_DIRECTION_BUY,
-                                account_id=dst_account_id,
-                                order_type=OrderType.ORDER_TYPE_BESTPRICE).
-                            order_id)
+                    result.append(
+                        AutoRepeater.OrderParams(
+                            instrument_id=item_id,
+                            quantity=quantity,
+                            direction=OrderDirection.ORDER_DIRECTION_BUY,
+                            order_type=OrderType.ORDER_TYPE_BESTPRICE))
+        return result
+
+    def post_orders(self, dst_account_id, orders_params_sell,
+                    orders_params_buy):
+        """post all orders"""
+        for order_params in orders_params_sell:
+            print(order_params)
+            print(
+                self.client.orders.post_order(
+                    instrument_id=order_params.instrument_id,
+                    quantity=order_params.quantity,
+                    direction=order_params.direction,
+                    account_id=dst_account_id,
+                    order_type=order_params.order_type).order_id)
+        for order_params in orders_params_buy:
+            print(order_params)
+            print(
+                self.client.orders.post_order(
+                    instrument_id=order_params.instrument_id,
+                    quantity=order_params.quantity,
+                    direction=order_params.direction,
+                    account_id=dst_account_id,
+                    order_type=order_params.order_type).order_id)
 
     def sync_accounts(self, src_account_id, dst_account_id):
         """sync positions from src account to dst account"""
-        (src_positions, dst_positions,
-         ratio) = self.calc_ratio(src_account_id, dst_account_id)
+        (src_positions, dst_positions, ratio,
+         total_dst) = self.calc_ratio(src_account_id, dst_account_id)
         target_positions = {}
 
         for item_id, item_value in src_positions.items():
             target_positions[item_id] = ratio * \
                 get_quantity_position(item_value)
 
-        self.sell_positions(dst_account_id, dst_positions, target_positions)
+        orders_params_sell = self.calc_sell_positions(dst_positions,
+                                                      target_positions)
+        orders_params_buy = self.calc_buy_positions(src_positions,
+                                                    dst_positions,
+                                                    target_positions)
 
-        self.buy_positions(dst_account_id, src_positions, dst_positions,
-                           target_positions)
+        if (not self.debug) and (get_max_sum_positions_price(
+                orders_params_sell, orders_params_buy, src_positions,
+                dst_positions) > total_dst * THRESHOLD):
+            self.post_orders(dst_account_id, orders_params_sell,
+                             orders_params_buy)
 
     def mainflow(self, src, dst):
         """sync accounts when changing"""
