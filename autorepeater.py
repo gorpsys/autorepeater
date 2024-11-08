@@ -15,6 +15,8 @@ TOKEN = os.environ["INVEST_TOKEN"]
 DST_MONEY_RESERVED = 0.005
 THRESHOLD = 0.001
 
+class GetInstrumentException(Exception):
+    """instrument not found by instrument_id"""
 
 def money_to_string(money):
     """convert money to human-readable string"""
@@ -136,7 +138,7 @@ class AutoRepeater:
             query=instrument_id).instruments
         if len(result) == 1:
             return result[0]
-        raise Exception('error get instrument')
+        raise GetInstrumentException('error get instrument')
 
     def print_portfolio_by_account(self, account):
         """print detailed information about account"""
