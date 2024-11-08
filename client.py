@@ -102,10 +102,22 @@ class AutoRepeater:
     def __init__(self, client):
         self.client = client
         self.debug = True
+        self.threshold = THRESHOLD
+        self.reserve = DST_MONEY_RESERVED
 
     def set_debug(self, debug):
         """set debug flag"""
         self.debug = debug
+
+    def set_threshold(self, threshold):
+        """set threshod"""
+        if threshold is not None:
+            self.threshold = threshold
+
+    def set_reserve(self, reserve):
+        """set reserve"""
+        if reserve is not None:
+            self.reserve = reserve
 
     def postiton_to_string(self, position):
         """convert position to human-readable string"""
@@ -168,7 +180,7 @@ class AutoRepeater:
             if position.instrument_type != 'currency':
                 dst_positions[position.instrument_uid] = position
             total_dst += currency_to_float(position)
-        total_dst = total_dst * (1 - DST_MONEY_RESERVED)
+        total_dst = total_dst * (1 - self.reserve)
         print('total: ' + str(total_dst))
 
         ratio = total_dst / total_src
@@ -289,7 +301,7 @@ class AutoRepeater:
 
         if (not self.debug) and (get_max_sum_positions_price(
                 orders_params_sell, orders_params_buy, src_positions,
-                dst_positions) > total_dst * THRESHOLD):
+                dst_positions) > total_dst * self.threshold):
             self.post_orders(dst_account_id, orders_params_sell,
                              orders_params_buy)
 
@@ -314,15 +326,25 @@ def main():
     """main function"""
     parser = argparse.ArgumentParser(description="autorepeater")
 
+    parser.add_argument("--debug", type=bool, help="режим отладки")
+    parser.add_argument("-s", "--src", type=str, help="id счёта источника")
+    parser.add_argument("-d", "--dst", type=str, help="id счёта назначения")
+    parser.add_argument("-t", "--threshold", type=float, help="порог стоимости, ниже "
+                        "которого не выполняется синхронизация - доля стоимости счёта"
+                        " назначения. По умолчанию 0.001")
+    parser.add_argument("-r", "--reserve", type=float, help="резев на счёте назначения"
+                        " для округлений и комиссий. Доля стоимости счёта назначения. "
+                        "По умолчания 0.005")
+    args = parser.parse_args()
+
     with Client(token=TOKEN, target=INVEST_GRPC_API) as client:
         autorepeater = AutoRepeater(client)
         autorepeater.print_all_portfolio()
-        parser.add_argument("--debug", type=bool, help="режим отладки")
-        parser.add_argument("src", help="id счёта источника")
-        parser.add_argument("dst", help="id счёта назначения")
-        args = parser.parse_args()
         autorepeater.set_debug(args.debug)
-        autorepeater.mainflow(args.src, args.dst)
+        autorepeater.set_threshold(args.threshold)
+        autorepeater.set_reserve(args.reserve)
+        if args.src and args.dst:
+            autorepeater.mainflow(args.src, args.dst)
 
 
 if __name__ == "__main__":
