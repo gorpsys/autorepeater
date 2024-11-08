@@ -101,7 +101,7 @@ class AutoRepeater:
 
     def __init__(self, client):
         self.client = client
-        self.debug = True
+        self.debug = False
         self.threshold = THRESHOLD
         self.reserve = DST_MONEY_RESERVED
 
@@ -326,7 +326,7 @@ def main():
     """main function"""
     parser = argparse.ArgumentParser(description="autorepeater")
 
-    parser.add_argument("--debug", type=bool, help="режим отладки")
+    parser.add_argument("--debug", action='store_true', help="режим отладки")
     parser.add_argument("-s", "--src", type=str, help="id счёта источника")
     parser.add_argument("-d", "--dst", type=str, help="id счёта назначения")
     parser.add_argument("-t", "--threshold", type=float, help="порог стоимости, ниже "
