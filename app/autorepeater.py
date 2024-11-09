@@ -11,7 +11,6 @@ from tinkoff.invest import OrderType
 from tinkoff.invest import SecurityTradingStatus
 from tinkoff.invest import RequestError
 
-TOKEN = os.environ["INVEST_TOKEN"]
 DST_MONEY_RESERVED = 0.005
 THRESHOLD = 0.001
 
@@ -339,7 +338,9 @@ def main():
                         "По умолчания 0.005")
     args = parser.parse_args()
 
-    with Client(token=TOKEN, target=INVEST_GRPC_API) as client:
+    invest_token = os.environ["INVEST_TOKEN"]
+
+    with Client(token=invest_token, target=INVEST_GRPC_API) as client:
         autorepeater = AutoRepeater(client)
         autorepeater.print_all_portfolio()
         autorepeater.set_debug(args.debug)
