@@ -5,6 +5,9 @@ from tinkoff.invest import MoneyValue
 from tinkoff.invest import Instrument
 from tinkoff.invest import PortfolioPosition
 from tinkoff.invest import Quotation
+from tinkoff.invest import PositionData
+from tinkoff.invest import PositionsMoney
+from tinkoff.invest import PositionsSecurities
 
 from app.autorepeater import money_to_string
 from app.autorepeater import no_money_to_string
@@ -13,6 +16,7 @@ from app.autorepeater import currency_to_float
 from app.autorepeater import currency_to_string
 from app.autorepeater import currency_to_float_price
 from app.autorepeater import get_quantity_position
+from app.autorepeater import check_triggers
 
 @pytest.mark.parametrize(
         'currency, units, nano, expected',
@@ -69,7 +73,7 @@ def test_no_money_to_string(instrument, expected):
         ]
 )
 def test_currency_to_float(money, quantity_units, quantity_nano, expected):
-    """money to string"""
+    """currency to float"""
     position = PortfolioPosition(
         current_price=money,
         quantity=Quotation(
@@ -90,7 +94,7 @@ def test_currency_to_float(money, quantity_units, quantity_nano, expected):
         ]
 )
 def test_currency_to_float_price(money, quantity_units, quantity_nano, expected):
-    """money to string"""
+    """currency price to float"""
     position = PortfolioPosition(
         current_price=money,
         quantity=Quotation(
@@ -111,7 +115,7 @@ def test_currency_to_float_price(money, quantity_units, quantity_nano, expected)
         ]
 )
 def test_currency_to_string(money, quantity_units, quantity_nano, expected):
-    """money to string"""
+    """currency to string"""
     position = PortfolioPosition(
         current_price=money,
         quantity=Quotation(
@@ -132,7 +136,7 @@ def test_currency_to_string(money, quantity_units, quantity_nano, expected):
         ]
 )
 def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
-    """money to string"""
+    """quantity position"""
     position = PortfolioPosition(
         current_price=money,
         quantity=Quotation(
@@ -141,5 +145,27 @@ def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
         ),
     )
     result = get_quantity_position(position)
+
+    assert result == expected
+
+@pytest.mark.parametrize(
+        'account_id, position_securities, position_money, expected',
+        [
+            ('1', [], [], False),
+            ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=1))], False),
+            ('1', [PositionsSecurities(blocked=0)], [PositionsMoney()], True),
+            ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=0, nano=0))], True),
+        ]
+)
+def test_check_triggers(account_id, position_money, position_securities, expected):
+    """check triggers"""
+    src_account = '1'
+    dst_account = '2'
+    position = PositionData(
+        account_id=account_id,
+        money=position_money,
+        securities=position_securities,
+    )
+    result = check_triggers(position, src_account, dst_account)
 
     assert result == expected
