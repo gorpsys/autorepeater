@@ -10,6 +10,9 @@ from app.autorepeater import money_to_string
 from app.autorepeater import no_money_to_string
 from app.autorepeater import blocked_to_string
 from app.autorepeater import currency_to_float
+from app.autorepeater import currency_to_string
+from app.autorepeater import currency_to_float_price
+from app.autorepeater import get_quantity_position
 
 @pytest.mark.parametrize(
         'currency, units, nano, expected',
@@ -75,5 +78,68 @@ def test_currency_to_float(money, quantity_units, quantity_nano, expected):
         ),
     )
     result = currency_to_float(position)
+
+    assert result == expected
+
+@pytest.mark.parametrize(
+        'money, quantity_units, quantity_nano, expected',
+        [
+            (MoneyValue('RUB', 1, 500000000), 2, 0, 1.5),
+            (MoneyValue('RUB', -1, -500000000), 1, 500000000, -1.5),
+            (MoneyValue('RUB', 0, 0), 5, 500000000, 0),
+        ]
+)
+def test_currency_to_float_price(money, quantity_units, quantity_nano, expected):
+    """money to string"""
+    position = PortfolioPosition(
+        current_price=money,
+        quantity=Quotation(
+            units=quantity_units,
+            nano=quantity_nano,
+        ),
+    )
+    result = currency_to_float_price(position)
+
+    assert result == expected
+
+@pytest.mark.parametrize(
+        'money, quantity_units, quantity_nano, expected',
+        [
+            (MoneyValue('RUB', 1, 500000000), 2, 0, 'RUB - 3.0'),
+            (MoneyValue('RUB', -1, -500000000), 1, 500000000, 'RUB - -2.25'),
+            (MoneyValue('RUB', 0, 0), 5, 500000000, 'RUB - 0.0'),
+        ]
+)
+def test_currency_to_string(money, quantity_units, quantity_nano, expected):
+    """money to string"""
+    position = PortfolioPosition(
+        current_price=money,
+        quantity=Quotation(
+            units=quantity_units,
+            nano=quantity_nano,
+        ),
+    )
+    result = currency_to_string(position)
+
+    assert result == expected
+
+@pytest.mark.parametrize(
+        'money, quantity_units, quantity_nano, expected',
+        [
+            (MoneyValue('RUB', 1, 500000000), 2, 0, 2.0),
+            (MoneyValue('RUB', -1, -500000000), 1, 500000000, 1.5),
+            (MoneyValue('RUB', 0, 0), 5, 500000000, 5.5),
+        ]
+)
+def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
+    """money to string"""
+    position = PortfolioPosition(
+        current_price=money,
+        quantity=Quotation(
+            units=quantity_units,
+            nano=quantity_nano,
+        ),
+    )
+    result = get_quantity_position(position)
 
     assert result == expected
