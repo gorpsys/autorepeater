@@ -73,8 +73,16 @@ def check_triggers(position, src_account, dst_account):
                       and position.money[0].blocked_value.nano == 0)
 
 
+@dataclasses.dataclass
+class OrderParams:
+    """struct for order params"""
+    instrument_id: str
+    quantity: int
+    direction: OrderDirection
+    order_type: OrderType
+
 def get_max_sum_positions_price(sell_orders_params, buy_orders_params,
-                                src_positions, dst_positions):
+                            src_positions, dst_positions):
     """get max sum orders price for buy or sell orders"""
     total_sell = 0
     for order_params in sell_orders_params:
@@ -88,17 +96,8 @@ def get_max_sum_positions_price(sell_orders_params, buy_orders_params,
 
     return max(total_sell, total_buy)
 
-
 class AutoRepeater:
     """Main class for automatically repeating operations of one account over another account."""
-
-    @dataclasses.dataclass
-    class OrderParams:
-        """struct for order params"""
-        instrument_id: str
-        quantity: int
-        direction: OrderDirection
-        order_type: OrderType
 
     def __init__(self, client):
         self.client = client
@@ -204,7 +203,7 @@ class AutoRepeater:
                     print('Продать: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
                     result.append(
-                        AutoRepeater.OrderParams(
+                        OrderParams(
                             instrument_id=item_id,
                             quantity=quantity,
                             direction=OrderDirection.ORDER_DIRECTION_SELL,
@@ -216,7 +215,7 @@ class AutoRepeater:
                     print('Продать: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
                     result.append(
-                        AutoRepeater.OrderParams(
+                        OrderParams(
                             instrument_id=item_id,
                             quantity=quantity,
                             direction=OrderDirection.ORDER_DIRECTION_SELL,
@@ -241,7 +240,7 @@ class AutoRepeater:
                     print('Купить: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
                     result.append(
-                        AutoRepeater.OrderParams(
+                        OrderParams(
                             instrument_id=item_id,
                             quantity=quantity,
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
@@ -255,7 +254,7 @@ class AutoRepeater:
                     print('Купить: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
                     result.append(
-                        AutoRepeater.OrderParams(
+                        OrderParams(
                             instrument_id=item_id,
                             quantity=quantity,
                             direction=OrderDirection.ORDER_DIRECTION_BUY,

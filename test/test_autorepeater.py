@@ -8,6 +8,8 @@ from tinkoff.invest import Quotation
 from tinkoff.invest import PositionData
 from tinkoff.invest import PositionsMoney
 from tinkoff.invest import PositionsSecurities
+from tinkoff.invest import OrderDirection
+from tinkoff.invest import OrderType
 
 from app.autorepeater import money_to_string
 from app.autorepeater import no_money_to_string
@@ -17,6 +19,8 @@ from app.autorepeater import currency_to_string
 from app.autorepeater import currency_to_float_price
 from app.autorepeater import get_quantity_position
 from app.autorepeater import check_triggers
+from app.autorepeater import get_max_sum_positions_price
+from app.autorepeater import OrderParams
 
 @pytest.mark.parametrize(
         'currency, units, nano, expected',
@@ -167,5 +171,87 @@ def test_check_triggers(account_id, position_money, position_securities, expecte
         securities=position_securities,
     )
     result = check_triggers(position, src_account, dst_account)
+
+    assert result == expected
+
+@pytest.mark.parametrize(
+        'sell_orders_params, buy_orders_params, dst_positions, src_positions, expected',
+        [
+            ([], [], {}, {}, 0),
+            (
+                [
+                    OrderParams
+                    (
+                        instrument_id='1',
+                        quantity=1,
+                        direction=OrderDirection.ORDER_DIRECTION_SELL,
+                        order_type=OrderType.ORDER_TYPE_BESTPRICE
+                    )
+                ],
+                [],
+                {
+                    '1': PortfolioPosition
+                    (
+                        current_price=MoneyValue('RUB', 1, 500000000)
+                    )
+                },
+                {},
+                1.5
+            ),
+            (
+                [],
+                [
+                    OrderParams
+                    (
+                        instrument_id='1',
+                        quantity=1,
+                        direction=OrderDirection.ORDER_DIRECTION_BUY,
+                        order_type=OrderType.ORDER_TYPE_BESTPRICE
+                    )
+                ],
+                {},
+                {
+                    '1': PortfolioPosition
+                    (
+                        current_price=MoneyValue('RUB', 1, 500000000)
+                    )
+                },
+                1.5
+            ),
+            (
+                [
+                    OrderParams
+                    (
+                        instrument_id='1',
+                        quantity=1,
+                        direction=OrderDirection.ORDER_DIRECTION_SELL,
+                        order_type=OrderType.ORDER_TYPE_BESTPRICE
+                    )
+                ],
+                [
+                    OrderParams
+                    (
+                        instrument_id='1',
+                        quantity=1,
+                        direction=OrderDirection.ORDER_DIRECTION_BUY,
+                        order_type=OrderType.ORDER_TYPE_BESTPRICE
+                    )
+                ],
+                {
+                    '1': PortfolioPosition(current_price=MoneyValue('RUB', 1, 500000000))
+                },
+                {
+                    '1': PortfolioPosition(current_price=MoneyValue('RUB', 1, 500000000))
+                },
+                1.5
+            ),
+        ]
+)
+def test_get_max_sum_positions_price(sell_orders_params, buy_orders_params,
+                                     src_positions, dst_positions, expected):
+    """get_max_sum_positions_price"""
+
+    result = get_max_sum_positions_price(sell_orders_params, buy_orders_params,
+                                         src_positions, dst_positions)
 
     assert result == expected
