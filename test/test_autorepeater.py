@@ -10,6 +10,8 @@ from tinkoff.invest import PositionsMoney
 from tinkoff.invest import PositionsSecurities
 from tinkoff.invest import OrderDirection
 from tinkoff.invest import OrderType
+from tinkoff.invest import FindInstrumentResponse
+from tinkoff.invest import InstrumentShort
 
 from app.autorepeater import money_to_string
 from app.autorepeater import no_money_to_string
@@ -21,6 +23,9 @@ from app.autorepeater import get_quantity_position
 from app.autorepeater import check_triggers
 from app.autorepeater import get_max_sum_positions_price
 from app.autorepeater import OrderParams
+from app.autorepeater import AutoRepeater
+from app.autorepeater import THRESHOLD
+from app.autorepeater import DST_MONEY_RESERVED
 
 @pytest.mark.parametrize(
         'currency, units, nano, expected',
@@ -255,3 +260,220 @@ def test_get_max_sum_positions_price(sell_orders_params, buy_orders_params,
                                          src_positions, dst_positions)
 
     assert result == expected
+
+class FakeClient:
+    class FakeInstruments:
+        def find_instrument(self, query):
+            names={
+                "1": "share1",
+                "2": "etf2"
+            }
+            tickers={
+                "1": "SHR",
+                "2": "ETF"
+            }
+            try:
+                return FindInstrumentResponse(
+                    instruments=[InstrumentShort(name=names[query], ticker=tickers[query])]
+                )
+            except:
+                return FindInstrumentResponse(
+                    instruments=[]
+                )
+
+    instruments: FakeInstruments
+
+    def __init__(self):
+        self.instruments = FakeClient.FakeInstruments()
+
+@pytest.fixture
+def client():
+    return FakeClient()
+
+@pytest.fixture
+def auto_repeater(client):
+    return AutoRepeater(client)
+
+def test_init(auto_repeater):
+    assert auto_repeater.client is not None
+    assert auto_repeater.debug is False
+    assert auto_repeater.threshold == THRESHOLD
+    assert auto_repeater.reserve == DST_MONEY_RESERVED
+
+
+def test_set_debug(auto_repeater):
+    auto_repeater.set_debug(True)
+    assert auto_repeater.debug is True
+    auto_repeater.set_debug(False)
+    assert auto_repeater.debug is False
+
+def test_set_threshold(auto_repeater):
+    auto_repeater.set_threshold(0.01)
+    assert auto_repeater.threshold == 0.01
+
+def test_set_reserve(auto_repeater):
+    auto_repeater.set_reserve(0.05)
+    assert auto_repeater.reserve == 0.05
+
+@pytest.mark.parametrize(
+        'type, price, quantity, uid, expected',
+        [
+            (
+                "currency",
+                MoneyValue(
+                    currency= "USD",
+                    units= 100,
+                    nano= 0
+                ),
+                Quotation(
+                    units= 1,
+                    nano= 0
+                ),
+                "",
+                "USD - 100.0",
+            ),
+            (
+                "share",
+                MoneyValue(
+                    currency= "USD",
+                    units= 100,
+                    nano= 0
+                ),
+                Quotation(
+                    units= 2,
+                    nano= 0
+                ),
+                "1",
+                "share1(SHR) - 2.0 - USD - 200.0",
+            ),
+        ]
+)
+def test_postiton_to_string(auto_repeater, type, price, quantity, uid, expected):
+    position = PortfolioPosition(
+        instrument_type = type,
+        current_price = price,
+        quantity = quantity,
+        instrument_uid = uid,
+    )
+    result = auto_repeater.postiton_to_string(position)
+    assert result == expected
+"""
+def test_get_instrument(auto_repeater):
+    instrument_id = "INSTRUMENT_ID"
+    result = auto_repeater.get_instrument(instrument_id)
+    assert result is not None
+
+def test_print_portfolio_by_account(auto_repeater):
+    account = {
+        "name": "Account 1",
+        "id": 1
+    }
+    auto_repeater.print_portfolio_by_account(account)
+    assert "Account 1 (1)" in auto_repeater.client.operations.get_portfolio(account_id=1).accounts[0].name
+
+def test_print_all_portfolio(auto_repeater):
+    response = {
+        "accounts": [
+            {
+                "name": "Account 1",
+                "id": 1
+            },
+            {
+                "name": "Account 2",
+                "id": 2
+            }
+        ]
+    }
+    auto_repeater.print_all_portfolio()
+    assert "Account 1 (1)" in auto_repeater.client.operations.get_portfolio(account_id=1).accounts[0].name
+    assert "Account 2 (2)" in auto_repeater.client.operations.get_portfolio(account_id=2).accounts[0].name
+
+def test_calc_ratio(auto_repeater):
+    src_account_id = 1
+    dst_account_id = 2
+    result = auto_repeater.calc_ratio(src_account_id, dst_account_id)
+    assert result[0] is not None
+    assert result[1] is not None
+    assert result[2] is not None
+    assert result[3] is not None
+
+def test_calc_sell_positions(auto_repeater):
+    dst_positions = {
+        "instrument_id": "INSTRUMENT_ID",
+        "quantity": 100
+    }
+    target_positions = {
+        "instrument_id": "INSTRUMENT_ID",
+        "quantity": 50
+    }
+    result = auto_repeater.calc_sell_positions(dst_positions, target_positions)
+    assert result is not None
+
+def test_calc_buy_positions(auto_repeater):
+ src_positions = {
+ "instrument_id": "INSTRUMENT_ID",
+ "quantity": 100
+ }
+ dst_positions = {
+ "instrument_id": "INSTRUMENT_ID",
+ "quantity": 50
+ }
+ target_positions = {
+ "instrument_id": "INSTRUMENT_ID",
+ "quantity": 150
+ }
+ result = auto_repeater.calc_buy_positions(src_positions, dst_positions, target_positions)
+ assert result is not None
+
+def test_post_orders(auto_repeater):
+ dst_account_id = 1
+ orders_params_sell = [
+ {
+ "instrument_id": "INSTRUMENT_ID",
+ "quantity": 100,
+ "direction": "SELL",
+ "order_type": "BESTPRICE"
+ }
+ ]
+ orders_params_buy = [
+ {
+ "instrument_id": "INSTRUMENT_ID",
+ "quantity": 50,
+ "direction": "BUY",
+ "order_type": "BESTPRICE"
+ }
+ ]
+ auto_repeater.post_orders(dst_account_id, orders_params_sell, orders_params_buy)
+ assert orders_params_sell0 is not None
+ assert orders_params_sell1 is not None
+ assert orders_params_sell2 is not None
+ assert orders_params_sell3 is not None
+ assert orders_params_buy0 is not None
+ assert orders_params_buy1 is not None
+ assert orders_params_buy2 is not None
+ assert orders_params_buy3 is not None
+
+def test_sync_accounts(auto_repeater):
+ src_account_id = 1
+ dst_account_id = 2
+ src_positions = {
+ "instrument_id": "INSTRUMENT_ID",
+ "quantity": 100
+ }
+ dst_positions = {
+ "instrument_id": "INSTRUMENT_ID",
+ "quantity": 50
+ }
+ target_positions = {
+ "instrument_id": "INSTRUMENT_ID",
+ "quantity": 75
+ }
+ auto_repeater.sync_accounts(src_account_id, dst_account_id)
+ assert auto_repeater.client.operations_stream.positions_stream(accounts=[src_account_id, dst_account_id]) is not None
+
+def test_mainflow(auto_repeater):
+ src = 1
+ dst = 2
+ auto_repeater.mainflow(src, dst)
+ assert auto_repeater.client.operations_stream.positions_stream(accounts=[src, dst]) is not None
+"""
