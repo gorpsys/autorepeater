@@ -318,6 +318,8 @@ class AutoRepeater:
                         accounts=[src, dst]):
                     if check_triggers(response.position, src, dst):
                         self.sync_accounts(src, dst)
+                    else:
+                        print(response)
             except RequestError as err:
                 print(err)
 
