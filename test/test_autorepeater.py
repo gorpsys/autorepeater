@@ -381,7 +381,7 @@ class FakeClient:
                                                          status=AccountStatus.ACCOUNT_STATUS_OPEN)
                                                  ])
 
-#pylint: disable=R0917
+#pylint: disable=R09013,R0917
     class FakeOrders:
         """FakeOrders mock для работы с заявками тинькофф инвестиций"""
         def post_order(
@@ -446,7 +446,7 @@ class FakeClient:
         self.operations_stream = FakeClient.FakeOperationsStream()
         self.users = FakeClient.FakeUsers()
         self.orders = FakeClient.FakeOrders()
-#pylint: enable=R0917
+#pylint: enable=R09013,R0917
 
 @pytest.fixture(name='client')
 def client_tinvest():
@@ -485,7 +485,7 @@ def test_set_reserve(auto_repeater):
     auto_repeater.set_reserve(0.05)
     assert auto_repeater.reserve == 0.05
 
-# pylint: disable=R0917
+# pylint: disable=R09013,R0917
 @pytest.mark.parametrize(
     'instrument_type, price, quantity, uid, expected',
     [
@@ -529,7 +529,7 @@ def test_postiton_to_string(auto_repeater, instrument_type, price, quantity, uid
     )
     result = auto_repeater.postiton_to_string(position)
     assert result == expected
-# pylint: enable=R0917
+# pylint: enable=R09013,R0917
 
 
 def test_get_instrument(auto_repeater):
