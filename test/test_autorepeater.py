@@ -291,7 +291,6 @@ class FakeClient:
     """FakeClient mock для клиента тинькофф инвестиций"""
     class FakeInstruments:
         """FakeInstruments mock для работы с инструментами тинькофф инвестиций"""
-# pylint: disable=R0201
         def find_instrument(self, query):
             """find_instrument mock для поиска инструмента"""
             names = {
@@ -339,7 +338,6 @@ class FakeClient:
 
     class FakeOperations:
         """FakeOperations mock для работы с операциями тинькофф инвестиций"""
-#pylint: disable=R0201
         def get_portfolio(self, account_id):
             """get_portfolio mock для получения данных о составе инструментов на брокерском счёте"""
             if account_id == '1':
@@ -369,7 +367,6 @@ class FakeClient:
                             )])
             return PortfolioResponse(positions=[])
 
-#pylint: disable=R0201
     class FakeUsers:
         """FakeUsers mock для работы с аккаунтами тинькофф инвестиций"""
         def get_accounts(self):
@@ -449,7 +446,7 @@ class FakeClient:
         self.operations_stream = FakeClient.FakeOperationsStream()
         self.users = FakeClient.FakeUsers()
         self.orders = FakeClient.FakeOrders()
-#pylint: enable=R0201,R0913
+#pylint: enable=R0913
 
 @pytest.fixture(name='client')
 def client_tinvest():
