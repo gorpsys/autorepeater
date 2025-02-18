@@ -1,4 +1,4 @@
-# pylint: disable=R0903, R0201, R0913
+# pylint: disable=R0903, R0201, R0917
 """tests"""
 import pytest
 
