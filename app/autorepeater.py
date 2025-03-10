@@ -141,7 +141,7 @@ class AutoRepeater:
 
     def print_portfolio_by_account(self, account):
         """print detailed information about account"""
-        logging.log(IMPORTANT,'%s (%d)',account.name, account.id)
+        logging.log(IMPORTANT,'%s (%s)',account.name, account.id)
         logging.log(IMPORTANT,'------------')
         portfolio = self.client.operations.get_portfolio(account_id=account.id)
         total = 0.0
@@ -201,7 +201,10 @@ class AutoRepeater:
                 quantity = round(
                     get_quantity_position(item_value) / instrument.lot)
                 if quantity > 0:
-                    logging.log(IMPORTANT,'Продать: %s %d лотов', no_money_to_string(instrument), quantity)
+                    logging.log(IMPORTANT,
+                                'Продать: %s %d лотов',
+                                no_money_to_string(instrument),
+                                quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -212,7 +215,10 @@ class AutoRepeater:
                 quantity = round((get_quantity_position(item_value) -
                                   target_positions[item_id]) / instrument.lot)
                 if quantity > 0:
-                    logging.log(IMPORTANT,'Продать: %s %d лотов', no_money_to_string(instrument), quantity)
+                    logging.log(IMPORTANT,
+                                'Продать: %s %d лотов',
+                                no_money_to_string(instrument),
+                                quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -236,7 +242,10 @@ class AutoRepeater:
                 position = src_positions[item_id]
                 quantity = round(item_value / instrument.lot)
                 if quantity > 0:
-                    logging.log(IMPORTANT,'Купить: %s %d лотов', no_money_to_string(instrument), quantity)
+                    logging.log(IMPORTANT,
+                                'Купить: %s %d лотов',
+                                no_money_to_string(instrument),
+                                quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -249,7 +258,10 @@ class AutoRepeater:
                     (item_value - get_quantity_position(position)) /
                     instrument.lot)
                 if quantity > 0:
-                    logging.log(IMPORTANT,'Купить: %s %d лотов', no_money_to_string(instrument), quantity)
+                    logging.log(IMPORTANT,
+                                'Купить: %s %d лотов',
+                                no_money_to_string(instrument),
+                                quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -330,7 +342,13 @@ class RunnerParams:
 class Runner:
     """wrapper for launch autorwpeater"""
 
-    def __init__(self, token, src, dst, params = RunnerParams(debug=False, threshold=None, reserve=None)):
+    def __init__(self,
+                 token,
+                 src,
+                 dst,
+                 params = RunnerParams(debug=False,
+                                       threshold=None,
+                                       reserve=None)):
         self.token = token
         self.params = params
         self.src = src
@@ -342,7 +360,7 @@ class Runner:
         """run mainflow for server variant"""
         with Client(token=self.token, target=INVEST_GRPC_API) as client:
             autorepeater = AutoRepeater(client)
-            autorepeater.print_all_portfolio
+            autorepeater.print_all_portfolio()
             autorepeater.set_debug(self.params.debug)
             autorepeater.set_threshold(self.params.threshold)
             autorepeater.set_reserve(self.params.reserve)
