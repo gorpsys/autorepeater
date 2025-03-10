@@ -1,8 +1,9 @@
+"""main for start server variant"""
+
 import os
 import argparse
 
-from autorepeater import Runner
-from autorepeater import RunnerParams
+from autorepeater import *
 
 def main():
     """main function"""
