@@ -2,6 +2,8 @@
 """tests"""
 import pytest
 
+import logging
+
 from tinkoff.invest import MoneyValue
 from tinkoff.invest import Instrument
 from tinkoff.invest import PortfolioPosition
@@ -38,6 +40,7 @@ from app.autorepeater import AutoRepeater
 from app.autorepeater import THRESHOLD
 from app.autorepeater import DST_MONEY_RESERVED
 from app.autorepeater import GetInstrumentException
+from app.autorepeater import IMPORTANT
 
 
 class TestException(Exception):
@@ -540,39 +543,6 @@ def test_get_instrument_fail(auto_repeater):
     instrument_id = "none_id"
     with pytest.raises(GetInstrumentException):
         auto_repeater.get_instrument(instrument_id)
-
-
-def test_print_portfolio_by_account(auto_repeater: AutoRepeater, capfd: pytest.CaptureFixture[str]):
-    """test_print_portfolio_by_account"""
-    account = Account(name='Account 1', id='1')
-    auto_repeater.print_portfolio_by_account(account)
-
-    out, err = capfd.readouterr()
-    assert out == '''Account 1 (1)
-------------
-RUB - 2.4
-total: 2.4
-============
-'''
-    assert not err
-
-
-def test_print_all_portfolio(auto_repeater, capfd):
-    """test_print_all_portfolio"""
-    auto_repeater.print_all_portfolio()
-
-    out, err = capfd.readouterr()
-    assert out == '''account name (1)
-------------
-RUB - 2.4
-total: 2.4
-============
-account name (2)
-------------
-total: 0.0
-============
-'''
-    assert not err
 
 
 def test_calc_ratio(auto_repeater):

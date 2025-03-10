@@ -1,7 +1,7 @@
 """A robot for automatically repeating operations of one account over another account"""
-import os
-import argparse
 import dataclasses
+
+import logging
 
 from tinkoff.invest import Client
 from tinkoff.invest.constants import INVEST_GRPC_API
@@ -13,6 +13,7 @@ from tinkoff.invest import RequestError
 
 DST_MONEY_RESERVED = 0.005
 THRESHOLD = 0.001
+IMPORTANT = 25
 
 class GetInstrumentException(Exception):
     """instrument not found by instrument_id"""
@@ -140,15 +141,15 @@ class AutoRepeater:
 
     def print_portfolio_by_account(self, account):
         """print detailed information about account"""
-        print(account.name + ' (' + str(account.id) + ')')
-        print('------------')
+        logging.log(IMPORTANT,account.name + ' (' + str(account.id) + ')')
+        logging.log(IMPORTANT,'------------')
         portfolio = self.client.operations.get_portfolio(account_id=account.id)
         total = 0.0
         for position in portfolio.positions:
-            print(self.postiton_to_string(position))
+            logging.log(IMPORTANT,self.postiton_to_string(position))
             total += currency_to_float(position)
-        print('total: ' + str(total))
-        print('============')
+        logging.log(IMPORTANT,'total: ' + str(total))
+        logging.log(IMPORTANT,'============')
 
     def print_all_portfolio(self):
         """print detailed information about all accounts"""
@@ -158,30 +159,30 @@ class AutoRepeater:
 
     def calc_ratio(self, src_account_id, dst_account_id):
         """calc ratio and print src and dst accounts"""
-        print("src account")
+        logging.log(IMPORTANT,"src account")
         portfolio_src = self.client.operations.get_portfolio(
             account_id=src_account_id)
         total_src = 0.0
         src_positions = {}
         for position in portfolio_src.positions:
-            print(self.postiton_to_string(position))
+            logging.log(IMPORTANT,self.postiton_to_string(position))
             if position.instrument_type != 'currency':
                 src_positions[position.instrument_uid] = position
                 total_src += currency_to_float(position)
-        print('total: ' + str(total_src))
+        logging.log(IMPORTANT,'total: ' + str(total_src))
 
-        print("dst account")
+        logging.log(IMPORTANT,"dst account")
         portfolio_dst = self.client.operations.get_portfolio(
             account_id=dst_account_id)
         total_dst = 0.0
         dst_positions = {}
         for position in portfolio_dst.positions:
-            print(self.postiton_to_string(position))
+            logging.log(IMPORTANT,self.postiton_to_string(position))
             if position.instrument_type != 'currency':
                 dst_positions[position.instrument_uid] = position
             total_dst += currency_to_float(position)
         total_dst = total_dst * (1 - self.reserve)
-        print('total: ' + str(total_dst))
+        logging.log(IMPORTANT,'total: ' + str(total_dst))
 
         ratio = total_dst / total_src
         return (src_positions, dst_positions, ratio, total_dst)
@@ -200,7 +201,7 @@ class AutoRepeater:
                 quantity = round(
                     get_quantity_position(item_value) / instrument.lot)
                 if quantity > 0:
-                    print('Продать: ' + no_money_to_string(instrument) + ' ' +
+                    logging.log(IMPORTANT,'Продать: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
                     result.append(
                         OrderParams(
@@ -212,7 +213,7 @@ class AutoRepeater:
                 quantity = round((get_quantity_position(item_value) -
                                   target_positions[item_id]) / instrument.lot)
                 if quantity > 0:
-                    print('Продать: ' + no_money_to_string(instrument) + ' ' +
+                    logging.log(IMPORTANT,'Продать: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
                     result.append(
                         OrderParams(
@@ -237,7 +238,7 @@ class AutoRepeater:
                 position = src_positions[item_id]
                 quantity = round(item_value / instrument.lot)
                 if quantity > 0:
-                    print('Купить: ' + no_money_to_string(instrument) + ' ' +
+                    logging.log(IMPORTANT,'Купить: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
                     result.append(
                         OrderParams(
@@ -251,7 +252,7 @@ class AutoRepeater:
                     (item_value - get_quantity_position(position)) /
                     instrument.lot)
                 if quantity > 0:
-                    print('Купить: ' + no_money_to_string(instrument) + ' ' +
+                    logging.log(IMPORTANT,'Купить: ' + no_money_to_string(instrument) + ' ' +
                           str(quantity) + ' лотов')
                     result.append(
                         OrderParams(
@@ -265,8 +266,8 @@ class AutoRepeater:
                     orders_params_buy):
         """post all orders"""
         for order_params in orders_params_sell:
-            print(order_params)
-            print(
+            logging.log(IMPORTANT,order_params)
+            logging.log(IMPORTANT,
                 self.client.orders.post_order(
                     instrument_id=order_params.instrument_id,
                     quantity=order_params.quantity,
@@ -274,8 +275,8 @@ class AutoRepeater:
                     account_id=dst_account_id,
                     order_type=order_params.order_type).order_id)
         for order_params in orders_params_buy:
-            print(order_params)
-            print(
+            logging.log(IMPORTANT,order_params)
+            logging.log(IMPORTANT,
                 self.client.orders.post_order(
                     instrument_id=order_params.instrument_id,
                     quantity=order_params.quantity,
@@ -310,7 +311,7 @@ class AutoRepeater:
         try:
             self.sync_accounts(src, dst)
         except RequestError as err:
-            print(err)
+            logging.error(err)
 
         while True:
             try:
@@ -319,37 +320,39 @@ class AutoRepeater:
                     if check_triggers(response.position, src, dst):
                         self.sync_accounts(src, dst)
                     else:
-                        print(response)
+                        logging.log(IMPORTANT,response)
             except RequestError as err:
-                print(err)
+                logging.error(err)
 
+class Runner:
+    """wrapper for launch autorwpeater"""
 
-def main():
-    """main function"""
-    parser = argparse.ArgumentParser(description="autorepeater")
+    def __init__(self, token, src, dst, debug=False, threshold=None, reserve=None):
+        self.token = token
+        self.debug = debug
+        self.threshold = threshold
+        self.reserve = reserve
+        self.src = src
+        self.dst = dst
+        logging.addLevelName(IMPORTANT, 'IMPORTANT')
+        logging.basicConfig(level=IMPORTANT)
 
-    parser.add_argument("--debug", action='store_true', help="режим отладки")
-    parser.add_argument("-s", "--src", type=str, help="id счёта источника")
-    parser.add_argument("-d", "--dst", type=str, help="id счёта назначения")
-    parser.add_argument("-t", "--threshold", type=float, help="порог стоимости, ниже "
-                        "которого не выполняется синхронизация - доля стоимости счёта"
-                        " назначения. По умолчанию 0.001")
-    parser.add_argument("-r", "--reserve", type=float, help="резев на счёте назначения"
-                        " для округлений и комиссий. Доля стоимости счёта назначения. "
-                        "По умолчания 0.005")
-    args = parser.parse_args()
+    def run(self):
+        with Client(token=self.token, target=INVEST_GRPC_API) as client:
+            autorepeater = AutoRepeater(client)
+            autorepeater.print_all_portfolio
+            autorepeater.set_debug(self.debug)
+            autorepeater.set_threshold(self.threshold)
+            autorepeater.set_reserve(self.reserve)
+            if self.src and self.dst:
+                autorepeater.mainflow(self.src, self.dst)
 
-    invest_token = os.environ["INVEST_TOKEN"]
+    def run_sync(self):
+        with Client(token=self.token, target=INVEST_GRPC_API) as client:
+            autorepeater = AutoRepeater(client)
+            autorepeater.set_debug(self.debug)
+            autorepeater.set_threshold(self.threshold)
+            autorepeater.set_reserve(self.reserve)
+            if self.src and self.dst:
+                autorepeater.sync_accounts(self.src, self.dst)
 
-    with Client(token=invest_token, target=INVEST_GRPC_API) as client:
-        autorepeater = AutoRepeater(client)
-        autorepeater.print_all_portfolio()
-        autorepeater.set_debug(args.debug)
-        autorepeater.set_threshold(args.threshold)
-        autorepeater.set_reserve(args.reserve)
-        if args.src and args.dst:
-            autorepeater.mainflow(args.src, args.dst)
-
-
-if __name__ == "__main__":
-    main()
