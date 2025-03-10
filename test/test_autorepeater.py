@@ -2,8 +2,6 @@
 """tests"""
 import pytest
 
-import logging
-
 from tinkoff.invest import MoneyValue
 from tinkoff.invest import Instrument
 from tinkoff.invest import PortfolioPosition
@@ -40,7 +38,6 @@ from app.autorepeater import AutoRepeater
 from app.autorepeater import THRESHOLD
 from app.autorepeater import DST_MONEY_RESERVED
 from app.autorepeater import GetInstrumentException
-from app.autorepeater import IMPORTANT
 
 
 class TestException(Exception):

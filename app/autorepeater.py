@@ -141,14 +141,14 @@ class AutoRepeater:
 
     def print_portfolio_by_account(self, account):
         """print detailed information about account"""
-        logging.log(IMPORTANT,account.name + ' (' + str(account.id) + ')')
+        logging.log(IMPORTANT,'%s (%d)',account.name, account.id)
         logging.log(IMPORTANT,'------------')
         portfolio = self.client.operations.get_portfolio(account_id=account.id)
         total = 0.0
         for position in portfolio.positions:
             logging.log(IMPORTANT,self.postiton_to_string(position))
             total += currency_to_float(position)
-        logging.log(IMPORTANT,'total: ' + str(total))
+        logging.log(IMPORTANT,'total: %f', total)
         logging.log(IMPORTANT,'============')
 
     def print_all_portfolio(self):
@@ -169,7 +169,7 @@ class AutoRepeater:
             if position.instrument_type != 'currency':
                 src_positions[position.instrument_uid] = position
                 total_src += currency_to_float(position)
-        logging.log(IMPORTANT,'total: ' + str(total_src))
+        logging.log(IMPORTANT,'total: %f', total_src)
 
         logging.log(IMPORTANT,"dst account")
         portfolio_dst = self.client.operations.get_portfolio(
@@ -182,7 +182,7 @@ class AutoRepeater:
                 dst_positions[position.instrument_uid] = position
             total_dst += currency_to_float(position)
         total_dst = total_dst * (1 - self.reserve)
-        logging.log(IMPORTANT,'total: ' + str(total_dst))
+        logging.log(IMPORTANT,'total: %f', total_dst)
 
         ratio = total_dst / total_src
         return (src_positions, dst_positions, ratio, total_dst)
@@ -201,8 +201,7 @@ class AutoRepeater:
                 quantity = round(
                     get_quantity_position(item_value) / instrument.lot)
                 if quantity > 0:
-                    logging.log(IMPORTANT,'Продать: ' + no_money_to_string(instrument) + ' ' +
-                          str(quantity) + ' лотов')
+                    logging.log(IMPORTANT,'Продать: %s %d лотов', no_money_to_string(instrument), quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -213,8 +212,7 @@ class AutoRepeater:
                 quantity = round((get_quantity_position(item_value) -
                                   target_positions[item_id]) / instrument.lot)
                 if quantity > 0:
-                    logging.log(IMPORTANT,'Продать: ' + no_money_to_string(instrument) + ' ' +
-                          str(quantity) + ' лотов')
+                    logging.log(IMPORTANT,'Продать: %s %d лотов', no_money_to_string(instrument), quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -238,8 +236,7 @@ class AutoRepeater:
                 position = src_positions[item_id]
                 quantity = round(item_value / instrument.lot)
                 if quantity > 0:
-                    logging.log(IMPORTANT,'Купить: ' + no_money_to_string(instrument) + ' ' +
-                          str(quantity) + ' лотов')
+                    logging.log(IMPORTANT,'Купить: %s %d лотов', no_money_to_string(instrument), quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -252,8 +249,7 @@ class AutoRepeater:
                     (item_value - get_quantity_position(position)) /
                     instrument.lot)
                 if quantity > 0:
-                    logging.log(IMPORTANT,'Купить: ' + no_money_to_string(instrument) + ' ' +
-                          str(quantity) + ' лотов')
+                    logging.log(IMPORTANT,'Купить: %s %d лотов', no_money_to_string(instrument), quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -324,35 +320,41 @@ class AutoRepeater:
             except RequestError as err:
                 logging.error(err)
 
+@dataclasses.dataclass
+class RunnerParams:
+    """params for init Runner class"""
+    debug: bool
+    threshold: float
+    reserve: float
+
 class Runner:
     """wrapper for launch autorwpeater"""
 
-    def __init__(self, token, src, dst, debug=False, threshold=None, reserve=None):
+    def __init__(self, token, src, dst, params = RunnerParams(debug=False, threshold=None, reserve=None)):
         self.token = token
-        self.debug = debug
-        self.threshold = threshold
-        self.reserve = reserve
+        self.params = params
         self.src = src
         self.dst = dst
         logging.addLevelName(IMPORTANT, 'IMPORTANT')
         logging.basicConfig(level=IMPORTANT)
 
     def run(self):
+        """run mainflow for server variant"""
         with Client(token=self.token, target=INVEST_GRPC_API) as client:
             autorepeater = AutoRepeater(client)
             autorepeater.print_all_portfolio
-            autorepeater.set_debug(self.debug)
-            autorepeater.set_threshold(self.threshold)
-            autorepeater.set_reserve(self.reserve)
+            autorepeater.set_debug(self.params.debug)
+            autorepeater.set_threshold(self.params.threshold)
+            autorepeater.set_reserve(self.params.reserve)
             if self.src and self.dst:
                 autorepeater.mainflow(self.src, self.dst)
 
     def run_sync(self):
+        """run one sync for serverless varian"""
         with Client(token=self.token, target=INVEST_GRPC_API) as client:
             autorepeater = AutoRepeater(client)
-            autorepeater.set_debug(self.debug)
-            autorepeater.set_threshold(self.threshold)
-            autorepeater.set_reserve(self.reserve)
+            autorepeater.set_debug(self.params.debug)
+            autorepeater.set_threshold(self.params.threshold)
+            autorepeater.set_reserve(self.params.reserve)
             if self.src and self.dst:
                 autorepeater.sync_accounts(self.src, self.dst)
-
