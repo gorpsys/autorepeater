@@ -354,7 +354,7 @@ class Runner:
         self.src = src
         self.dst = dst
         logging.addLevelName(IMPORTANT, 'IMPORTANT')
-        logging.basicConfig(level=IMPORTANT)
+        logging.getLogger().setLevel(IMPORTANT)
 
     def run(self):
         """run mainflow for server variant"""
