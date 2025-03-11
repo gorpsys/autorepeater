@@ -24,20 +24,20 @@ from tinkoff.invest import SecurityTradingStatus
 from tinkoff.invest import PostOrderResponse
 from tinkoff.invest import RequestError
 
-from app.autorepeater import money_to_string
-from app.autorepeater import no_money_to_string
-from app.autorepeater import blocked_to_string
-from app.autorepeater import currency_to_float
-from app.autorepeater import currency_to_string
-from app.autorepeater import currency_to_float_price
-from app.autorepeater import get_quantity_position
-from app.autorepeater import check_triggers
-from app.autorepeater import get_max_sum_positions_price
-from app.autorepeater import OrderParams
-from app.autorepeater import AutoRepeater
-from app.autorepeater import THRESHOLD
-from app.autorepeater import DST_MONEY_RESERVED
-from app.autorepeater import GetInstrumentException
+from autorepeater.autorepeater import money_to_string
+from autorepeater.autorepeater import no_money_to_string
+from autorepeater.autorepeater import blocked_to_string
+from autorepeater.autorepeater import currency_to_float
+from autorepeater.autorepeater import currency_to_string
+from autorepeater.autorepeater import currency_to_float_price
+from autorepeater.autorepeater import get_quantity_position
+from autorepeater.autorepeater import check_triggers
+from autorepeater.autorepeater import get_max_sum_positions_price
+from autorepeater.autorepeater import OrderParams
+from autorepeater.autorepeater import AutoRepeater
+from autorepeater.autorepeater import THRESHOLD
+from autorepeater.autorepeater import DST_MONEY_RESERVED
+from autorepeater.autorepeater import GetInstrumentException
 
 
 class TestException(Exception):

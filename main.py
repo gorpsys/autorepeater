@@ -3,7 +3,8 @@
 import os
 import argparse
 
-from autorepeater import *
+from autorepeater.autorepeater import RunnerParams
+from autorepeater.autorepeater import Runner
 
 def main():
     """main function"""
