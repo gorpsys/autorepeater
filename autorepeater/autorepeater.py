@@ -11,8 +11,8 @@ from tinkoff.invest import OrderType
 from tinkoff.invest import SecurityTradingStatus
 from tinkoff.invest import RequestError
 
-DST_MONEY_RESERVED = '0.005'
-THRESHOLD = '0.001'
+DST_MONEY_RESERVED = '0.01'
+THRESHOLD = '0.004'
 IMPORTANT = 25
 
 # Устанавливаем точность для Decimal
