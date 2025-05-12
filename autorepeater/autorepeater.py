@@ -46,7 +46,8 @@ def format_decimal(value):
 def money_to_string(money):
     """convert money to human-readable string"""
     result = money.currency
-    value = Decimal(money.units) + Decimal(money.nano) / Decimal('1000000000')
+    value = (Decimal(money.units) + 
+             Decimal(money.nano) / Decimal('1000000000'))
     formatted = format_decimal(value)
     result += ' - ' + formatted
     return result
@@ -66,15 +67,18 @@ def no_money_to_string(share):
 
 def currency_to_decimal(position):
     """convert position full price value to Decimal"""
-    price = Decimal(position.current_price.units) + Decimal(position.current_price.nano) / Decimal('1000000000')
-    quantity = Decimal(position.quantity.units) + Decimal(position.quantity.nano) / Decimal('1000000000')
+    price = (Decimal(position.current_price.units) + 
+             Decimal(position.current_price.nano) / Decimal('1000000000'))
+    quantity = (Decimal(position.quantity.units) + 
+               Decimal(position.quantity.nano) / Decimal('1000000000'))
     # Округляем результат до 9 знаков после запятой (максимальная точность nano)
     return (price * quantity).quantize(Decimal('0.000000001'))
 
 
 def currency_to_decimal_price(position):
     """convert position price value to Decimal"""
-    return Decimal(position.current_price.units) + Decimal(position.current_price.nano) / Decimal('1000000000')
+    return (Decimal(position.current_price.units) + 
+            Decimal(position.current_price.nano) / Decimal('1000000000'))
 
 
 def currency_to_string(position):
@@ -90,24 +94,29 @@ def currency_to_string(position):
 
 def get_quantity_position(position):
     """get quantity from position as Decimal"""
-    return Decimal(position.quantity.units) + Decimal(position.quantity.nano) / Decimal('1000000000')
+    return (Decimal(position.quantity.units) + 
+            Decimal(position.quantity.nano) / Decimal('1000000000'))
 
 
 def check_triggers(position, src_account, dst_account):
     """check triggers for sync accounts"""
     # Проверяем, что все ценные бумаги разблокированы
-    all_securities_unblocked = (position is not None 
-                              and position.account_id == src_account
-                              and len(position.securities) > 0 
-                              and all(sec.blocked == 0 for sec in position.securities))
+    all_securities_unblocked = (
+        position is not None and
+        position.account_id == src_account and
+        len(position.securities) > 0 and
+        all(sec.blocked == 0 for sec in position.securities)
+    )
     
     # Проверяем, что нет ценных бумаг и деньги разблокированы
-    no_securities_and_money_unblocked = (position is not None 
-                                       and position.account_id == dst_account 
-                                       and len(position.securities) == 0
-                                       and len(position.money) > 0
-                                       and position.money[0].blocked_value.units == 0
-                                       and position.money[0].blocked_value.nano == 0)
+    no_securities_and_money_unblocked = (
+        position is not None and
+        position.account_id == dst_account and
+        len(position.securities) == 0 and
+        len(position.money) > 0 and
+        position.money[0].blocked_value.units == 0 and
+        position.money[0].blocked_value.nano == 0
+    )
     
     return all_securities_unblocked or no_securities_and_money_unblocked
 
@@ -121,17 +130,19 @@ class OrderParams:
     order_type: OrderType
 
 def get_max_sum_positions_price(sell_orders_params, buy_orders_params,
-                            src_positions, dst_positions):
+                               src_positions, dst_positions):
     """get max sum orders price for buy or sell orders"""
     total_sell = 0
     for order_params in sell_orders_params:
         position = dst_positions[order_params.instrument_id]
-        total_sell += currency_to_decimal_price(position) * order_params.quantity
+        total_sell += (currency_to_decimal_price(position) * 
+                      order_params.quantity)
 
     total_buy = 0
     for order_params in buy_orders_params:
         position = src_positions[order_params.instrument_id]
-        total_buy += currency_to_decimal_price(position) * order_params.quantity
+        total_buy += (currency_to_decimal_price(position) * 
+                     order_params.quantity)
 
     return max(total_sell, total_buy)
 
@@ -155,6 +166,7 @@ class AutoRepeater:
         if threshold is not None:
             if threshold < 0 or threshold > 1:
                 raise ValueError("Threshold must be between 0 and 1")
+            # Оставляем преобразование здесь, так как входной параметр float
             self.threshold = Decimal(str(threshold))
 
     def set_reserve(self, reserve):
@@ -162,6 +174,7 @@ class AutoRepeater:
         if reserve is not None:
             if reserve < 0 or reserve > 1:
                 raise ValueError("Reserve must be between 0 and 1")
+            # Оставляем преобразование здесь, так как входной параметр float
             self.reserve = Decimal(str(reserve))
 
     def postiton_to_string(self, position):
@@ -171,7 +184,8 @@ class AutoRepeater:
         if position.instrument_type in ['share', 'etf']:
             instrument = self.get_instrument(position.instrument_uid)
             quantity = format_decimal(get_quantity_position(position))
-            return no_money_to_string(instrument) + ' - ' + quantity + ' - ' + currency_to_string(position)
+            return (no_money_to_string(instrument) + ' - ' + 
+                   quantity + ' - ' + currency_to_string(position))
         return str(position)
 
     def get_instrument(self, instrument_id):
@@ -333,15 +347,20 @@ class AutoRepeater:
 
     def sync_accounts(self, src_account_id, dst_account_id):
         """sync positions from src account to dst account"""
-        (src_positions, dst_positions, ratio, total_dst) = self.calc_ratio(src_account_id, dst_account_id)
+        (src_positions, dst_positions, ratio, total_dst) = (
+            self.calc_ratio(src_account_id, dst_account_id))
         target_positions = {}
         for item_id, item_value in src_positions.items():
             target_positions[item_id] = ratio * get_quantity_position(item_value)
 
         orders_params_sell = self.calc_sell_positions(dst_positions, target_positions)
-        orders_params_buy = self.calc_buy_positions(src_positions, dst_positions, target_positions)
+        orders_params_buy = self.calc_buy_positions(src_positions, dst_positions, 
+                                                  target_positions)
 
-        if (not self.debug) and (get_max_sum_positions_price(orders_params_sell, orders_params_buy, src_positions, dst_positions) > total_dst * self.threshold):
+        if (not self.debug) and (
+            get_max_sum_positions_price(orders_params_sell, orders_params_buy,
+                                      src_positions, dst_positions) > 
+            total_dst * self.threshold):
             self.post_orders(dst_account_id, orders_params_sell, orders_params_buy)
 
     def mainflow(self, src, dst):

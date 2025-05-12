@@ -1,7 +1,8 @@
 # pylint: disable=R0903, R0913, R0917
 """tests"""
-import pytest
 from decimal import Decimal
+
+import pytest
 
 from tinkoff.invest import MoneyValue
 from tinkoff.invest import Instrument
@@ -625,71 +626,36 @@ def test_set_reserve(auto_repeater):
     [
         (
             "currency",
-            MoneyValue(
-                currency="USD",
-                units=100,
-                nano=0
-            ),
-            Quotation(
-                units=1,
-                nano=0
-            ),
+            MoneyValue(currency="USD", units=100, nano=0),
+            Quotation(units=1, nano=0),
             "",
             "USD - 100.0"
         ),
         (
             "share",
-            MoneyValue(
-                currency="USD",
-                units=100,
-                nano=0
-            ),
-            Quotation(
-                units=2,
-                nano=0
-            ),
+            MoneyValue(currency="USD", units=100, nano=0),
+            Quotation(units=2, nano=0),
             "1",
             "share1(SHR) - 2.0 - USD - 200.0"
         ),
         (
             "currency",
-            MoneyValue(
-                currency="RUB",
-                units=0,
-                nano=999999999
-            ),
-            Quotation(
-                units=0,
-                nano=1
-            ),
+            MoneyValue(currency="RUB", units=0, nano=999999999),
+            Quotation(units=0, nano=1),
             "",
             "RUB - 0.000000001"  # Минимальные значения
         ),
         (
             "share",
-            MoneyValue(
-                currency="EUR",
-                units=999999999,
-                nano=0
-            ),
-            Quotation(
-                units=999999999,
-                nano=0
-            ),
+            MoneyValue(currency="EUR", units=999999999, nano=0),
+            Quotation(units=999999999, nano=0),
             "2",
             "etf2(ETF) - 999999999.0 - EUR - 999999998000000001.0"  # Максимальные значения
         ),
         (
             "currency",
-            MoneyValue(
-                currency="RUB",
-                units=-100,
-                nano=-500000000
-            ),
-            Quotation(
-                units=-2,
-                nano=0
-            ),
+            MoneyValue(currency="RUB", units=-100, nano=-500000000),
+            Quotation(units=-2, nano=0),
             "",
             "RUB - 201.0"  # Отрицательные значения: -100.5 * -2 = 201.0
         ),
