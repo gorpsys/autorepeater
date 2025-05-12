@@ -1,4 +1,4 @@
-# pylint: disable=R0903, R0913, R0917
+# pylint: disable=R0903, R0913, R0201
 """tests"""
 from decimal import Decimal
 
@@ -79,8 +79,10 @@ def test_money_to_string(currency, units, nano, expected):
         ('RUB', 1, 500000000, 'blocked RUB - 1.5'),
         ('RUB', -1, -500000000, 'blocked RUB - -1.5'),
         ('RUB', 0, 0, 'blocked RUB - 0.0'),
-        ('USD', 0, 999999999, 'blocked USD - 0.999999999'),  # Максимальное значение nano
-        ('EUR', 999999999, 0, 'blocked EUR - 999999999.0'),  # Добавляем .0 для целого числа
+        # Максимальное значение nano
+        ('USD', 0, 999999999, 'blocked USD - 0.999999999'),
+        # Добавляем .0 для целого числа
+        ('EUR', 999999999, 0, 'blocked EUR - 999999999.0'),
         ('RUB', 0, 1, 'blocked RUB - 0.000000001'),  # Минимальное значение nano
     ],
     ids=[
@@ -112,7 +114,8 @@ def test_blocked_to_string(currency, units, nano, expected):
         (Instrument(name='', ticker=''), '()'),  # Пустые значения
         (Instrument(name='Company', ticker=''), 'Company()'),  # Пустой тикер
         (Instrument(name='', ticker='TICK'), '(TICK)'),  # Пустое название
-        (Instrument(name='Company & Co.', ticker='C&C'), 'Company & Co.(C&C)'),  # Специальные символы
+        (Instrument(name='Company & Co.', ticker='C&C'),
+         'Company & Co.(C&C)'),  # Специальные символы
     ],
     ids=[
         'simple_company',
@@ -136,7 +139,8 @@ def test_no_money_to_string(instrument, expected):
         (MoneyValue('RUB', 1, 500000000), 2, 0, Decimal('3.0')),
         (MoneyValue('RUB', -1, -500000000), 1, 500000000, Decimal('-2.25')),
         (MoneyValue('RUB', 0, 0), 5, 500000000, Decimal('0')),
-        (MoneyValue('EUR', 999999999, 0), 999999999, 0, Decimal('999999998000000001')),  # Максимальные значения
+        (MoneyValue('EUR', 999999999, 0), 999999999, 0, Decimal(
+            '999999998000000001')),  # Максимальные значения
     ],
     ids=[
         'positive_values',
@@ -164,7 +168,8 @@ def test_currency_to_decimal(money, quantity_units, quantity_nano, expected):
         (MoneyValue('RUB', 1, 500000000), 2, 0, Decimal('1.5')),
         (MoneyValue('RUB', -1, -500000000), 1, 500000000, Decimal('-1.5')),
         (MoneyValue('RUB', 0, 0), 5, 500000000, Decimal('0')),
-        (MoneyValue('EUR', 999999999, 0), 999999999, 0, Decimal('999999999')),  # Максимальные значения
+        (MoneyValue('EUR', 999999999, 0), 999999999, 0,
+         Decimal('999999999')),  # Максимальные значения
     ],
     ids=[
         'positive_price',
@@ -173,7 +178,11 @@ def test_currency_to_decimal(money, quantity_units, quantity_nano, expected):
         'max_price'
     ]
 )
-def test_currency_to_decimal_price(money, quantity_units, quantity_nano, expected):
+def test_currency_to_decimal_price(
+        money,
+        quantity_units,
+        quantity_nano,
+        expected):
     """currency price to decimal"""
     position = PortfolioPosition(
         current_price=money,
@@ -219,7 +228,8 @@ def test_currency_to_string(money, quantity_units, quantity_nano, expected):
         (MoneyValue('RUB', 1, 500000000), 2, 0, Decimal('2.0')),
         (MoneyValue('RUB', -1, -500000000), 1, 500000000, Decimal('1.5')),
         (MoneyValue('RUB', 0, 0), 5, 500000000, Decimal('5.5')),
-        (MoneyValue('EUR', 999999999, 0), 999999999, 0, Decimal('999999999.0')),  # Максимальные значения
+        (MoneyValue('EUR', 999999999, 0), 999999999, 0,
+         Decimal('999999999.0')),  # Максимальные значения
     ],
     ids=[
         'positive_quantity',
@@ -245,13 +255,19 @@ def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
     'account_id, position_securities, position_money, expected',
     [
         ('1', [], [], False),  # Пустые позиции
-        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=1))], False),  # Заблокированные деньги
-        ('1', [PositionsSecurities(blocked=0)], [PositionsMoney()], True),  # Разблокированные ценные бумаги
-        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=0, nano=0))], True),  # Разблокированные деньги
+        # Заблокированные деньги
+        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=1))], False),
+        # Разблокированные ценные бумаги
+        ('1', [PositionsSecurities(blocked=0)], [PositionsMoney()], True),
+        # Разблокированные деньги
+        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=0, nano=0))], True),
         ('3', [], [], False),  # Неизвестный аккаунт
-        ('1', [PositionsSecurities(blocked=1)], [PositionsMoney()], False),  # Заблокированные ценные бумаги
-        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=0, nano=1))], False),  # Частично заблокированные деньги
-        ('1', [PositionsSecurities(blocked=0), PositionsSecurities(blocked=1)], [PositionsMoney()], False),  # Смешанные блокировки
+        # Заблокированные ценные бумаги
+        ('1', [PositionsSecurities(blocked=1)], [PositionsMoney()], False),
+        # Частично заблокированные деньги
+        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=0, nano=1))], False),
+        ('1', [PositionsSecurities(blocked=0), PositionsSecurities(blocked=1)], [
+         PositionsMoney()], False),  # Смешанные блокировки
     ],
     ids=[
         'empty_positions',
@@ -264,7 +280,11 @@ def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
         'mixed_blocked_securities'
     ]
 )
-def test_check_triggers(account_id, position_money, position_securities, expected):
+def test_check_triggers(
+        account_id,
+        position_money,
+        position_securities,
+        expected):
     """check triggers"""
     src_account = '1'
     dst_account = '2'
@@ -369,6 +389,7 @@ class FakeClient:
     """FakeClient mock для клиента тинькофф инвестиций"""
     class FakeInstruments:
         """FakeInstruments mock для работы с инструментами тинькофф инвестиций"""
+
         def find_instrument(self, query):
             """find_instrument mock для поиска инструмента"""
             names = {
@@ -407,15 +428,14 @@ class FakeClient:
                         name=names[id],
                         ticker=tickers[id],
                         trading_status=SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING,
-                        lot=1
-                        )
-                        )
+                        lot=1))
             except KeyError:
                 assert False
 # pylint: enable=W0622,C0103
 
     class FakeOperations:
         """FakeOperations mock для работы с операциями тинькофф инвестиций"""
+
         def get_portfolio(self, account_id):
             """get_portfolio mock для получения данных о составе инструментов на брокерском счёте"""
             if account_id == '1':
@@ -423,44 +443,61 @@ class FakeClient:
                     positions=[
                         PortfolioPosition(
                             instrument_type='currency',
-                            current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
-                            quantity=Quotation(units=2, nano=0)
-                            )])
+                            current_price=MoneyValue(
+                                currency='RUB',
+                                units=1,
+                                nano=200000000),
+                            quantity=Quotation(
+                                units=2,
+                                nano=0))])
             if account_id == '4':
                 return PortfolioResponse(
                     positions=[
                         PortfolioPosition(
                             instrument_type='share',
                             instrument_uid='1',
-                            current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
-                            quantity=Quotation(units=2, nano=0)
-                            )])
+                            current_price=MoneyValue(
+                                currency='RUB',
+                                units=1,
+                                nano=200000000),
+                            quantity=Quotation(
+                                units=2,
+                                nano=0))])
             if account_id == '5':
                 return PortfolioResponse(
                     positions=[
                         PortfolioPosition(
                             instrument_type='currency',
-                            current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
-                            quantity=Quotation(units=2, nano=0)
-                            )])
+                            current_price=MoneyValue(
+                                currency='RUB',
+                                units=1,
+                                nano=200000000),
+                            quantity=Quotation(
+                                units=2,
+                                nano=0))])
             return PortfolioResponse(positions=[])
 
     class FakeUsers:
         """FakeUsers mock для работы с аккаунтами тинькофф инвестиций"""
+
         def get_accounts(self):
             """get_accounts mock для получения списка брокерских счетов"""
-            return GetAccountsResponse(accounts=[Account(id='1',
-                                                         type=AccountType.ACCOUNT_TYPE_TINKOFF,
-                                                         name='account name',
-                                                         status=AccountStatus.ACCOUNT_STATUS_OPEN),
-                                                 Account(id='2',
-                                                         type=AccountType.ACCOUNT_TYPE_TINKOFF,
-                                                         name='account name',
-                                                         status=AccountStatus.ACCOUNT_STATUS_OPEN)
-                                                 ])
+            return GetAccountsResponse(
+                accounts=[
+                    Account(
+                        id='1',
+                        type=AccountType.ACCOUNT_TYPE_TINKOFF,
+                        name='account name',
+                        status=AccountStatus.ACCOUNT_STATUS_OPEN),
+                    Account(
+                        id='2',
+                        type=AccountType.ACCOUNT_TYPE_TINKOFF,
+                        name='account name',
+                        status=AccountStatus.ACCOUNT_STATUS_OPEN)])
 
     class FakeOrders:
         """FakeOrders mock для работы с заявками тинькофф инвестиций"""
+
         def post_order(
             self,
             quantity,
@@ -498,7 +535,7 @@ class FakeClient:
 
         def positions_stream(self, accounts):
             """positions_stream mock для получения операций по списку счетов"""
-            self.count_operations = self.count_operations+1
+            self.count_operations = self.count_operations + 1
             assert accounts == ['4', '5']
             # 2 запуска и кидаем исключение, что бы не уйти в бесконечный цикл
             if (self.count_operations) <= 2:
@@ -512,10 +549,10 @@ class FakeClient:
             self.count_operations = 0
 
     instruments: FakeInstruments
-    operations:  FakeOperations
+    operations: FakeOperations
     operations_stream: FakeOperationsStream
-    users:       FakeUsers
-    orders:      FakeOrders
+    users: FakeUsers
+    orders: FakeOrders
 
     def __init__(self):
         self.instruments = FakeClient.FakeInstruments()
@@ -650,7 +687,8 @@ def test_set_reserve(auto_repeater):
             MoneyValue(currency="EUR", units=999999999, nano=0),
             Quotation(units=999999999, nano=0),
             "2",
-            "etf2(ETF) - 999999999.0 - EUR - 999999998000000001.0"  # Максимальные значения
+            # Максимальные значения
+            "etf2(ETF) - 999999999.0 - EUR - 999999998000000001.0"
         ),
         (
             "currency",
@@ -668,7 +706,13 @@ def test_set_reserve(auto_repeater):
         'negative_values'
     ]
 )
-def test_postiton_to_string(auto_repeater, instrument_type, price, quantity, uid, expected):
+def test_postiton_to_string(
+        auto_repeater,
+        instrument_type,
+        price,
+        quantity,
+        uid,
+        expected):
     """test_postiton_to_string"""
     position = PortfolioPosition(
         instrument_type=instrument_type,
@@ -723,13 +767,15 @@ def test_calc_sell_positions(auto_repeater):
                 '1': PortfolioPosition(
                     instrument_type='share',
                     instrument_uid='1',
-                    current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
+                    current_price=MoneyValue(
+                        currency='RUB', units=1, nano=200000000),
                     quantity=Quotation(units=100, nano=0)
                 ),
                 '2': PortfolioPosition(
                     instrument_type='share',
                     instrument_uid='2',
-                    current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
+                    current_price=MoneyValue(
+                        currency='RUB', units=2, nano=200000000),
                     quantity=Quotation(units=50, nano=0)
                 )
             },
@@ -802,13 +848,15 @@ def test_calc_buy_positions(auto_repeater):
                 '1': PortfolioPosition(
                     instrument_type='share',
                     instrument_uid='1',
-                    current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
+                    current_price=MoneyValue(
+                        currency='RUB', units=1, nano=200000000),
                     quantity=Quotation(units=100, nano=0)
                 ),
                 '2': PortfolioPosition(
                     instrument_type='share',
                     instrument_uid='2',
-                    current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
+                    current_price=MoneyValue(
+                        currency='RUB', units=2, nano=200000000),
                     quantity=Quotation(units=50, nano=0)
                 )
             },
@@ -816,7 +864,8 @@ def test_calc_buy_positions(auto_repeater):
                 '2': PortfolioPosition(
                     instrument_type='share',
                     instrument_uid='2',
-                    current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
+                    current_price=MoneyValue(
+                        currency='RUB', units=2, nano=200000000),
                     quantity=Quotation(units=50, nano=0)
                 )
             },
@@ -882,7 +931,9 @@ def test_calc_buy_positions(auto_repeater):
 
     for case in test_cases:
         result = auto_repeater.calc_buy_positions(
-            case['src_positions'], case['dst_positions'], case['target_positions'])
+            case['src_positions'],
+            case['dst_positions'],
+            case['target_positions'])
         assert result == case['expected']
 
 

@@ -18,8 +18,10 @@ IMPORTANT = 25
 # Устанавливаем точность для Decimal
 getcontext().prec = 28
 
+
 class GetInstrumentException(Exception):
     """instrument not found by instrument_id"""
+
 
 def format_decimal(value):
     """Format Decimal to string with proper formatting
@@ -43,10 +45,11 @@ def format_decimal(value):
     # Если число целое, добавляем .0
     return formatted + '.0'
 
+
 def money_to_string(money):
     """convert money to human-readable string"""
     result = money.currency
-    value = (Decimal(money.units) + 
+    value = (Decimal(money.units) +
              Decimal(money.nano) / Decimal('1000000000'))
     formatted = format_decimal(value)
     result += ' - ' + formatted
@@ -67,17 +70,18 @@ def no_money_to_string(share):
 
 def currency_to_decimal(position):
     """convert position full price value to Decimal"""
-    price = (Decimal(position.current_price.units) + 
+    price = (Decimal(position.current_price.units) +
              Decimal(position.current_price.nano) / Decimal('1000000000'))
-    quantity = (Decimal(position.quantity.units) + 
-               Decimal(position.quantity.nano) / Decimal('1000000000'))
-    # Округляем результат до 9 знаков после запятой (максимальная точность nano)
+    quantity = (Decimal(position.quantity.units) +
+                Decimal(position.quantity.nano) / Decimal('1000000000'))
+    # Округляем результат до 9 знаков после запятой (максимальная точность
+    # nano)
     return (price * quantity).quantize(Decimal('0.000000001'))
 
 
 def currency_to_decimal_price(position):
     """convert position price value to Decimal"""
-    return (Decimal(position.current_price.units) + 
+    return (Decimal(position.current_price.units) +
             Decimal(position.current_price.nano) / Decimal('1000000000'))
 
 
@@ -85,16 +89,16 @@ def currency_to_string(position):
     """convert position price value to human-readable string"""
     result = position.current_price.currency
     value = currency_to_decimal(position)
-    
+
     formatted = format_decimal(value)
-    
+
     result += ' - ' + formatted
     return result
 
 
 def get_quantity_position(position):
     """get quantity from position as Decimal"""
-    return (Decimal(position.quantity.units) + 
+    return (Decimal(position.quantity.units) +
             Decimal(position.quantity.nano) / Decimal('1000000000'))
 
 
@@ -107,7 +111,7 @@ def check_triggers(position, src_account, dst_account):
         len(position.securities) > 0 and
         all(sec.blocked == 0 for sec in position.securities)
     )
-    
+
     # Проверяем, что нет ценных бумаг и деньги разблокированы
     no_securities_and_money_unblocked = (
         position is not None and
@@ -117,7 +121,7 @@ def check_triggers(position, src_account, dst_account):
         position.money[0].blocked_value.units == 0 and
         position.money[0].blocked_value.nano == 0
     )
-    
+
     return all_securities_unblocked or no_securities_and_money_unblocked
 
 
@@ -129,22 +133,24 @@ class OrderParams:
     direction: OrderDirection
     order_type: OrderType
 
+
 def get_max_sum_positions_price(sell_orders_params, buy_orders_params,
-                               src_positions, dst_positions):
+                                src_positions, dst_positions):
     """get max sum orders price for buy or sell orders"""
     total_sell = 0
     for order_params in sell_orders_params:
         position = dst_positions[order_params.instrument_id]
-        total_sell += (currency_to_decimal_price(position) * 
-                      order_params.quantity)
+        total_sell += (currency_to_decimal_price(position) *
+                       order_params.quantity)
 
     total_buy = 0
     for order_params in buy_orders_params:
         position = src_positions[order_params.instrument_id]
-        total_buy += (currency_to_decimal_price(position) * 
-                     order_params.quantity)
+        total_buy += (currency_to_decimal_price(position) *
+                      order_params.quantity)
 
     return max(total_sell, total_buy)
+
 
 class AutoRepeater:
     """Main class for automatically repeating operations of one account over another account."""
@@ -184,8 +190,8 @@ class AutoRepeater:
         if position.instrument_type in ['share', 'etf']:
             instrument = self.get_instrument(position.instrument_uid)
             quantity = format_decimal(get_quantity_position(position))
-            return (no_money_to_string(instrument) + ' - ' + 
-                   quantity + ' - ' + currency_to_string(position))
+            return (no_money_to_string(instrument) + ' - ' +
+                    quantity + ' - ' + currency_to_string(position))
         return str(position)
 
     def get_instrument(self, instrument_id):
@@ -198,15 +204,15 @@ class AutoRepeater:
 
     def print_portfolio_by_account(self, account):
         """print detailed information about account"""
-        logging.log(IMPORTANT,'%s (%s)',account.name, account.id)
-        logging.log(IMPORTANT,'------------')
+        logging.log(IMPORTANT, '%s (%s)', account.name, account.id)
+        logging.log(IMPORTANT, '------------')
         portfolio = self.client.operations.get_portfolio(account_id=account.id)
         total = Decimal('0')
         for position in portfolio.positions:
-            logging.log(IMPORTANT,self.postiton_to_string(position))
+            logging.log(IMPORTANT, self.postiton_to_string(position))
             total += currency_to_decimal(position)
-        logging.log(IMPORTANT,'total: %s', str(total))
-        logging.log(IMPORTANT,'============')
+        logging.log(IMPORTANT, 'total: %s', str(total))
+        logging.log(IMPORTANT, '============')
 
     def print_all_portfolio(self):
         """print detailed information about all accounts"""
@@ -217,7 +223,8 @@ class AutoRepeater:
     def calc_ratio(self, src_account_id, dst_account_id):
         """calc ratio and print src and dst accounts"""
         logging.log(IMPORTANT, "src account")
-        portfolio_src = self.client.operations.get_portfolio(account_id=src_account_id)
+        portfolio_src = self.client.operations.get_portfolio(
+            account_id=src_account_id)
         total_src = Decimal('0')
         src_positions = {}
         for position in portfolio_src.positions:
@@ -228,7 +235,8 @@ class AutoRepeater:
         logging.log(IMPORTANT, 'total: %s', str(total_src))
 
         logging.log(IMPORTANT, "dst account")
-        portfolio_dst = self.client.operations.get_portfolio(account_id=dst_account_id)
+        portfolio_dst = self.client.operations.get_portfolio(
+            account_id=dst_account_id)
         total_dst = Decimal('0')
         dst_positions = {}
         for position in portfolio_dst.positions:
@@ -253,7 +261,8 @@ class AutoRepeater:
                     SECURITY_TRADING_STATUS_NORMAL_TRADING):
                 continue
             if item_id not in target_positions:
-                quantity = round(get_quantity_position(item_value) / Decimal(str(instrument.lot)))
+                quantity = round(get_quantity_position(
+                    item_value) / Decimal(str(instrument.lot)))
                 if quantity > 0:
                     logging.log(IMPORTANT,
                                 'Продать: %s %d лотов',
@@ -266,8 +275,8 @@ class AutoRepeater:
                             direction=OrderDirection.ORDER_DIRECTION_SELL,
                             order_type=OrderType.ORDER_TYPE_BESTPRICE))
             elif target_positions[item_id] < get_quantity_position(item_value):
-                quantity = round((get_quantity_position(item_value) -
-                                  target_positions[item_id]) / Decimal(str(instrument.lot)))
+                quantity = round((get_quantity_position(
+                    item_value) - target_positions[item_id]) / Decimal(str(instrument.lot)))
                 if quantity > 0:
                     logging.log(IMPORTANT,
                                 'Продать: %s %d лотов',
@@ -308,8 +317,9 @@ class AutoRepeater:
                             order_type=OrderType.ORDER_TYPE_BESTPRICE))
             elif item_value > get_quantity_position(dst_positions[item_id]):
                 position = dst_positions[item_id]
-                quantity = round((item_value - get_quantity_position(position)) /
-                    Decimal(str(instrument.lot)))
+                quantity = round((item_value -
+                                  get_quantity_position(position)) /
+                                 Decimal(str(instrument.lot)))
                 if quantity > 0:
                     logging.log(IMPORTANT,
                                 'Купить: %s %d лотов',
@@ -327,23 +337,23 @@ class AutoRepeater:
                     orders_params_buy):
         """post all orders"""
         for order_params in orders_params_sell:
-            logging.log(IMPORTANT,order_params)
+            logging.log(IMPORTANT, order_params)
             logging.log(IMPORTANT,
-                self.client.orders.post_order(
-                    instrument_id=order_params.instrument_id,
-                    quantity=order_params.quantity,
-                    direction=order_params.direction,
-                    account_id=dst_account_id,
-                    order_type=order_params.order_type).order_id)
+                        self.client.orders.post_order(
+                            instrument_id=order_params.instrument_id,
+                            quantity=order_params.quantity,
+                            direction=order_params.direction,
+                            account_id=dst_account_id,
+                            order_type=order_params.order_type).order_id)
         for order_params in orders_params_buy:
-            logging.log(IMPORTANT,order_params)
+            logging.log(IMPORTANT, order_params)
             logging.log(IMPORTANT,
-                self.client.orders.post_order(
-                    instrument_id=order_params.instrument_id,
-                    quantity=order_params.quantity,
-                    direction=order_params.direction,
-                    account_id=dst_account_id,
-                    order_type=order_params.order_type).order_id)
+                        self.client.orders.post_order(
+                            instrument_id=order_params.instrument_id,
+                            quantity=order_params.quantity,
+                            direction=order_params.direction,
+                            account_id=dst_account_id,
+                            order_type=order_params.order_type).order_id)
 
     def sync_accounts(self, src_account_id, dst_account_id):
         """sync positions from src account to dst account"""
@@ -351,17 +361,22 @@ class AutoRepeater:
             self.calc_ratio(src_account_id, dst_account_id))
         target_positions = {}
         for item_id, item_value in src_positions.items():
-            target_positions[item_id] = ratio * get_quantity_position(item_value)
+            target_positions[item_id] = ratio * \
+                get_quantity_position(item_value)
 
-        orders_params_sell = self.calc_sell_positions(dst_positions, target_positions)
-        orders_params_buy = self.calc_buy_positions(src_positions, dst_positions, 
-                                                  target_positions)
+        orders_params_sell = self.calc_sell_positions(
+            dst_positions, target_positions)
+        orders_params_buy = self.calc_buy_positions(
+            src_positions, dst_positions, target_positions)
 
         if (not self.debug) and (
-            get_max_sum_positions_price(orders_params_sell, orders_params_buy,
-                                      src_positions, dst_positions) > 
-            total_dst * self.threshold):
-            self.post_orders(dst_account_id, orders_params_sell, orders_params_buy)
+                get_max_sum_positions_price(orders_params_sell, orders_params_buy,
+                                            src_positions, dst_positions) >
+                total_dst * self.threshold):
+            self.post_orders(
+                dst_account_id,
+                orders_params_sell,
+                orders_params_buy)
 
     def mainflow(self, src, dst):
         """sync accounts when changing"""
@@ -377,9 +392,10 @@ class AutoRepeater:
                     if check_triggers(response.position, src, dst):
                         self.sync_accounts(src, dst)
                     else:
-                        logging.log(IMPORTANT,response)
+                        logging.log(IMPORTANT, response)
             except RequestError as err:
                 logging.error(err)
+
 
 @dataclasses.dataclass
 class RunnerParams:
@@ -388,6 +404,7 @@ class RunnerParams:
     threshold: float
     reserve: float
 
+
 class Runner:
     """wrapper for launch autorwpeater"""
 
@@ -395,9 +412,9 @@ class Runner:
                  token,
                  src,
                  dst,
-                 params = RunnerParams(debug=False,
-                                       threshold=None,
-                                       reserve=None)):
+                 params=RunnerParams(debug=False,
+                                     threshold=None,
+                                     reserve=None)):
         self.token = token
         self.params = params
         self.src = src
