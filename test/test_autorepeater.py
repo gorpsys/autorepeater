@@ -1,6 +1,7 @@
 # pylint: disable=R0903, R0913, R0917
 """tests"""
 import pytest
+from decimal import Decimal
 
 from tinkoff.invest import MoneyValue
 from tinkoff.invest import Instrument
@@ -27,9 +28,9 @@ from tinkoff.invest import RequestError
 from autorepeater.autorepeater import money_to_string
 from autorepeater.autorepeater import no_money_to_string
 from autorepeater.autorepeater import blocked_to_string
-from autorepeater.autorepeater import currency_to_float
+from autorepeater.autorepeater import currency_to_decimal
+from autorepeater.autorepeater import currency_to_decimal_price
 from autorepeater.autorepeater import currency_to_string
-from autorepeater.autorepeater import currency_to_float_price
 from autorepeater.autorepeater import get_quantity_position
 from autorepeater.autorepeater import check_triggers
 from autorepeater.autorepeater import get_max_sum_positions_price
@@ -50,6 +51,17 @@ class TestException(Exception):
         ('RUB', 1, 500000000, 'RUB - 1.5'),
         ('RUB', -1, -500000000, 'RUB - -1.5'),
         ('RUB', 0, 0, 'RUB - 0.0'),
+        ('USD', 0, 999999999, 'USD - 0.999999999'),  # Максимальное значение nano
+        ('EUR', 999999999, 0, 'EUR - 999999999.0'),  # Большое значение units
+        ('RUB', 0, 1, 'RUB - 0.000000001'),  # Минимальное значение nano
+    ],
+    ids=[
+        'positive_value',
+        'negative_value',
+        'zero_value',
+        'max_nano',
+        'max_units',
+        'min_nano'
     ]
 )
 def test_money_to_string(currency, units, nano, expected):
@@ -66,6 +78,17 @@ def test_money_to_string(currency, units, nano, expected):
         ('RUB', 1, 500000000, 'blocked RUB - 1.5'),
         ('RUB', -1, -500000000, 'blocked RUB - -1.5'),
         ('RUB', 0, 0, 'blocked RUB - 0.0'),
+        ('USD', 0, 999999999, 'blocked USD - 0.999999999'),  # Максимальное значение nano
+        ('EUR', 999999999, 0, 'blocked EUR - 999999999.0'),  # Добавляем .0 для целого числа
+        ('RUB', 0, 1, 'blocked RUB - 0.000000001'),  # Минимальное значение nano
+    ],
+    ids=[
+        'positive_blocked',
+        'negative_blocked',
+        'zero_blocked',
+        'max_nano_blocked',
+        'max_units_blocked',
+        'min_nano_blocked'
     ]
 )
 def test_blocked_to_string(currency, units, nano, expected):
@@ -85,6 +108,18 @@ def test_blocked_to_string(currency, units, nano, expected):
                        ticker='IE00BD3QHZ91'),
             'FinEx Акции американских компаний(IE00BD3QHZ91)',
         ),
+        (Instrument(name='', ticker=''), '()'),  # Пустые значения
+        (Instrument(name='Company', ticker=''), 'Company()'),  # Пустой тикер
+        (Instrument(name='', ticker='TICK'), '(TICK)'),  # Пустое название
+        (Instrument(name='Company & Co.', ticker='C&C'), 'Company & Co.(C&C)'),  # Специальные символы
+    ],
+    ids=[
+        'simple_company',
+        'complex_company_name',
+        'empty_values',
+        'empty_ticker',
+        'empty_name',
+        'special_chars'
     ]
 )
 def test_no_money_to_string(instrument, expected):
@@ -97,13 +132,20 @@ def test_no_money_to_string(instrument, expected):
 @pytest.mark.parametrize(
     'money, quantity_units, quantity_nano, expected',
     [
-        (MoneyValue('RUB', 1, 500000000), 2, 0, 3.0),
-        (MoneyValue('RUB', -1, -500000000), 1, 500000000, -2.25),
-        (MoneyValue('RUB', 0, 0), 5, 500000000, 0),
+        (MoneyValue('RUB', 1, 500000000), 2, 0, Decimal('3.0')),
+        (MoneyValue('RUB', -1, -500000000), 1, 500000000, Decimal('-2.25')),
+        (MoneyValue('RUB', 0, 0), 5, 500000000, Decimal('0')),
+        (MoneyValue('EUR', 999999999, 0), 999999999, 0, Decimal('999999998000000001')),  # Максимальные значения
+    ],
+    ids=[
+        'positive_values',
+        'negative_values',
+        'zero_money',
+        'max_values'
     ]
 )
-def test_currency_to_float(money, quantity_units, quantity_nano, expected):
-    """currency to float"""
+def test_currency_to_decimal(money, quantity_units, quantity_nano, expected):
+    """currency to decimal"""
     position = PortfolioPosition(
         current_price=money,
         quantity=Quotation(
@@ -111,21 +153,27 @@ def test_currency_to_float(money, quantity_units, quantity_nano, expected):
             nano=quantity_nano,
         ),
     )
-    result = currency_to_float(position)
-
+    result = currency_to_decimal(position)
     assert result == expected
 
 
 @pytest.mark.parametrize(
     'money, quantity_units, quantity_nano, expected',
     [
-        (MoneyValue('RUB', 1, 500000000), 2, 0, 1.5),
-        (MoneyValue('RUB', -1, -500000000), 1, 500000000, -1.5),
-        (MoneyValue('RUB', 0, 0), 5, 500000000, 0),
+        (MoneyValue('RUB', 1, 500000000), 2, 0, Decimal('1.5')),
+        (MoneyValue('RUB', -1, -500000000), 1, 500000000, Decimal('-1.5')),
+        (MoneyValue('RUB', 0, 0), 5, 500000000, Decimal('0')),
+        (MoneyValue('EUR', 999999999, 0), 999999999, 0, Decimal('999999999')),  # Максимальные значения
+    ],
+    ids=[
+        'positive_price',
+        'negative_price',
+        'zero_price',
+        'max_price'
     ]
 )
-def test_currency_to_float_price(money, quantity_units, quantity_nano, expected):
-    """currency price to float"""
+def test_currency_to_decimal_price(money, quantity_units, quantity_nano, expected):
+    """currency price to decimal"""
     position = PortfolioPosition(
         current_price=money,
         quantity=Quotation(
@@ -133,8 +181,7 @@ def test_currency_to_float_price(money, quantity_units, quantity_nano, expected)
             nano=quantity_nano,
         ),
     )
-    result = currency_to_float_price(position)
-
+    result = currency_to_decimal_price(position)
     assert result == expected
 
 
@@ -144,6 +191,11 @@ def test_currency_to_float_price(money, quantity_units, quantity_nano, expected)
         (MoneyValue('RUB', 1, 500000000), 2, 0, 'RUB - 3.0'),
         (MoneyValue('RUB', -1, -500000000), 1, 500000000, 'RUB - -2.25'),
         (MoneyValue('RUB', 0, 0), 5, 500000000, 'RUB - 0.0'),
+    ],
+    ids=[
+        'positive_string',
+        'negative_string',
+        'zero_string'
     ]
 )
 def test_currency_to_string(money, quantity_units, quantity_nano, expected):
@@ -163,13 +215,20 @@ def test_currency_to_string(money, quantity_units, quantity_nano, expected):
 @pytest.mark.parametrize(
     'money, quantity_units, quantity_nano, expected',
     [
-        (MoneyValue('RUB', 1, 500000000), 2, 0, 2.0),
-        (MoneyValue('RUB', -1, -500000000), 1, 500000000, 1.5),
-        (MoneyValue('RUB', 0, 0), 5, 500000000, 5.5),
+        (MoneyValue('RUB', 1, 500000000), 2, 0, Decimal('2.0')),
+        (MoneyValue('RUB', -1, -500000000), 1, 500000000, Decimal('1.5')),
+        (MoneyValue('RUB', 0, 0), 5, 500000000, Decimal('5.5')),
+        (MoneyValue('EUR', 999999999, 0), 999999999, 0, Decimal('999999999.0')),  # Максимальные значения
+    ],
+    ids=[
+        'positive_quantity',
+        'negative_quantity',
+        'zero_quantity',
+        'max_quantity'
     ]
 )
 def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
-    """quantity position"""
+    """quantity position as Decimal"""
     position = PortfolioPosition(
         current_price=money,
         quantity=Quotation(
@@ -178,17 +237,30 @@ def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
         ),
     )
     result = get_quantity_position(position)
-
     assert result == expected
 
 
 @pytest.mark.parametrize(
     'account_id, position_securities, position_money, expected',
     [
-        ('1', [], [], False),
-        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=1))], False),
-        ('1', [PositionsSecurities(blocked=0)], [PositionsMoney()], True),
-        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=0, nano=0))], True),
+        ('1', [], [], False),  # Пустые позиции
+        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=1))], False),  # Заблокированные деньги
+        ('1', [PositionsSecurities(blocked=0)], [PositionsMoney()], True),  # Разблокированные ценные бумаги
+        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=0, nano=0))], True),  # Разблокированные деньги
+        ('3', [], [], False),  # Неизвестный аккаунт
+        ('1', [PositionsSecurities(blocked=1)], [PositionsMoney()], False),  # Заблокированные ценные бумаги
+        ('2', [], [PositionsMoney(blocked_value=MoneyValue(units=0, nano=1))], False),  # Частично заблокированные деньги
+        ('1', [PositionsSecurities(blocked=0), PositionsSecurities(blocked=1)], [PositionsMoney()], False),  # Смешанные блокировки
+    ],
+    ids=[
+        'empty_positions',
+        'blocked_money',
+        'unblocked_securities',
+        'unblocked_money',
+        'unknown_account',
+        'blocked_securities',
+        'partially_blocked_money',
+        'mixed_blocked_securities'
     ]
 )
 def test_check_triggers(account_id, position_money, position_securities, expected):
@@ -276,16 +348,21 @@ def test_check_triggers(account_id, position_money, position_securities, expecte
             },
             1.5
         ),
+    ],
+    ids=[
+        'empty_orders',
+        'sell_only',
+        'buy_only',
+        'both_orders'
     ]
 )
 def test_get_max_sum_positions_price(sell_orders_params, buy_orders_params,
                                      src_positions, dst_positions, expected):
     """get_max_sum_positions_price"""
-
     result = get_max_sum_positions_price(sell_orders_params, buy_orders_params,
                                          src_positions, dst_positions)
-
     assert result == expected
+
 
 class FakeClient:
     """FakeClient mock для клиента тинькофф инвестиций"""
@@ -446,42 +523,102 @@ class FakeClient:
         self.users = FakeClient.FakeUsers()
         self.orders = FakeClient.FakeOrders()
 
+
 @pytest.fixture(name='client')
 def client_tinvest():
     """client_tinvest - фикстура создаёт и возвращает mock клиента"""
     return FakeClient()
+
 
 @pytest.fixture(name='auto_repeater')
 def auto_repeater_fixture(client):
     """auto_repeater_fixture - фикстура создаёт и возвращает основной класс передав ему клиента"""
     return AutoRepeater(client)
 
+
 def test_init(auto_repeater):
     """test_init"""
+    # Проверка базовой инициализации
     assert auto_repeater.client is not None
     assert auto_repeater.debug is False
-    assert auto_repeater.threshold == THRESHOLD
-    assert auto_repeater.reserve == DST_MONEY_RESERVED
+    assert auto_repeater.threshold == Decimal(THRESHOLD)
+    assert auto_repeater.reserve == Decimal(DST_MONEY_RESERVED)
+
+    # Проверка инициализации с невалидными значениями
+    with pytest.raises(ValueError):
+        auto_repeater.set_threshold(-1)
+    with pytest.raises(ValueError):
+        auto_repeater.set_reserve(-1)
+    with pytest.raises(ValueError):
+        auto_repeater.set_reserve(1.1)  # Резерв не может быть больше 100%
 
 
 def test_set_debug(auto_repeater):
     """test_set_debug"""
+    # Проверка включения отладки
     auto_repeater.set_debug(True)
     assert auto_repeater.debug is True
+
+    # Проверка выключения отладки
     auto_repeater.set_debug(False)
     assert auto_repeater.debug is False
+
+    # Проверка повторного включения
+    auto_repeater.set_debug(True)
+    assert auto_repeater.debug is True
+
+    # Проверка с невалидными значениями
+    with pytest.raises(TypeError):
+        auto_repeater.set_debug(1)  # Должно быть bool
+    with pytest.raises(TypeError):
+        auto_repeater.set_debug("True")  # Должно быть bool
 
 
 def test_set_threshold(auto_repeater):
     """test_set_threshold"""
+    # Проверка установки порога
     auto_repeater.set_threshold(0.01)
-    assert auto_repeater.threshold == 0.01
+    assert auto_repeater.threshold == Decimal('0.01')
+
+    # Проверка установки нулевого порога
+    auto_repeater.set_threshold(0)
+    assert auto_repeater.threshold == Decimal('0')
+
+    # Проверка установки максимального порога
+    auto_repeater.set_threshold(1.0)
+    assert auto_repeater.threshold == Decimal('1.0')
+
+    # Проверка с невалидными значениями
+    with pytest.raises(ValueError):
+        auto_repeater.set_threshold(-0.1)  # Отрицательный порог
+    with pytest.raises(ValueError):
+        auto_repeater.set_threshold(1.1)  # Порог больше 100%
+    with pytest.raises(TypeError):
+        auto_repeater.set_threshold("0.01")  # Не число
 
 
 def test_set_reserve(auto_repeater):
     """test_set_reserve"""
+    # Проверка установки резерва
     auto_repeater.set_reserve(0.05)
-    assert auto_repeater.reserve == 0.05
+    assert auto_repeater.reserve == Decimal('0.05')
+
+    # Проверка установки нулевого резерва
+    auto_repeater.set_reserve(0)
+    assert auto_repeater.reserve == Decimal('0')
+
+    # Проверка установки максимального резерва
+    auto_repeater.set_reserve(1.0)
+    assert auto_repeater.reserve == Decimal('1.0')
+
+    # Проверка с невалидными значениями
+    with pytest.raises(ValueError):
+        auto_repeater.set_reserve(-0.1)  # Отрицательный резерв
+    with pytest.raises(ValueError):
+        auto_repeater.set_reserve(1.1)  # Резерв больше 100%
+    with pytest.raises(TypeError):
+        auto_repeater.set_reserve("0.05")  # Не число
+
 
 @pytest.mark.parametrize(
     'instrument_type, price, quantity, uid, expected',
@@ -514,6 +651,55 @@ def test_set_reserve(auto_repeater):
             "1",
             "share1(SHR) - 2.0 - USD - 200.0"
         ),
+        (
+            "currency",
+            MoneyValue(
+                currency="RUB",
+                units=0,
+                nano=999999999
+            ),
+            Quotation(
+                units=0,
+                nano=1
+            ),
+            "",
+            "RUB - 0.000000001"  # Минимальные значения
+        ),
+        (
+            "share",
+            MoneyValue(
+                currency="EUR",
+                units=999999999,
+                nano=0
+            ),
+            Quotation(
+                units=999999999,
+                nano=0
+            ),
+            "2",
+            "etf2(ETF) - 999999999.0 - EUR - 999999998000000001.0"  # Максимальные значения
+        ),
+        (
+            "currency",
+            MoneyValue(
+                currency="RUB",
+                units=-100,
+                nano=-500000000
+            ),
+            Quotation(
+                units=-2,
+                nano=0
+            ),
+            "",
+            "RUB - 201.0"  # Отрицательные значения: -100.5 * -2 = 201.0
+        ),
+    ],
+    ids=[
+        'simple_currency',
+        'simple_share',
+        'min_values',
+        'max_values',
+        'negative_values'
     ]
 )
 def test_postiton_to_string(auto_repeater, instrument_type, price, quantity, uid, expected):
@@ -558,87 +744,180 @@ def test_calc_ratio(auto_repeater):
 
     assert result[1] == {}
 
-    assert result[2] == 0.995
-    assert result[3] == 2.388
+    assert result[2] == Decimal('0.995')
+    assert result[3] == Decimal('2.388')
 
 
 def test_calc_sell_positions(auto_repeater):
     """test_calc_sell_positions"""
-    dst_positions = {'1': PortfolioPosition(
-        instrument_type='share',
-        instrument_uid='1',
-        current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
-        quantity=Quotation(units=100, nano=0)
-    ),
-        '2': PortfolioPosition(
-        instrument_type='share',
-        instrument_uid='2',
-        current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
-        quantity=Quotation(units=50, nano=0)
-    )
-    }
-
-    target_positions = {
-        '1': 50,
-    }
-    result = auto_repeater.calc_sell_positions(dst_positions, target_positions)
-    assert result == [
-        OrderParams(
-            instrument_id='1',
-            quantity=50,
-            direction=OrderDirection.ORDER_DIRECTION_SELL,
-            order_type=OrderType.ORDER_TYPE_BESTPRICE),
-        OrderParams(
-            instrument_id='2',
-            quantity=50,
-            direction=OrderDirection.ORDER_DIRECTION_SELL,
-            order_type=OrderType.ORDER_TYPE_BESTPRICE),
+    test_cases = [
+        # Базовый случай
+        {
+            'dst_positions': {
+                '1': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='1',
+                    current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
+                    quantity=Quotation(units=100, nano=0)
+                ),
+                '2': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='2',
+                    current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
+                    quantity=Quotation(units=50, nano=0)
+                )
+            },
+            'target_positions': {'1': 50},
+            'expected': [
+                OrderParams(
+                    instrument_id='1',
+                    quantity=50,
+                    direction=OrderDirection.ORDER_DIRECTION_SELL,
+                    order_type=OrderType.ORDER_TYPE_BESTPRICE),
+                OrderParams(
+                    instrument_id='2',
+                    quantity=50,
+                    direction=OrderDirection.ORDER_DIRECTION_SELL,
+                    order_type=OrderType.ORDER_TYPE_BESTPRICE),
+            ]
+        },
+        # Пустые позиции
+        {
+            'dst_positions': {},
+            'target_positions': {},
+            'expected': []
+        },
+        # Нет позиций для продажи
+        {
+            'dst_positions': {
+                '1': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='1',
+                    current_price=MoneyValue(currency='RUB', units=1, nano=0),
+                    quantity=Quotation(units=0, nano=0)
+                )
+            },
+            'target_positions': {'1': 0},
+            'expected': []
+        },
+        # Продажа всех позиций
+        {
+            'dst_positions': {
+                '1': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='1',
+                    current_price=MoneyValue(currency='RUB', units=1, nano=0),
+                    quantity=Quotation(units=100, nano=0)
+                )
+            },
+            'target_positions': {'1': 0},
+            'expected': [
+                OrderParams(
+                    instrument_id='1',
+                    quantity=100,
+                    direction=OrderDirection.ORDER_DIRECTION_SELL,
+                    order_type=OrderType.ORDER_TYPE_BESTPRICE)
+            ]
+        }
     ]
+
+    for case in test_cases:
+        result = auto_repeater.calc_sell_positions(
+            case['dst_positions'], case['target_positions'])
+        assert result == case['expected']
 
 
 def test_calc_buy_positions(auto_repeater):
     """test_calc_buy_positions"""
-    src_positions = {'1': PortfolioPosition(
-        instrument_type='share',
-        instrument_uid='1',
-        current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
-        quantity=Quotation(units=100, nano=0)
-    ),
-        '2': PortfolioPosition(
-        instrument_type='share',
-        instrument_uid='2',
-        current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
-        quantity=Quotation(units=50, nano=0)
-    )
-    }
-
-    dst_positions = {
-        '2': PortfolioPosition(
-            instrument_type='share',
-            instrument_uid='2',
-            current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
-            quantity=Quotation(units=50, nano=0)
-        )
-    }
-
-    target_positions = {
-        '1': 50,
-        '2': 100
-    }
-    result = auto_repeater.calc_buy_positions(
-        src_positions, dst_positions, target_positions)
-    assert result == [
-        OrderParams(
-            instrument_id='1',
-            quantity=50,
-            direction=OrderDirection.ORDER_DIRECTION_BUY,
-            order_type=OrderType.ORDER_TYPE_BESTPRICE),
-        OrderParams(
-            instrument_id='2',
-            quantity=50,
-            direction=OrderDirection.ORDER_DIRECTION_BUY,
-            order_type=OrderType.ORDER_TYPE_BESTPRICE),
+    test_cases = [
+        # Базовый случай
+        {
+            'src_positions': {
+                '1': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='1',
+                    current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
+                    quantity=Quotation(units=100, nano=0)
+                ),
+                '2': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='2',
+                    current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
+                    quantity=Quotation(units=50, nano=0)
+                )
+            },
+            'dst_positions': {
+                '2': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='2',
+                    current_price=MoneyValue(currency='RUB', units=2, nano=200000000),
+                    quantity=Quotation(units=50, nano=0)
+                )
+            },
+            'target_positions': {
+                '1': 50,
+                '2': 100
+            },
+            'expected': [
+                OrderParams(
+                    instrument_id='1',
+                    quantity=50,
+                    direction=OrderDirection.ORDER_DIRECTION_BUY,
+                    order_type=OrderType.ORDER_TYPE_BESTPRICE),
+                OrderParams(
+                    instrument_id='2',
+                    quantity=50,
+                    direction=OrderDirection.ORDER_DIRECTION_BUY,
+                    order_type=OrderType.ORDER_TYPE_BESTPRICE),
+            ]
+        },
+        # Пустые позиции
+        {
+            'src_positions': {},
+            'dst_positions': {},
+            'target_positions': {},
+            'expected': []
+        },
+        # Нет позиций для покупки
+        {
+            'src_positions': {
+                '1': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='1',
+                    current_price=MoneyValue(currency='RUB', units=1, nano=0),
+                    quantity=Quotation(units=0, nano=0)
+                )
+            },
+            'dst_positions': {},
+            'target_positions': {'1': 0},
+            'expected': []
+        },
+        # Покупка всех позиций
+        {
+            'src_positions': {
+                '1': PortfolioPosition(
+                    instrument_type='share',
+                    instrument_uid='1',
+                    current_price=MoneyValue(currency='RUB', units=1, nano=0),
+                    quantity=Quotation(units=100, nano=0)
+                )
+            },
+            'dst_positions': {},
+            'target_positions': {'1': 100},
+            'expected': [
+                OrderParams(
+                    instrument_id='1',
+                    quantity=100,
+                    direction=OrderDirection.ORDER_DIRECTION_BUY,
+                    order_type=OrderType.ORDER_TYPE_BESTPRICE)
+            ]
+        }
     ]
+
+    for case in test_cases:
+        result = auto_repeater.calc_buy_positions(
+            case['src_positions'], case['dst_positions'], case['target_positions'])
+        assert result == case['expected']
 
 
 def test_post_orders(auto_repeater):
