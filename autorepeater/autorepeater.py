@@ -3,13 +3,13 @@ import dataclasses
 import logging
 from decimal import Decimal, getcontext
 
-from tinkoff.invest import Client
-from tinkoff.invest.constants import INVEST_GRPC_API
-from tinkoff.invest import InstrumentIdType
-from tinkoff.invest import OrderDirection
-from tinkoff.invest import OrderType
-from tinkoff.invest import SecurityTradingStatus
-from tinkoff.invest import RequestError
+from t_tech.invest import Client
+from t_tech.invest.constants import INVEST_GRPC_API
+from t_tech.invest import InstrumentIdType
+from t_tech.invest import OrderDirection
+from t_tech.invest import OrderType
+from t_tech.invest import SecurityTradingStatus
+from t_tech.invest import RequestError
 
 DST_MONEY_RESERVED = '0.01'
 THRESHOLD = '0.004'

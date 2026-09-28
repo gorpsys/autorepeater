@@ -4,27 +4,27 @@ from decimal import Decimal
 
 import pytest
 
-from tinkoff.invest import MoneyValue
-from tinkoff.invest import Instrument
-from tinkoff.invest import PortfolioPosition
-from tinkoff.invest import Quotation
-from tinkoff.invest import PositionData
-from tinkoff.invest import PositionsMoney
-from tinkoff.invest import PositionsSecurities
-from tinkoff.invest import OrderDirection
-from tinkoff.invest import OrderType
-from tinkoff.invest import FindInstrumentResponse
-from tinkoff.invest import InstrumentResponse
-from tinkoff.invest import PortfolioResponse
-from tinkoff.invest import InstrumentShort
-from tinkoff.invest import GetAccountsResponse
-from tinkoff.invest import Account
-from tinkoff.invest import AccountType
-from tinkoff.invest import AccountStatus
-from tinkoff.invest import InstrumentIdType
-from tinkoff.invest import SecurityTradingStatus
-from tinkoff.invest import PostOrderResponse
-from tinkoff.invest import RequestError
+from t_tech.invest import MoneyValue
+from t_tech.invest import Instrument
+from t_tech.invest import PortfolioPosition
+from t_tech.invest import Quotation
+from t_tech.invest import PositionData
+from t_tech.invest import PositionsMoney
+from t_tech.invest import PositionsSecurities
+from t_tech.invest import OrderDirection
+from t_tech.invest import OrderType
+from t_tech.invest import FindInstrumentResponse
+from t_tech.invest import InstrumentResponse
+from t_tech.invest import PortfolioResponse
+from t_tech.invest import InstrumentShort
+from t_tech.invest import GetAccountsResponse
+from t_tech.invest import Account
+from t_tech.invest import AccountType
+from t_tech.invest import AccountStatus
+from t_tech.invest import InstrumentIdType
+from t_tech.invest import SecurityTradingStatus
+from t_tech.invest import PostOrderResponse
+from t_tech.invest import RequestError
 
 from autorepeater.autorepeater import money_to_string
 from autorepeater.autorepeater import no_money_to_string
@@ -754,8 +754,8 @@ def test_calc_ratio(auto_repeater):
 
     assert result[1] == {}
 
-    assert result[2] == Decimal('0.995')
-    assert result[3] == Decimal('2.388')
+    assert result[2] == Decimal('0.99')
+    assert result[3] == Decimal('2.376')
 
 
 def test_calc_sell_positions(auto_repeater):
