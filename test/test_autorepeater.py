@@ -26,20 +26,20 @@ from t_tech.invest import SecurityTradingStatus
 from t_tech.invest import PostOrderResponse
 from t_tech.invest import RequestError
 
-from autorepeater.autorepeater import money_to_string
-from autorepeater.autorepeater import no_money_to_string
-from autorepeater.autorepeater import blocked_to_string
-from autorepeater.autorepeater import currency_to_decimal
-from autorepeater.autorepeater import currency_to_decimal_price
-from autorepeater.autorepeater import currency_to_string
-from autorepeater.autorepeater import get_quantity_position
-from autorepeater.autorepeater import check_triggers
-from autorepeater.autorepeater import get_max_sum_positions_price
-from autorepeater.autorepeater import OrderParams
-from autorepeater.autorepeater import AutoRepeater
-from autorepeater.autorepeater import THRESHOLD
-from autorepeater.autorepeater import DST_MONEY_RESERVED
-from autorepeater.autorepeater import GetInstrumentException
+from autorepeater.constants import DST_MONEY_RESERVED
+from autorepeater.constants import THRESHOLD
+from autorepeater.money import blocked_to_string
+from autorepeater.money import currency_to_decimal
+from autorepeater.money import currency_to_decimal_price
+from autorepeater.money import currency_to_string
+from autorepeater.money import get_quantity_position
+from autorepeater.money import money_to_string
+from autorepeater.money import no_money_to_string
+from autorepeater.orders import OrderParams
+from autorepeater.orders import get_max_sum_positions_price
+from autorepeater.repeater import AutoRepeater
+from autorepeater.repeater import GetInstrumentException
+from autorepeater.triggers import check_triggers
 
 
 class TestException(Exception):

@@ -1,11 +1,10 @@
 """Application runner and SDK client wiring."""
 import dataclasses
-import logging
 
 from t_tech.invest import Client
 from t_tech.invest.constants import INVEST_GRPC_API
 
-from autorepeater.constants import IMPORTANT
+from autorepeater.logging_config import configure_local_logging
 from autorepeater.repeater import AutoRepeater
 
 
@@ -31,8 +30,7 @@ class Runner:
         self.params = params
         self.src = src
         self.dst = dst
-        logging.addLevelName(IMPORTANT, 'IMPORTANT')
-        logging.getLogger().setLevel(IMPORTANT)
+        configure_local_logging()
 
     def run(self):
         """run mainflow for server variant"""

@@ -19,6 +19,9 @@ pytest test/test_autorepeater.py -k имя_теста   # один тест
 pylint $(git ls-files '*.py')
 flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+# Архив для Yandex Cloud Functions
+make claude-yandex-archive
 ```
 
 CI (GitHub Actions, Python 3.10) гоняет pylint по всем файлам и pytest — оба должны проходить. Падения pylint блокируют push.
@@ -35,7 +38,7 @@ python main.py -s <id счёта источника> -d <id счёта назн�
 
 ## Архитектура
 
-Код разделён по слоям, точка входа остаётся в `main.py`, а `autorepeater/autorepeater.py` — совместимый фасад для старых импортов:
+Код разделён по слоям, точка входа остаётся в `main.py`:
 
 - **`constants.py`** — константы `DST_MONEY_RESERVED`, `THRESHOLD`, `IMPORTANT` и настройка точности `Decimal`.
 - **`money.py`** — чистые функции для `Decimal`, количества позиций и строкового форматирования денег/инструментов.
@@ -43,8 +46,20 @@ python main.py -s <id счёта источника> -d <id счёта назн�
 - **`orders.py`** — `OrderParams` и расчёт суммарного объёма заявок.
 - **`repeater.py`** — `AutoRepeater`: синхронизация счетов, расчёт ratio, расчёт/отправка заявок, основной stream-loop.
 - **`runner.py`** — `Runner`/`RunnerParams`: создание `t_tech.invest.Client`, применение CLI-параметров и запуск режима `run()`/`run_sync()`.
+- **`serverless.py`** — обработчик Yandex Cloud Functions: читает `src`/`dst`/`token` из query string или окружения и запускает `Runner.run_sync()`.
+- **`logging_config.py`** — локальная настройка логирования и JSON-форматтер для Yandex Cloud (`tinkoffBot`).
+- **`handler.py`** в корне — тонкий entrypoint для облака (`handler.handler`).
 - **Алгоритм синхронизации** (`sync_accounts`): общая стоимость src без валют → общая стоимость dst с валютами минус резерв → ratio = dst/src → целевое состояние dst (может быть дробным, лотность не учитывается) → разница в лотах, округлённая до целого. Сначала рассчитываются заявки на продажу (`calc_sell_positions`), потом на покупку (`calc_buy_positions`), только потом всё отправляется (`post_orders`) — чтобы освободить средства. Суммарный объём заявок сравнивается с `threshold`.
 - Валюты на src игнорируются (это резерв под комиссии), на dst отслеживаются в общей стоимости.
+
+## Облачный запуск
+
+Yandex Cloud Functions может использовать корневой `handler.handler`. Обработчик запускает разовую синхронизацию (`run_sync`), а не долгоживущий stream-loop.
+
+- Параметры запроса: `src`, `dst`, `token`.
+- Переменные окружения как fallback: `SRC_ACCOUNT`, `DST_ACCOUNT`, `INVEST_TOKEN`; для совместимости со старой облачной функцией поддерживается `t_token`.
+- Если `src`/`dst` не переданы ни в запросе, ни в окружении, используются старые облачные значения по умолчанию.
+- `make claude-yandex-archive` создаёт `build/yandex-function.zip` с `handler.py`, пакетом `autorepeater/` и `requirements.txt`.
 
 ## Конвенции
 
@@ -55,7 +70,7 @@ python main.py -s <id счёта источника> -d <id счёта назн�
 
 ## Договорённости для разработки
 
-1. Код проекта держим простым и плоским: основная логика живёт в `autorepeater/autorepeater.py`, CLI-вход в `main.py`, тесты в `test/test_autorepeater.py`. Не добавлять новые слои, пакеты и абстракции без явной пользы.
+1. Код проекта держим простым и плоским: основная логика синхронизации живёт в `autorepeater/repeater.py`, CLI-вход в `main.py`, тесты в `test/test_autorepeater.py`. Не добавлять новые слои, пакеты и абстракции без явной пользы.
 2. Денежные и количественные расчёты делать только через `Decimal`. `float` допустим только на границе CLI/API параметров, сразу переводить через `Decimal(str(value))`.
 3. Константы `DST_MONEY_RESERVED`, `THRESHOLD`, `IMPORTANT` не переименовывать и не переносить без необходимости: их импортируют тесты и они являются частью текущего контракта модуля.
 4. Чистые функции расчёта и форматирования оставлять отдельными функциями верхнего уровня. Логику, которая требует SDK-клиент, держать в `AutoRepeater`.
