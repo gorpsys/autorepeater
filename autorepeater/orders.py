@@ -1,10 +1,9 @@
 """Order DTOs and order calculation helpers."""
 import dataclasses
+from decimal import Decimal
 
 from t_tech.invest import OrderDirection
 from t_tech.invest import OrderType
-
-from autorepeater.money import currency_to_decimal_price
 
 
 @dataclasses.dataclass
@@ -17,18 +16,16 @@ class OrderParams:
 
 
 def get_max_sum_positions_price(sell_orders_params, buy_orders_params,
-                                src_positions, dst_positions):
+                                sell_prices, buy_prices):
     """get max sum orders price for buy or sell orders"""
-    total_sell = 0
+    total_sell = Decimal('0')
     for order_params in sell_orders_params:
-        position = dst_positions[order_params.instrument_id]
-        total_sell += (currency_to_decimal_price(position) *
+        total_sell += (sell_prices[order_params.instrument_id] *
                        order_params.quantity)
 
-    total_buy = 0
+    total_buy = Decimal('0')
     for order_params in buy_orders_params:
-        position = src_positions[order_params.instrument_id]
-        total_buy += (currency_to_decimal_price(position) *
+        total_buy += (buy_prices[order_params.instrument_id] *
                       order_params.quantity)
 
     return max(total_sell, total_buy)

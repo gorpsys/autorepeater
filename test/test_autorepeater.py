@@ -324,7 +324,7 @@ def test_check_triggers(
 
 
 @pytest.mark.parametrize(
-    'sell_orders_params, buy_orders_params, dst_positions, src_positions, expected',
+    'sell_orders_params, buy_orders_params, sell_prices, buy_prices, expected',
     [
         ([], [], {}, {}, 0),
         (
@@ -338,14 +338,9 @@ def test_check_triggers(
                 )
             ],
             [],
-            {
-                '1': PortfolioPosition
-                (
-                    current_price=MoneyValue('RUB', 1, 500000000)
-                )
-            },
+            {'1': Decimal('1.5')},
             {},
-            1.5
+            Decimal('1.5')
         ),
         (
             [],
@@ -359,13 +354,8 @@ def test_check_triggers(
                 )
             ],
             {},
-            {
-                '1': PortfolioPosition
-                (
-                    current_price=MoneyValue('RUB', 1, 500000000)
-                )
-            },
-            1.5
+            {'1': Decimal('1.5')},
+            Decimal('1.5')
         ),
         (
             [
@@ -386,13 +376,9 @@ def test_check_triggers(
                     order_type=OrderType.ORDER_TYPE_BESTPRICE
                 )
             ],
-            {
-                '1': PortfolioPosition(current_price=MoneyValue('RUB', 1, 500000000))
-            },
-            {
-                '1': PortfolioPosition(current_price=MoneyValue('RUB', 1, 500000000))
-            },
-            1.5
+            {'1': Decimal('1.5')},
+            {'1': Decimal('1.25')},
+            Decimal('1.5')
         ),
     ],
     ids=[
@@ -403,10 +389,10 @@ def test_check_triggers(
     ]
 )
 def test_get_max_sum_positions_price(sell_orders_params, buy_orders_params,
-                                     src_positions, dst_positions, expected):
+                                     sell_prices, buy_prices, expected):
     """get_max_sum_positions_price"""
     result = get_max_sum_positions_price(sell_orders_params, buy_orders_params,
-                                         src_positions, dst_positions)
+                                         sell_prices, buy_prices)
     assert result == expected
 
 
@@ -488,7 +474,7 @@ def client_tinvest():
 @pytest.fixture(name='auto_repeater')
 def auto_repeater_fixture(client):
     """auto_repeater_fixture - фикстура создаёт и возвращает основной класс передав ему клиента"""
-    return AutoRepeater(client)
+    return AutoRepeater(client, AccountStrategy('4'))
 
 
 @pytest.mark.parametrize(
@@ -713,24 +699,22 @@ def test_get_instrument_fail(client, instruments):
     client.instruments.find_instrument.assert_called_once_with(query='none_id')
 
 
-def test_calc_ratio(auto_repeater):
-    """test_calc_ratio"""
-    src_account_id = '4'
-    dst_account_id = '5'
-    result = auto_repeater.calc_ratio(src_account_id, dst_account_id)
-    assert len(result[0]) == 1
-    assert result[0]['1'].current_price.units == 1
-    assert result[0]['1'].current_price.nano == 200000000
-    assert result[0]['1'].current_price.currency == 'RUB'
-    assert result[0]['1'].instrument_type == 'share'
-    assert result[0]['1'].quantity.units == 2
-    assert result[0]['1'].quantity.nano == 0
-    assert result[0]['1'].instrument_uid == '1'
-
-    assert result[1] == {}
-
-    assert result[2] == Decimal('0.99')
-    assert result[3] == Decimal('2.376')
+def test_account_strategy_basic_target(client):
+    """The account strategy preserves source data and scales it by the budget ratio."""
+    strategy = AccountStrategy('4')
+    positions, total = strategy.load_snapshot(client)
+    assert len(positions) == 1
+    assert positions['1'].current_price.units == 1
+    assert positions['1'].current_price.nano == 200000000
+    assert positions['1'].current_price.currency == 'RUB'
+    assert positions['1'].instrument_type == 'share'
+    assert positions['1'].quantity.units == 2
+    assert positions['1'].quantity.nano == 0
+    assert positions['1'].instrument_uid == '1'
+    assert total == Decimal('2.4')
+    target = strategy.build_target((positions, total), Decimal('2.376'))
+    assert target.quantities == {'1': Decimal('1.98')}
+    assert target.prices == {'1': Decimal('1.2')}
 
 
 def test_calc_sell_positions(auto_repeater, client):
@@ -826,22 +810,6 @@ def test_calc_buy_positions(auto_repeater, client):
     test_cases = [
         # Базовый случай
         {
-            'src_positions': {
-                '1': PortfolioPosition(
-                    instrument_type='share',
-                    instrument_uid='1',
-                    current_price=MoneyValue(
-                        currency='RUB', units=1, nano=200000000),
-                    quantity=Quotation(units=100, nano=0)
-                ),
-                '2': PortfolioPosition(
-                    instrument_type='share',
-                    instrument_uid='2',
-                    current_price=MoneyValue(
-                        currency='RUB', units=2, nano=200000000),
-                    quantity=Quotation(units=50, nano=0)
-                )
-            },
             'dst_positions': {
                 '2': PortfolioPosition(
                     instrument_type='share',
@@ -870,35 +838,18 @@ def test_calc_buy_positions(auto_repeater, client):
         },
         # Пустые позиции
         {
-            'src_positions': {},
             'dst_positions': {},
             'target_positions': {},
             'expected': []
         },
         # Нет позиций для покупки
         {
-            'src_positions': {
-                '1': PortfolioPosition(
-                    instrument_type='share',
-                    instrument_uid='1',
-                    current_price=MoneyValue(currency='RUB', units=1, nano=0),
-                    quantity=Quotation(units=0, nano=0)
-                )
-            },
             'dst_positions': {},
             'target_positions': {'1': 0},
             'expected': []
         },
         # Покупка всех позиций
         {
-            'src_positions': {
-                '1': PortfolioPosition(
-                    instrument_type='share',
-                    instrument_uid='1',
-                    current_price=MoneyValue(currency='RUB', units=1, nano=0),
-                    quantity=Quotation(units=100, nano=0)
-                )
-            },
             'dst_positions': {},
             'target_positions': {'1': 100},
             'expected': [
@@ -913,7 +864,6 @@ def test_calc_buy_positions(auto_repeater, client):
 
     for case in test_cases:
         result = auto_repeater.calc_buy_positions(
-            case['src_positions'],
             case['dst_positions'],
             case['target_positions'])
         assert result == case['expected']
@@ -960,9 +910,8 @@ def test_post_orders(auto_repeater, client):
 
 def test_sync_accounts(auto_repeater, client):
     """test_sync_accounts"""
-    src_account_id = '4'
     dst_account_id = '5'
-    auto_repeater.sync_accounts(src_account_id, dst_account_id)
+    auto_repeater.sync_accounts(dst_account_id)
     client.instruments.get_instrument_by.assert_called_once_with(
         id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1')
     client.orders.post_order.assert_called_once_with(
@@ -1008,11 +957,11 @@ def test_sync_accounts_submission_conditions(
     target_positions = {'1': Decimal('100')}
     assert auto_repeater.calc_sell_positions(dst_positions, target_positions) == []
     assert auto_repeater.calc_buy_positions(
-        src_positions, dst_positions, target_positions) == (
+        dst_positions, target_positions) == (
             [OrderParams('1', 1, OrderDirection.ORDER_DIRECTION_BUY,
                          OrderType.ORDER_TYPE_BESTPRICE)] if held_quantity == 99 else [])
 
-    auto_repeater.sync_accounts('4', '5')
+    auto_repeater.sync_accounts('5')
 
     assert client.operations.get_portfolio.call_args_list == [
         call(account_id='4'), call(account_id='5')]
@@ -1066,6 +1015,121 @@ def fractional_portfolios_fixture(client):
     }
     client.instruments.get_instrument_by.side_effect = lambda **kwargs: instruments[kwargs['id']]
     return src_positions, dst_positions
+
+
+@pytest.fixture(name='target_strategy')
+def target_strategy_fixture():
+    """Only the three contract methods exist; the snapshot cannot be unpacked."""
+    strategy = Mock(spec_set=['load_snapshot', 'build_target', 'events'])
+    strategy.load_snapshot.return_value = object()
+    return strategy
+
+
+@pytest.mark.parametrize('debug', [False, True])
+def test_sync_strategy_snapshot_order(client, target_strategy, debug):
+    """Each sync loads a fresh opaque snapshot before destination and target calculation."""
+    snapshots = [object(), object()]
+    target_strategy.load_snapshot.side_effect = snapshots
+    target_strategy.build_target.side_effect = [
+        TargetPortfolio({'1': Decimal('2')}, {'1': Decimal('1.2')}),
+        TargetPortfolio({'1': Decimal('1')}, {'1': Decimal('1.2')}),
+    ]
+    timeline = Mock()
+    timeline.attach_mock(target_strategy, 'strategy')
+    timeline.attach_mock(client, 'client')
+    repeater = AutoRepeater(client, target_strategy)
+    repeater.set_debug(debug)
+
+    with patch('autorepeater.repeater.get_max_sum_positions_price', autospec=True,
+               side_effect=get_max_sum_positions_price) as volume:
+        repeater.sync_accounts('5')
+        repeater.sync_accounts('5')
+        assert volume.call_count == (0 if debug else 2)
+
+    expected = []
+    for snapshot, quantity in zip(snapshots, [2, 1]):
+        expected.extend([
+            call.strategy.load_snapshot(client),
+            call.client.operations.get_portfolio(account_id='5'),
+            call.strategy.build_target(snapshot, Decimal('2.376')),
+            call.client.instruments.get_instrument_by(
+                id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1'),
+        ])
+        if not debug:
+            expected.append(call.client.orders.post_order(
+                instrument_id='1', quantity=quantity, direction=OrderDirection.ORDER_DIRECTION_BUY,
+                account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE))
+    assert timeline.mock_calls == expected
+    target_strategy.events.assert_not_called()
+    client.operations_stream.positions_stream.assert_not_called()
+
+
+@pytest.mark.parametrize('debug', [False, True])
+@pytest.mark.parametrize('scenario', ['purchase', 'closed', 'zero', 'already_held'])
+@pytest.mark.parametrize('prices', [
+    {}, {'2': None}, {'2': 1}, {'2': '1'}, {'2': Decimal('NaN')},
+    {'2': Decimal('sNaN')}, {'2': Decimal('Infinity')}, {'2': Decimal('-Infinity')},
+], ids=['missing', 'none', 'integer', 'string', 'nan', 'snan', 'infinity', 'negative_infinity'])
+def test_sync_invalid_target_blocks_all_orders(
+        client, target_strategy, rotation_portfolios, debug, scenario, prices):
+    """Every invalid target price blocks even sales, regardless of trading or debug state."""
+    src_positions, dst_positions = rotation_portfolios
+    positions = list(dst_positions.values())
+    if scenario == 'already_held':
+        positions.extend(src_positions.values())
+    client.operations.get_portfolio.side_effect = [PortfolioResponse(positions=positions)]
+    if scenario == 'closed':
+        client.instruments.get_instrument_by.side_effect = None
+        client.instruments.get_instrument_by.return_value = InstrumentResponse(
+            instrument=Instrument(trading_status=SecurityTradingStatus.
+                                  SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING))
+    target_strategy.build_target.return_value = TargetPortfolio(
+        {'1': Decimal('0'), '2': Decimal('0' if scenario == 'zero' else '50')},
+        {'1': Decimal('1'), **prices})
+    repeater = AutoRepeater(client, target_strategy)
+    repeater.set_debug(debug)
+
+    with patch.object(repeater, 'calc_sell_positions', autospec=True) as calc_sell, \
+            patch.object(repeater, 'calc_buy_positions', autospec=True) as calc_buy:
+        with pytest.raises(ValueError, match='invalid target price for UID: 2'):
+            repeater.sync_accounts('5')
+        calc_sell.assert_not_called()
+        calc_buy.assert_not_called()
+
+    target_strategy.load_snapshot.assert_called_once_with(client)
+    target_strategy.build_target.assert_called_once_with(
+        target_strategy.load_snapshot.return_value,
+        Decimal('198' if scenario == 'already_held' else '99'))
+    client.operations.get_portfolio.assert_called_once_with(account_id='5')
+    client.instruments.get_instrument_by.assert_not_called()
+    client.orders.post_order.assert_not_called()
+
+
+@pytest.mark.parametrize('target', [
+    TargetPortfolio({}, {}),
+    TargetPortfolio({'2': Decimal('0')}, {'2': Decimal('0'), '1': Decimal('999')}),
+], ids=['empty', 'zero_with_unused_price'])
+@pytest.mark.parametrize('threshold, submit', [(Decimal('0.999'), True), (Decimal('1'), False)])
+def test_sync_liquidation_uses_destination_price(
+        client, target_strategy, rotation_portfolios, target, threshold, submit):
+    """A UID outside the target is sold using destination prices and the strict threshold."""
+    _, dst_positions = rotation_portfolios
+    client.operations.get_portfolio.side_effect = [
+        PortfolioResponse(positions=list(dst_positions.values()))]
+    target_strategy.build_target.return_value = target
+    repeater = AutoRepeater(client, target_strategy)
+    repeater.set_reserve(Decimal('0'))
+    repeater.set_threshold(threshold)
+
+    repeater.sync_accounts('5')
+
+    assert client.instruments.get_instrument_by.call_args_list == [
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
+        for uid in ['1', *target.quantities]]
+    assert client.orders.post_order.call_args_list == ([call(
+        instrument_id='1', quantity=100, direction=OrderDirection.ORDER_DIRECTION_SELL,
+        account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)] if submit else [])
+    target_strategy.events.assert_not_called()
 
 
 @pytest.mark.parametrize('quantities, prices', [
@@ -1333,13 +1397,23 @@ def test_account_strategy_event_errors(client, during_iteration):
     assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['4', '5'])]
 
 
-def test_calc_ratio_fractional_portfolios(auto_repeater, client, fractional_portfolios):
+def test_sync_target_fractional_portfolios(auto_repeater, client, fractional_portfolios):
     """Keep fractional holdings, exclude source cash and reserve destination value once."""
-    src_positions, dst_positions = fractional_portfolios
+    _, dst_positions = fractional_portfolios
     auto_repeater.set_reserve(Decimal('0.1'))
 
-    assert auto_repeater.calc_ratio('4', '5') == (
-        src_positions, dst_positions, Decimal('0.75'), Decimal('153'))
+    with patch.object(auto_repeater.strategy, 'build_target', autospec=True,
+                      side_effect=auto_repeater.strategy.build_target) as build_target, \
+            patch.object(auto_repeater, 'calc_sell_positions', autospec=True,
+                         return_value=[]) as calc_sell, \
+            patch.object(auto_repeater, 'calc_buy_positions', autospec=True,
+                         return_value=[]) as calc_buy:
+        auto_repeater.sync_accounts('5')
+        build_target.assert_called_once_with(
+            (fractional_portfolios[0], Decimal('204')), Decimal('153'))
+        target = {'1': Decimal('7.875'), '2': Decimal('15.1875')}
+        calc_sell.assert_called_once_with(dst_positions, target)
+        calc_buy.assert_called_once_with(dst_positions, target)
     assert client.mock_calls == [
         call.operations.get_portfolio(account_id='4'),
         call.instruments.find_instrument(query='1'),
@@ -1356,19 +1430,21 @@ def test_calc_orders_fractional_portfolios(auto_repeater, client, fractional_por
     target_positions = {'1': Decimal('7.875'), '2': Decimal('15.1875')}
 
     sell_orders = auto_repeater.calc_sell_positions(dst_positions, target_positions)
-    buy_orders = auto_repeater.calc_buy_positions(src_positions, dst_positions, target_positions)
+    buy_orders = auto_repeater.calc_buy_positions(dst_positions, target_positions)
 
     assert sell_orders == [OrderParams(
         '1', 1, OrderDirection.ORDER_DIRECTION_SELL, OrderType.ORDER_TYPE_BESTPRICE)]
     assert buy_orders == [OrderParams(
         '2', 3, OrderDirection.ORDER_DIRECTION_BUY, OrderType.ORDER_TYPE_BESTPRICE)]
     # Existing valuation multiplies price by lots, without multiplying by lot size.
+    sell_prices = {uid: currency_to_decimal_price(pos) for uid, pos in dst_positions.items()}
+    buy_prices = {uid: currency_to_decimal_price(pos) for uid, pos in src_positions.items()}
     assert get_max_sum_positions_price(
-        sell_orders, [], src_positions, dst_positions) == Decimal('3')
+        sell_orders, [], sell_prices, buy_prices) == Decimal('3')
     assert get_max_sum_positions_price(
-        [], buy_orders, src_positions, dst_positions) == Decimal('24')
+        [], buy_orders, sell_prices, buy_prices) == Decimal('24')
     assert get_max_sum_positions_price(
-        sell_orders, buy_orders, src_positions, dst_positions) == Decimal('24')
+        sell_orders, buy_orders, sell_prices, buy_prices) == Decimal('24')
     assert client.mock_calls == [
         call.instruments.get_instrument_by(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1'),
         call.instruments.get_instrument_by(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='2'),
@@ -1381,7 +1457,7 @@ def test_calc_orders_fractional_portfolios(auto_repeater, client, fractional_por
 def test_sync_accounts_fractional_portfolios(
         auto_repeater, client, fractional_portfolios, threshold, submit):
     """Fully calculate both sides before submitting sales, then purchases, above threshold."""
-    src_positions, dst_positions = fractional_portfolios
+    _, dst_positions = fractional_portfolios
     auto_repeater.set_reserve(Decimal('0.1'))
     auto_repeater.set_threshold(threshold)
 
@@ -1389,10 +1465,10 @@ def test_sync_accounts_fractional_portfolios(
                       side_effect=auto_repeater.calc_sell_positions) as calc_sell, \
             patch.object(auto_repeater, 'calc_buy_positions', autospec=True,
                          side_effect=auto_repeater.calc_buy_positions) as calc_buy:
-        auto_repeater.sync_accounts('4', '5')
+        auto_repeater.sync_accounts('5')
         target_positions = {'1': Decimal('7.875'), '2': Decimal('15.1875')}
         calc_sell.assert_called_once_with(dst_positions, target_positions)
-        calc_buy.assert_called_once_with(src_positions, dst_positions, target_positions)
+        calc_buy.assert_called_once_with(dst_positions, target_positions)
 
     expected_calls = [
         call.operations.get_portfolio(account_id='4'),
@@ -1450,17 +1526,17 @@ def test_sync_accounts_non_trading_instrument(
     }
     client.instruments.get_instrument_by.side_effect = lambda **kwargs: instruments[kwargs['id']]
     auto_repeater.set_reserve(Decimal('0'))
-    src_positions, dst_positions = rotation_portfolios
+    _, dst_positions = rotation_portfolios
     target_positions = {'2': Decimal('50')}
 
     assert auto_repeater.calc_sell_positions(dst_positions, target_positions) == (
         [] if closed_instrument == '1' else [OrderParams(
             '1', 100, OrderDirection.ORDER_DIRECTION_SELL, OrderType.ORDER_TYPE_BESTPRICE)])
-    assert auto_repeater.calc_buy_positions(src_positions, dst_positions, target_positions) == (
+    assert auto_repeater.calc_buy_positions(dst_positions, target_positions) == (
         [] if closed_instrument == '2' else [OrderParams(
             '2', 50, OrderDirection.ORDER_DIRECTION_BUY, OrderType.ORDER_TYPE_BESTPRICE)])
 
-    auto_repeater.sync_accounts('4', '5')
+    auto_repeater.sync_accounts('5')
 
     if closed_instrument == '1':
         client.orders.post_order.assert_called_once_with(
@@ -1477,15 +1553,15 @@ def test_sync_accounts_non_trading_instrument(
 def test_sync_accounts_sale_error_stops_purchase(auto_repeater, client, rotation_portfolios):
     """The SDK sale error propagates before any purchase can be submitted."""
     auto_repeater.set_reserve(Decimal('0'))
-    src_positions, dst_positions = rotation_portfolios
+    _, dst_positions = rotation_portfolios
     assert auto_repeater.calc_buy_positions(
-        src_positions, dst_positions, {'2': Decimal('50')}) == [OrderParams(
+        dst_positions, {'2': Decimal('50')}) == [OrderParams(
             '2', 50, OrderDirection.ORDER_DIRECTION_BUY, OrderType.ORDER_TYPE_BESTPRICE)]
     error = RequestError(code=StatusCode.UNAVAILABLE, details='sale unavailable', metadata=())
     client.orders.post_order.side_effect = error
 
     with pytest.raises(RequestError) as raised:
-        auto_repeater.sync_accounts('4', '5')
+        auto_repeater.sync_accounts('5')
 
     assert raised.value is error
     client.orders.post_order.assert_called_once_with(
@@ -1504,7 +1580,7 @@ def test_sync_accounts_portfolio_error(auto_repeater, client, rotation_portfolio
         [PortfolioResponse(positions=list(src_positions.values())), error])
 
     with pytest.raises(RequestError) as raised:
-        auto_repeater.sync_accounts('4', '5')
+        auto_repeater.sync_accounts('5')
 
     assert raised.value is error
     assert client.operations.get_portfolio.call_args_list == (
@@ -1530,7 +1606,7 @@ def test_sync_accounts_purchase_calculation_error(auto_repeater, client, rotatio
     ]
 
     with pytest.raises(RequestError) as raised:
-        auto_repeater.sync_accounts('4', '5')
+        auto_repeater.sync_accounts('5')
 
     assert raised.value is error
     assert client.mock_calls == [
@@ -1566,7 +1642,7 @@ def test_sync_accounts_zero_source_value(auto_repeater, client, src_positions):
     ]
 
     with pytest.raises(DivisionByZero):
-        auto_repeater.sync_accounts('4', '5')
+        auto_repeater.sync_accounts('5')
 
     assert client.operations.get_portfolio.call_args_list == [
         call(account_id='4'), call(account_id='5')]
@@ -1576,10 +1652,9 @@ def test_sync_accounts_zero_source_value(auto_repeater, client, src_positions):
 
 def test_mainflow(auto_repeater, client):
     """test_mainflow"""
-    src_account_id = '4'
     dst_account_id = '5'
     with pytest.raises(TestException):
-        auto_repeater.mainflow(src_account_id, dst_account_id)
+        auto_repeater.mainflow(dst_account_id)
     assert client.operations_stream.positions_stream.call_args_list == [
         call(accounts=['4', '5']),
         call(accounts=['4', '5']),
@@ -1599,20 +1674,20 @@ def test_mainflow(auto_repeater, client):
     [
         (PositionData(
             account_id='4', securities=[PositionsSecurities(instrument_uid='1', blocked=0)],
-            money=[]), [call('4', '5'), call('4', '5')]),
+            money=[]), [call('5'), call('5')]),
         (PositionData(
             account_id='4', securities=[PositionsSecurities(instrument_uid='1', blocked=1)],
-            money=[]), [call('4', '5')]),
+            money=[]), [call('5')]),
         (PositionData(
             account_id='5', securities=[], money=[PositionsMoney(
                 available_value=MoneyValue(currency='RUB', units=100, nano=0),
                 blocked_value=MoneyValue(currency='RUB', units=0, nano=0))]),
-         [call('4', '5'), call('4', '5')]),
+         [call('5'), call('5')]),
         (PositionData(
             account_id='5', securities=[], money=[PositionsMoney(
                 available_value=MoneyValue(currency='RUB', units=100, nano=0),
                 blocked_value=MoneyValue(currency='RUB', units=0, nano=1))]),
-         [call('4', '5')]),
+         [call('5')]),
     ],
     ids=['source_unblocked', 'source_blocked', 'destination_unblocked', 'destination_blocked'],
 )
@@ -1627,7 +1702,7 @@ def test_mainflow_position_events(auto_repeater, client, position, expected_sync
     with patch.object(auto_repeater, 'sync_accounts', autospec=True) as sync_accounts:
         with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME), \
                 pytest.raises(TestException):
-            auto_repeater.mainflow('4', '5')
+            auto_repeater.mainflow('5')
         assert sync_accounts.call_args_list == expected_sync_calls
 
     assert client.operations_stream.positions_stream.call_args_list == [
@@ -1655,8 +1730,8 @@ def test_mainflow_stream_iteration_error(auto_repeater, client):
 
     with patch.object(auto_repeater, 'sync_accounts', autospec=True) as sync_accounts:
         with pytest.raises(TestException):
-            auto_repeater.mainflow('4', '5')
-        assert sync_accounts.call_args_list == [call('4', '5'), call('4', '5')]
+            auto_repeater.mainflow('5')
+        assert sync_accounts.call_args_list == [call('5'), call('5')]
 
     assert client.operations_stream.positions_stream.call_args_list == [
         call(accounts=['4', '5']), call(accounts=['4', '5']), call(accounts=['4', '5']),
@@ -1676,8 +1751,8 @@ def test_mainflow_initial_sync_error(auto_repeater, client):
     with patch.object(auto_repeater, 'sync_accounts', autospec=True,
                       side_effect=[error, None]) as sync_accounts:
         with pytest.raises(TestException):
-            auto_repeater.mainflow('4', '5')
-        assert sync_accounts.call_args_list == [call('4', '5'), call('4', '5')]
+            auto_repeater.mainflow('5')
+        assert sync_accounts.call_args_list == [call('5'), call('5')]
 
     assert client.operations_stream.positions_stream.call_args_list == [
         call(accounts=['4', '5']), call(accounts=['4', '5']),
@@ -1701,15 +1776,15 @@ def test_mainflow_event_sync_error(auto_repeater, client, caplog):
                       side_effect=[None, error, None]) as sync_accounts:
         timeline.attach_mock(sync_accounts, 'sync')
         with pytest.raises(TestException):
-            auto_repeater.mainflow('4', '5')
-        assert sync_accounts.call_args_list == [call('4', '5'), call('4', '5'), call('4', '5')]
+            auto_repeater.mainflow('5')
+        assert sync_accounts.call_args_list == [call('5'), call('5'), call('5')]
 
     assert timeline.mock_calls == [
-        call.sync('4', '5'),
+        call.sync('5'),
         call.stream(accounts=['4', '5']),
-        call.sync('4', '5'),
+        call.sync('5'),
         call.stream(accounts=['4', '5']),
-        call.sync('4', '5'),
+        call.sync('5'),
         call.stream(accounts=['4', '5']),
     ]
     assert next(failed_stream) is event
@@ -1817,7 +1892,7 @@ def test_sync_reporting(auto_repeater, client, caplog):
     client.orders.post_order.side_effect = post_order
     client.operations.get_portfolio.side_effect = load_portfolio
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
-        auto_repeater.sync_accounts('4', '5')
+        auto_repeater.sync_accounts('5')
 
     sale = OrderParams('1', 1, OrderDirection.ORDER_DIRECTION_SELL, OrderType.ORDER_TYPE_BESTPRICE)
     purchase = OrderParams(
@@ -1885,32 +1960,113 @@ def test_runner_reporting_integration(method, client, caplog):
 
 
 @pytest.mark.parametrize('method', ['run', 'run_sync'])
-@pytest.mark.parametrize('src, dst', [('4', '5'), (None, '5'), ('4', None)])
+@pytest.mark.parametrize('src, dst', [('4', '5'), ('4', None), ('4', '')])
 def test_runner_modes(method, src, dst, client):
     """Runner applies parameters and selects the requested mode inside the client context."""
     params = RunnerParams(debug=True, threshold=0.01, reserve=0.02)
     with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
             patch.object(runner_module, 'AutoRepeater', autospec=True) as repeater_class, \
+            patch.object(runner_module, 'create_strategy', autospec=True,
+                         side_effect=strategies.create_strategy) as select, \
             patch.object(runner_module, 'configure_local_logging', autospec=True) as configure:
         sdk_client.return_value.__enter__.return_value = client
         runner = runner_module.Runner('test-token', src, dst, params)
+        select.assert_called_once_with(src)
+        sdk_client.assert_not_called()
         getattr(runner, method)()
 
         configure.assert_called_once_with()
         sdk_client.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
         sdk_client.return_value.__enter__.assert_called_once_with()
         sdk_client.return_value.__exit__.assert_called_once_with(None, None, None)
-        repeater_class.assert_called_once_with(client)
+        repeater_class.assert_called_once_with(client, runner.strategy)
+        assert isinstance(runner.strategy, AccountStrategy)
+        assert runner.strategy.src == src
         expected = [call.set_debug(True), call.set_threshold(0.01), call.set_reserve(0.02)]
         if src and dst:
-            expected += [call.mainflow(src, dst) if method == 'run'
-                         else call.sync_accounts(src, dst)]
+            expected += [call.mainflow(dst) if method == 'run'
+                         else call.sync_accounts(dst)]
         assert repeater_class.return_value.method_calls == expected
         assert client.mock_calls == ([
             call.users.get_accounts(),
             call.operations.get_portfolio(account_id='1'),
             call.operations.get_portfolio(account_id='2'),
         ] if method == 'run' else [])
+
+
+@pytest.mark.parametrize('method', ['run', 'run_sync'])
+@pytest.mark.parametrize('src, message', [
+    (None, 'src is required'), ('', 'src is required'), (' \t', 'src is required'),
+    ('IMOEX', 'unsupported src: IMOEX'), ('unknown', 'unsupported src: unknown'),
+])
+def test_runner_invalid_source_before_client(method, src, message, client):
+    """Both launch modes reject invalid sources in the constructor before opening SDK."""
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(runner_module, 'configure_local_logging', autospec=True):
+        sdk_client.return_value.__enter__.return_value = client
+        with pytest.raises(strategies.UnsupportedSourceError, match=message):
+            runner = runner_module.Runner('test-token', src, '5')
+            getattr(runner, method)()
+        sdk_client.assert_not_called()
+    assert client.mock_calls == []
+
+
+@pytest.mark.parametrize('method', ['run', 'run_sync'])
+@pytest.mark.parametrize('params, error_type', [
+    (RunnerParams('invalid', None, None), TypeError),
+    (RunnerParams(False, -1, None), ValueError),
+    (RunnerParams(False, None, 2), ValueError),
+], ids=['debug', 'threshold', 'reserve'])
+def test_runner_parameter_error_closes_client(method, params, error_type, client):
+    """Invalid risk parameters close the client after run's existing portfolio display."""
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(runner_module, 'configure_local_logging', autospec=True):
+        sdk_client.return_value.__enter__.return_value = client
+        runner = runner_module.Runner('test-token', '4', '5', params)
+        with pytest.raises(error_type) as raised:
+            getattr(runner, method)()
+        sdk_client.return_value.__exit__.assert_called_once()
+        args = sdk_client.return_value.__exit__.call_args.args
+        assert args[:2] == (error_type, raised.value)
+        assert args[2] is not None
+    assert client.mock_calls == ([
+        call.users.get_accounts(), call.operations.get_portfolio(account_id='1'),
+        call.operations.get_portfolio(account_id='2'),
+    ] if method == 'run' else [])
+
+
+@pytest.mark.parametrize('method', ['run', 'run_sync'])
+@pytest.mark.parametrize('failure', ['snapshot', 'target', 'submission'])
+def test_runner_sync_error_closes_client(method, failure, client):
+    """Errors from source, target construction, or order submission leave the SDK context."""
+    client.users.get_accounts.return_value = GetAccountsResponse(accounts=[])
+    error = TestException()
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(runner_module, 'configure_local_logging', autospec=True):
+        sdk_client.return_value.__enter__.return_value = client
+        runner = runner_module.Runner('test-token', '4', '5')
+        if failure == 'snapshot':
+            client.operations.get_portfolio.side_effect = error
+        elif failure == 'submission':
+            client.orders.post_order.side_effect = error
+        with patch.object(runner.strategy, 'build_target', autospec=True,
+                          side_effect=error if failure == 'target'
+                          else runner.strategy.build_target):
+            with pytest.raises(TestException) as raised:
+                getattr(runner, method)()
+        assert raised.value is error
+        sdk_client.return_value.__exit__.assert_called_once()
+        args = sdk_client.return_value.__exit__.call_args.args
+        assert args[:2] == (TestException, error)
+        assert args[2] is not None
+    assert client.operations.get_portfolio.call_args_list == (
+        [call(account_id='4')] if failure == 'snapshot' else
+        [call(account_id='4'), call(account_id='5')])
+    assert client.orders.post_order.call_args_list == ([call(
+        instrument_id='1', quantity=2, direction=OrderDirection.ORDER_DIRECTION_BUY,
+        account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)
+    ] if failure == 'submission' else [])
+    client.operations_stream.positions_stream.assert_not_called()
 
 
 @pytest.fixture(name='invest_environment')

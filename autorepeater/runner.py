@@ -7,6 +7,7 @@ from t_tech.invest.constants import INVEST_GRPC_API
 from autorepeater.logging_config import configure_local_logging
 from autorepeater.repeater import AutoRepeater
 from autorepeater.reporting import print_all_portfolio
+from autorepeater.strategies import create_strategy
 
 
 @dataclasses.dataclass
@@ -29,27 +30,29 @@ class Runner:
                                      reserve=None)):
         self.token = token
         self.params = params
-        self.src = src
+        self.strategy = create_strategy(src)
         self.dst = dst
         configure_local_logging()
 
     def run(self):
         """run mainflow for server variant"""
         with Client(token=self.token, target=INVEST_GRPC_API) as client:
-            autorepeater = AutoRepeater(client)
             print_all_portfolio(client)
-            autorepeater.set_debug(self.params.debug)
-            autorepeater.set_threshold(self.params.threshold)
-            autorepeater.set_reserve(self.params.reserve)
-            if self.src and self.dst:
-                autorepeater.mainflow(self.src, self.dst)
+            autorepeater = self._create_repeater(client)
+            if self.dst:
+                autorepeater.mainflow(self.dst)
 
     def run_sync(self):
         """run one sync for serverless varian"""
         with Client(token=self.token, target=INVEST_GRPC_API) as client:
-            autorepeater = AutoRepeater(client)
-            autorepeater.set_debug(self.params.debug)
-            autorepeater.set_threshold(self.params.threshold)
-            autorepeater.set_reserve(self.params.reserve)
-            if self.src and self.dst:
-                autorepeater.sync_accounts(self.src, self.dst)
+            autorepeater = self._create_repeater(client)
+            if self.dst:
+                autorepeater.sync_accounts(self.dst)
+
+    def _create_repeater(self, client):
+        """Apply the same risk parameters in both launch modes."""
+        autorepeater = AutoRepeater(client, self.strategy)
+        autorepeater.set_debug(self.params.debug)
+        autorepeater.set_threshold(self.params.threshold)
+        autorepeater.set_reserve(self.params.reserve)
+        return autorepeater

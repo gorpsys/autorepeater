@@ -11,19 +11,21 @@ from autorepeater.constants import DST_MONEY_RESERVED
 from autorepeater.constants import THRESHOLD
 from autorepeater.logging_config import logger
 from autorepeater.money import currency_to_decimal
+from autorepeater.money import currency_to_decimal_price
 from autorepeater.money import get_quantity_position
 from autorepeater.orders import OrderParams
 from autorepeater.orders import get_max_sum_positions_price
 from autorepeater.portfolio import get_portfolio
+from autorepeater.portfolio import validate_target
 from autorepeater import reporting
-from autorepeater.triggers import check_triggers
 
 
 class AutoRepeater:
-    """Main class for automatically repeating operations of one account over another account."""
+    """Rebalance a destination using a strategy's targets and synchronization events."""
 
-    def __init__(self, client):
+    def __init__(self, client, strategy):
         self.client = client
+        self.strategy = strategy
         self.debug = False
         self.threshold = Decimal(THRESHOLD)
         self.reserve = Decimal(DST_MONEY_RESERVED)
@@ -49,34 +51,6 @@ class AutoRepeater:
                 raise ValueError("Reserve must be between 0 and 1")
             # Оставляем преобразование здесь, так как входной параметр float
             self.reserve = Decimal(str(reserve))
-
-    def calc_ratio(self, src_account_id, dst_account_id):
-        """calc ratio and print src and dst accounts"""
-        reporting.print_account_header('src')
-        portfolio_src = get_portfolio(self.client, src_account_id)
-        total_src = Decimal('0')
-        src_positions = {}
-        for position in portfolio_src.positions:
-            reporting.print_position(self.client, position)
-            if position.instrument_type != 'currency':
-                src_positions[position.instrument_uid] = position
-                total_src += currency_to_decimal(position)
-        reporting.print_total(total_src)
-
-        reporting.print_account_header('dst')
-        portfolio_dst = get_portfolio(self.client, dst_account_id)
-        total_dst = Decimal('0')
-        dst_positions = {}
-        for position in portfolio_dst.positions:
-            reporting.print_position(self.client, position)
-            if position.instrument_type != 'currency':
-                dst_positions[position.instrument_uid] = position
-            total_dst += currency_to_decimal(position)
-        total_dst = total_dst * (Decimal('1') - self.reserve)
-        reporting.print_total(total_dst)
-
-        ratio = total_dst / total_src
-        return (src_positions, dst_positions, ratio, total_dst)
 
     def calc_sell_positions(self, dst_positions, target_positions):
         """calc extra positions from dst accounts for sell"""
@@ -112,8 +86,7 @@ class AutoRepeater:
                             order_type=OrderType.ORDER_TYPE_BESTPRICE))
         return result
 
-    def calc_buy_positions(self, src_positions, dst_positions,
-                           target_positions):
+    def calc_buy_positions(self, dst_positions, target_positions):
         """calc missing positions from dst account for buy"""
         result = []
         for item_id, item_value in target_positions.items():
@@ -124,7 +97,6 @@ class AutoRepeater:
                     SECURITY_TRADING_STATUS_NORMAL_TRADING):
                 continue
             if item_id not in dst_positions:
-                position = src_positions[item_id]
                 quantity = round(item_value / Decimal(str(instrument.lot)))
                 if quantity > 0:
                     reporting.print_buy(instrument, quantity)
@@ -171,43 +143,51 @@ class AutoRepeater:
                     account_id=dst_account_id,
                     order_type=order_params.order_type).order_id)
 
-    def sync_accounts(self, src_account_id, dst_account_id):
-        """sync positions from src account to dst account"""
-        (src_positions, dst_positions, ratio, total_dst) = (
-            self.calc_ratio(src_account_id, dst_account_id))
-        target_positions = {}
-        for item_id, item_value in src_positions.items():
-            target_positions[item_id] = ratio * \
-                get_quantity_position(item_value)
+    def sync_accounts(self, dst_account_id):
+        """Build and validate a fresh target before calculating any orders."""
+        snapshot = self.strategy.load_snapshot(self.client)
+        reporting.print_account_header('dst')
+        portfolio_dst = get_portfolio(self.client, dst_account_id)
+        total_dst = Decimal('0')
+        dst_positions = {}
+        for position in portfolio_dst.positions:
+            reporting.print_position(self.client, position)
+            if position.instrument_type != 'currency':
+                dst_positions[position.instrument_uid] = position
+            total_dst += currency_to_decimal(position)
+        total_dst = total_dst * (Decimal('1') - self.reserve)
+        reporting.print_total(total_dst)
+
+        target = self.strategy.build_target(snapshot, total_dst)
+        validate_target(target)
 
         orders_params_sell = self.calc_sell_positions(
-            dst_positions, target_positions)
+            dst_positions, target.quantities)
         orders_params_buy = self.calc_buy_positions(
-            src_positions, dst_positions, target_positions)
+            dst_positions, target.quantities)
 
         if (not self.debug) and (
                 get_max_sum_positions_price(orders_params_sell, orders_params_buy,
-                                            src_positions, dst_positions) >
+                                            {uid: currency_to_decimal_price(position)
+                                             for uid, position in dst_positions.items()},
+                                            target.prices) >
                 total_dst * self.threshold):
             self.post_orders(
                 dst_account_id,
                 orders_params_sell,
                 orders_params_buy)
 
-    def mainflow(self, src, dst):
+    def mainflow(self, dst):
         """sync accounts when changing"""
         try:
-            self.sync_accounts(src, dst)
+            self.sync_accounts(dst)
         except RequestError as err:
             logger.error(err)
 
         while True:
             try:
-                for response in self.client.operations_stream.positions_stream(
-                        accounts=[src, dst]):
-                    if check_triggers(response.position, src, dst):
-                        self.sync_accounts(src, dst)
-                    else:
-                        reporting.print_skipped_event(response)
+                for triggered in self.strategy.events(self.client, dst):
+                    if triggered:
+                        self.sync_accounts(dst)
             except RequestError as err:
                 logger.error(err)
