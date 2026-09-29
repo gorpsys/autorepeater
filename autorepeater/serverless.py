@@ -3,8 +3,8 @@ import os
 
 from autorepeater.logging_config import configure_yc_logging
 from autorepeater.runner import Runner
+from autorepeater.strategies import validate_src
 
-DEFAULT_SRC_ACCOUNT = '2193248994'
 DEFAULT_DST_ACCOUNT = '2141399550'
 
 
@@ -33,7 +33,8 @@ def handler(event, context):
     configure_yc_logging()
 
     params = get_query_params(event)
-    src = get_param(params, 'src', 'SRC_ACCOUNT', DEFAULT_SRC_ACCOUNT)
+    src = params['src'] if 'src' in params else os.environ.get('SRC_ACCOUNT')
+    validate_src(src)
     dst = get_param(params, 'dst', 'DST_ACCOUNT', DEFAULT_DST_ACCOUNT)
     invest_token = get_param(params, 'token', 'INVEST_TOKEN')
     if invest_token is None:

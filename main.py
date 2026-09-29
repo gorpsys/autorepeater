@@ -5,13 +5,15 @@ import argparse
 
 from autorepeater.runner import RunnerParams
 from autorepeater.runner import Runner
+from autorepeater.strategies import validate_src
 
 def main():
     """main function"""
     parser = argparse.ArgumentParser(description="autorepeater")
 
     parser.add_argument("--debug", action='store_true', help="режим отладки")
-    parser.add_argument("-s", "--src", type=str, help="id счёта источника")
+    parser.add_argument("-s", "--src", type=str, help="обязательный источник: номер счёта "
+                        "или имя зарегистрированной стратегии")
     parser.add_argument("-d", "--dst", type=str, help="id счёта назначения")
     parser.add_argument("-t", "--threshold", type=float, help="порог стоимости, ниже "
                         "которого не выполняется синхронизация - доля стоимости счёта"
@@ -21,6 +23,7 @@ def main():
                         "По умолчания 0.005")
     args = parser.parse_args()
 
+    validate_src(args.src)
     invest_token = os.environ["INVEST_TOKEN"]
 
     runer = Runner(
