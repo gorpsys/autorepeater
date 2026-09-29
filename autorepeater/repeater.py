@@ -8,21 +8,15 @@ from t_tech.invest import RequestError
 from t_tech.invest import SecurityTradingStatus
 
 from autorepeater.constants import DST_MONEY_RESERVED
-from autorepeater.constants import IMPORTANT
 from autorepeater.constants import THRESHOLD
 from autorepeater.logging_config import logger
 from autorepeater.money import currency_to_decimal
-from autorepeater.money import currency_to_string
-from autorepeater.money import format_decimal
 from autorepeater.money import get_quantity_position
-from autorepeater.money import no_money_to_string
 from autorepeater.orders import OrderParams
 from autorepeater.orders import get_max_sum_positions_price
+from autorepeater.portfolio import get_portfolio
+from autorepeater import reporting
 from autorepeater.triggers import check_triggers
-
-
-class GetInstrumentException(Exception):
-    """instrument not found by instrument_id"""
 
 
 class AutoRepeater:
@@ -56,69 +50,30 @@ class AutoRepeater:
             # Оставляем преобразование здесь, так как входной параметр float
             self.reserve = Decimal(str(reserve))
 
-    def postiton_to_string(self, position):
-        """convert position to human-readable string"""
-        if position.instrument_type == 'currency':
-            return currency_to_string(position)
-        if position.instrument_type in ['share', 'etf']:
-            instrument = self.get_instrument(position.instrument_uid)
-            quantity = format_decimal(get_quantity_position(position))
-            return (no_money_to_string(instrument) + ' - ' +
-                    quantity + ' - ' + currency_to_string(position))
-        return str(position)
-
-    def get_instrument(self, instrument_id):
-        """get instrument by instrument id"""
-        result = self.client.instruments.find_instrument(
-            query=instrument_id).instruments
-        if len(result) == 1:
-            return result[0]
-        raise GetInstrumentException('error get instrument')
-
-    def print_portfolio_by_account(self, account):
-        """print detailed information about account"""
-        logger.log(IMPORTANT, '%s (%s)', account.name, account.id)
-        logger.log(IMPORTANT, '------------')
-        portfolio = self.client.operations.get_portfolio(account_id=account.id)
-        total = Decimal('0')
-        for position in portfolio.positions:
-            logger.log(IMPORTANT, self.postiton_to_string(position))
-            total += currency_to_decimal(position)
-        logger.log(IMPORTANT, 'total: %s', str(total))
-        logger.log(IMPORTANT, '============')
-
-    def print_all_portfolio(self):
-        """print detailed information about all accounts"""
-        response = self.client.users.get_accounts()
-        for account in response.accounts:
-            self.print_portfolio_by_account(account)
-
     def calc_ratio(self, src_account_id, dst_account_id):
         """calc ratio and print src and dst accounts"""
-        logger.log(IMPORTANT, "src account")
-        portfolio_src = self.client.operations.get_portfolio(
-            account_id=src_account_id)
+        reporting.print_account_header('src')
+        portfolio_src = get_portfolio(self.client, src_account_id)
         total_src = Decimal('0')
         src_positions = {}
         for position in portfolio_src.positions:
-            logger.log(IMPORTANT, self.postiton_to_string(position))
+            reporting.print_position(self.client, position)
             if position.instrument_type != 'currency':
                 src_positions[position.instrument_uid] = position
                 total_src += currency_to_decimal(position)
-        logger.log(IMPORTANT, 'total: %s', str(total_src))
+        reporting.print_total(total_src)
 
-        logger.log(IMPORTANT, "dst account")
-        portfolio_dst = self.client.operations.get_portfolio(
-            account_id=dst_account_id)
+        reporting.print_account_header('dst')
+        portfolio_dst = get_portfolio(self.client, dst_account_id)
         total_dst = Decimal('0')
         dst_positions = {}
         for position in portfolio_dst.positions:
-            logger.log(IMPORTANT, self.postiton_to_string(position))
+            reporting.print_position(self.client, position)
             if position.instrument_type != 'currency':
                 dst_positions[position.instrument_uid] = position
             total_dst += currency_to_decimal(position)
         total_dst = total_dst * (Decimal('1') - self.reserve)
-        logger.log(IMPORTANT, 'total: %s', str(total_dst))
+        reporting.print_total(total_dst)
 
         ratio = total_dst / total_src
         return (src_positions, dst_positions, ratio, total_dst)
@@ -137,10 +92,7 @@ class AutoRepeater:
                 quantity = round(get_quantity_position(
                     item_value) / Decimal(str(instrument.lot)))
                 if quantity > 0:
-                    logger.log(IMPORTANT,
-                               'Продать: %s %d лотов',
-                               no_money_to_string(instrument),
-                               quantity)
+                    reporting.print_sell(instrument, quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -151,10 +103,7 @@ class AutoRepeater:
                 quantity = round((get_quantity_position(
                     item_value) - target_positions[item_id]) / Decimal(str(instrument.lot)))
                 if quantity > 0:
-                    logger.log(IMPORTANT,
-                               'Продать: %s %d лотов',
-                               no_money_to_string(instrument),
-                               quantity)
+                    reporting.print_sell(instrument, quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -178,10 +127,7 @@ class AutoRepeater:
                 position = src_positions[item_id]
                 quantity = round(item_value / Decimal(str(instrument.lot)))
                 if quantity > 0:
-                    logger.log(IMPORTANT,
-                               'Купить: %s %d лотов',
-                               no_money_to_string(instrument),
-                               quantity)
+                    reporting.print_buy(instrument, quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -194,10 +140,7 @@ class AutoRepeater:
                                   get_quantity_position(position)) /
                                  Decimal(str(instrument.lot)))
                 if quantity > 0:
-                    logger.log(IMPORTANT,
-                               'Купить: %s %d лотов',
-                               no_money_to_string(instrument),
-                               quantity)
+                    reporting.print_buy(instrument, quantity)
                     result.append(
                         OrderParams(
                             instrument_id=item_id,
@@ -210,23 +153,23 @@ class AutoRepeater:
                     orders_params_buy):
         """post all orders"""
         for order_params in orders_params_sell:
-            logger.log(IMPORTANT, order_params)
-            logger.log(IMPORTANT,
-                       self.client.orders.post_order(
-                           instrument_id=order_params.instrument_id,
-                           quantity=order_params.quantity,
-                           direction=order_params.direction,
-                           account_id=dst_account_id,
-                           order_type=order_params.order_type).order_id)
+            reporting.print_order(order_params)
+            reporting.print_order_result(
+                self.client.orders.post_order(
+                    instrument_id=order_params.instrument_id,
+                    quantity=order_params.quantity,
+                    direction=order_params.direction,
+                    account_id=dst_account_id,
+                    order_type=order_params.order_type).order_id)
         for order_params in orders_params_buy:
-            logger.log(IMPORTANT, order_params)
-            logger.log(IMPORTANT,
-                       self.client.orders.post_order(
-                           instrument_id=order_params.instrument_id,
-                           quantity=order_params.quantity,
-                           direction=order_params.direction,
-                           account_id=dst_account_id,
-                           order_type=order_params.order_type).order_id)
+            reporting.print_order(order_params)
+            reporting.print_order_result(
+                self.client.orders.post_order(
+                    instrument_id=order_params.instrument_id,
+                    quantity=order_params.quantity,
+                    direction=order_params.direction,
+                    account_id=dst_account_id,
+                    order_type=order_params.order_type).order_id)
 
     def sync_accounts(self, src_account_id, dst_account_id):
         """sync positions from src account to dst account"""
@@ -265,6 +208,6 @@ class AutoRepeater:
                     if check_triggers(response.position, src, dst):
                         self.sync_accounts(src, dst)
                     else:
-                        logger.log(IMPORTANT, response)
+                        reporting.print_skipped_event(response)
             except RequestError as err:
                 logger.error(err)

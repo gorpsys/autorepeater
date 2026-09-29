@@ -6,6 +6,7 @@ from t_tech.invest.constants import INVEST_GRPC_API
 
 from autorepeater.logging_config import configure_local_logging
 from autorepeater.repeater import AutoRepeater
+from autorepeater.reporting import print_all_portfolio
 
 
 @dataclasses.dataclass
@@ -36,7 +37,7 @@ class Runner:
         """run mainflow for server variant"""
         with Client(token=self.token, target=INVEST_GRPC_API) as client:
             autorepeater = AutoRepeater(client)
-            autorepeater.print_all_portfolio()
+            print_all_portfolio(client)
             autorepeater.set_debug(self.params.debug)
             autorepeater.set_threshold(self.params.threshold)
             autorepeater.set_reserve(self.params.reserve)

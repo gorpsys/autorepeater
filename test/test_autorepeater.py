@@ -50,10 +50,12 @@ from autorepeater.money import money_to_string
 from autorepeater.money import no_money_to_string
 from autorepeater.orders import OrderParams
 from autorepeater.orders import get_max_sum_positions_price
+from autorepeater.portfolio import get_portfolio
 from autorepeater.repeater import AutoRepeater
-from autorepeater.repeater import GetInstrumentException
+from autorepeater.reporting import GetInstrumentException
 from autorepeater.triggers import check_triggers
 from autorepeater import logging_config
+from autorepeater import reporting
 from autorepeater import runner as runner_module
 from autorepeater import serverless
 from autorepeater.runner import RunnerParams
@@ -664,7 +666,7 @@ def test_set_reserve(auto_repeater):
     ]
 )
 def test_postiton_to_string(
-        auto_repeater,
+        client,
         instrument_type,
         price,
         quantity,
@@ -677,23 +679,33 @@ def test_postiton_to_string(
         quantity=quantity,
         instrument_uid=uid,
     )
-    result = auto_repeater.postiton_to_string(position)
+    result = reporting.postiton_to_string(client, position)
     assert result == expected
+    assert client.mock_calls == ([call.instruments.find_instrument(query=uid)]
+                                 if instrument_type in ['share', 'etf'] else [])
 
 
-def test_get_instrument(auto_repeater, client):
+def test_get_instrument(client):
     """test_get_instrument"""
     instrument_id = "1"
-    result = auto_repeater.get_instrument(instrument_id)
-    assert result is not None
+    instrument = InstrumentShort(name='share1', ticker='SHR')
+    client.instruments.find_instrument.side_effect = None
+    client.instruments.find_instrument.return_value = FindInstrumentResponse(
+        instruments=[instrument])
+    result = reporting.get_instrument(client, instrument_id)
+    assert result is instrument
     client.instruments.find_instrument.assert_called_once_with(query='1')
 
 
-def test_get_instrument_fail(auto_repeater, client):
+@pytest.mark.parametrize('instruments', [[], [InstrumentShort(), InstrumentShort()]])
+def test_get_instrument_fail(client, instruments):
     """test_get_instrument_fail"""
     instrument_id = "none_id"
-    with pytest.raises(GetInstrumentException):
-        auto_repeater.get_instrument(instrument_id)
+    client.instruments.find_instrument.side_effect = None
+    client.instruments.find_instrument.return_value = FindInstrumentResponse(
+        instruments=instruments)
+    with pytest.raises(GetInstrumentException, match='error get instrument'):
+        reporting.get_instrument(client, instrument_id)
     client.instruments.find_instrument.assert_called_once_with(query='none_id')
 
 
@@ -1335,21 +1347,25 @@ def test_mainflow(auto_repeater, client):
     ],
     ids=['source_unblocked', 'source_blocked', 'destination_unblocked', 'destination_blocked'],
 )
-def test_mainflow_position_events(auto_repeater, client, position, expected_sync_calls):
+def test_mainflow_position_events(auto_repeater, client, position, expected_sync_calls, caplog):
     """Only matching position events add a sync after the initial one."""
+    event = PositionsStreamResponse(position=position)
     client.operations_stream.positions_stream.side_effect = [
-        iter([PositionsStreamResponse(position=position)]),
+        iter([event]),
         TestException(),
     ]
 
     with patch.object(auto_repeater, 'sync_accounts', autospec=True) as sync_accounts:
-        with pytest.raises(TestException):
+        with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME), \
+                pytest.raises(TestException):
             auto_repeater.mainflow('4', '5')
         assert sync_accounts.call_args_list == expected_sync_calls
 
     assert client.operations_stream.positions_stream.call_args_list == [
         call(accounts=['4', '5']), call(accounts=['4', '5']),
     ]
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == (
+        [(logging_config.IMPORTANT, str(event))] if len(expected_sync_calls) == 1 else [])
 
 
 def test_mainflow_stream_iteration_error(auto_repeater, client):
@@ -1433,25 +1449,170 @@ def test_mainflow_event_sync_error(auto_repeater, client, caplog):
     client.orders.post_order.assert_not_called()
 
 
-def test_print_all_portfolios(auto_repeater, client, caplog):
+def test_print_all_portfolios(client, caplog):
     """Account output includes empty portfolios and calculated currency totals."""
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
-        auto_repeater.print_all_portfolio()
+        reporting.print_all_portfolio(client)
 
     client.users.get_accounts.assert_called_once_with()
     assert client.operations.get_portfolio.call_args_list == [
         call(account_id='1'), call(account_id='2')]
-    assert 'account name (1)' in caplog.text
-    assert 'account name (2)' in caplog.text
-    assert 'RUB - 2.4' in caplog.text
-    assert 'total: 2.400000000' in caplog.text
-    assert 'total: 0' in caplog.text
+    assert client.mock_calls == [call.users.get_accounts(),
+                                 call.operations.get_portfolio(account_id='1'),
+                                 call.operations.get_portfolio(account_id='2')]
+    assert caplog.messages == [
+        'account name (1)', '------------', 'RUB - 2.4', 'total: 2.400000000', '============',
+        'account name (2)', '------------', 'total: 0', '============']
+    assert all(record.levelno == logging_config.IMPORTANT for record in caplog.records)
+    client.orders.post_order.assert_not_called()
 
 
-def test_position_unknown_type(auto_repeater):
+def test_position_unknown_type(client):
     """Unknown instrument types retain the SDK's string representation."""
     position = PortfolioPosition(instrument_type='unknown')
-    assert auto_repeater.postiton_to_string(position) == str(position)
+    assert reporting.postiton_to_string(client, position) == str(position)
+    assert client.mock_calls == []
+
+
+@pytest.mark.parametrize('positions', [[], [PortfolioPosition(instrument_type='currency')]])
+def test_get_portfolio(client, caplog, positions):
+    """Shared reading preserves the SDK snapshot without logging or additional queries."""
+    response = PortfolioResponse(positions=positions)
+    client.operations.get_portfolio.side_effect = None
+    client.operations.get_portfolio.return_value = response
+    with caplog.at_level(logging.DEBUG, logger=logging_config.LOGGER_NAME):
+        assert get_portfolio(client, '4') is response
+    assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
+    assert caplog.records == []
+
+
+def test_get_portfolio_error(client, caplog):
+    """Portfolio loading passes the original SDK error to its caller."""
+    error = RequestError(code=StatusCode.UNAVAILABLE, details='portfolio unavailable', metadata=())
+    client.operations.get_portfolio.side_effect = error
+    with caplog.at_level(logging.DEBUG, logger=logging_config.LOGGER_NAME), \
+            pytest.raises(RequestError) as raised:
+        get_portfolio(client, '4')
+    assert raised.value is error
+    assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize('failure', ['accounts', 'portfolio', 'instrument', 'unknown'])
+def test_reporting_error(client, caplog, failure):
+    """Display failures propagate at the same point without submitting orders."""
+    error = (GetInstrumentException('error get instrument') if failure == 'unknown' else
+             RequestError(code=StatusCode.UNAVAILABLE, details='display unavailable', metadata=()))
+    client.users.get_accounts.return_value = GetAccountsResponse(
+        accounts=[Account(id='4', name='source')])
+    expected_calls = [call.users.get_accounts()]
+    if failure == 'accounts':
+        client.users.get_accounts.side_effect = error
+    else:
+        expected_calls.append(call.operations.get_portfolio(account_id='4'))
+        if failure == 'portfolio':
+            client.operations.get_portfolio.side_effect = error
+        else:
+            expected_calls.append(call.instruments.find_instrument(query='1'))
+            client.instruments.find_instrument.side_effect = (
+                None if failure == 'unknown' else error)
+            client.instruments.find_instrument.return_value = FindInstrumentResponse(instruments=[])
+    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME), \
+            pytest.raises(type(error)) as raised:
+        reporting.print_all_portfolio(client)
+    assert str(raised.value) == str(error)
+    if failure != 'unknown':
+        assert raised.value is error
+    assert client.mock_calls == expected_calls
+    assert caplog.messages == ([] if failure == 'accounts' else ['source (4)', '------------'])
+    client.orders.post_order.assert_not_called()
+
+
+@pytest.mark.usefixtures('fractional_portfolios')
+def test_sync_reporting(auto_repeater, client, caplog):
+    """Output preserves totals and sale/purchase order using only the two loaded snapshots."""
+    auto_repeater.set_reserve(Decimal('0.1'))
+    auto_repeater.set_threshold(Decimal('0'))
+    before_submission = []
+    before_loading = []
+    portfolios = client.operations.get_portfolio.side_effect
+
+    def load_portfolio(**_kwargs):
+        before_loading.append(list(caplog.messages))
+        return next(portfolios)
+
+    def post_order(**_kwargs):
+        before_submission.append(list(caplog.messages))
+        return PostOrderResponse(order_id=f'order-{len(before_submission)}')
+
+    client.orders.post_order.side_effect = post_order
+    client.operations.get_portfolio.side_effect = load_portfolio
+    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+        auto_repeater.sync_accounts('4', '5')
+
+    sale = OrderParams('1', 1, OrderDirection.ORDER_DIRECTION_SELL, OrderType.ORDER_TYPE_BESTPRICE)
+    purchase = OrderParams(
+        '2', 3, OrderDirection.ORDER_DIRECTION_BUY, OrderType.ORDER_TYPE_BESTPRICE)
+    expected = [
+        'src account', 'share1(SHR) - 10.5 - RUB - 42.0', 'etf2(ETF) - 20.25 - RUB - 162.0',
+        'RUB - 999.0', 'total: 204.000000000',
+        'dst account', 'share1(SHR) - 10.25 - RUB - 30.75', 'etf2(ETF) - 1.125 - RUB - 7.875',
+        'RUB - 131.375', 'total: 153.0000000000',
+        'Продать: instrument 1(TEST1) 1 лотов', 'Купить: instrument 2(TEST2) 3 лотов',
+        str(sale), 'order-1', str(purchase), 'order-2',
+    ]
+    assert caplog.messages == expected
+    assert before_submission == [expected[:13], expected[:15]]
+    assert before_loading == [expected[:1], expected[:6]]
+    assert all(record.levelno == logging_config.IMPORTANT for record in caplog.records)
+    assert client.operations.get_portfolio.call_args_list == [
+        call(account_id='4'), call(account_id='5')]
+    assert client.orders.post_order.call_args_list == [
+        call(instrument_id=order.instrument_id, quantity=order.quantity,
+             direction=order.direction, account_id='5', order_type=order.order_type)
+        for order in [sale, purchase]]
+
+
+def test_reporting_orders_are_read_only(client, caplog):
+    """Reporting orders needs only already calculated values and never sends them."""
+    instrument = Instrument(name='share1', ticker='SHR')
+    order = OrderParams('1', 2, OrderDirection.ORDER_DIRECTION_BUY, OrderType.ORDER_TYPE_BESTPRICE)
+    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+        reporting.print_sell(instrument, 1)
+        reporting.print_buy(instrument, 2)
+        reporting.print_order(order)
+        reporting.print_order_result('order-id')
+    assert caplog.messages == [
+        'Продать: share1(SHR) 1 лотов', 'Купить: share1(SHR) 2 лотов', str(order), 'order-id']
+    assert client.mock_calls == []
+
+
+@pytest.mark.parametrize('method', ['run', 'run_sync'])
+def test_runner_reporting_integration(method, client, caplog):
+    """The real engine works in both modes; only run displays all accounts."""
+    client.operations_stream.positions_stream.side_effect = [TestException()]
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(runner_module, 'configure_local_logging', autospec=True), \
+            caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+        sdk_client.return_value.__enter__.return_value = client
+        runner = runner_module.Runner('test-token', '4', '5', RunnerParams(True, None, None))
+        if method == 'run':
+            with pytest.raises(TestException):
+                runner.run()
+        else:
+            runner.run_sync()
+        sdk_client.return_value.__exit__.assert_called_once()
+
+    expected_accounts = ['1', '2', '4', '5'] if method == 'run' else ['4', '5']
+    assert client.operations.get_portfolio.call_args_list == [
+        call(account_id=account) for account in expected_accounts]
+    assert client.users.get_accounts.call_args_list == ([call()] if method == 'run' else [])
+    assert client.operations_stream.positions_stream.call_args_list == (
+        [call(accounts=['4', '5'])] if method == 'run' else [])
+    assert caplog.messages[-7:] == [
+        'src account', 'share1(SHR) - 2.0 - RUB - 2.4', 'total: 2.400000000',
+        'dst account', 'RUB - 2.4', 'total: 2.37600000000', 'Купить: share1(SHR) 2 лотов']
+    client.orders.post_order.assert_not_called()
 
 
 @pytest.mark.parametrize('method', ['run', 'run_sync'])
@@ -1471,12 +1632,16 @@ def test_runner_modes(method, src, dst, client):
         sdk_client.return_value.__enter__.assert_called_once_with()
         sdk_client.return_value.__exit__.assert_called_once_with(None, None, None)
         repeater_class.assert_called_once_with(client)
-        expected = [call.print_all_portfolio()] if method == 'run' else []
-        expected += [call.set_debug(True), call.set_threshold(0.01), call.set_reserve(0.02)]
+        expected = [call.set_debug(True), call.set_threshold(0.01), call.set_reserve(0.02)]
         if src and dst:
             expected += [call.mainflow(src, dst) if method == 'run'
                          else call.sync_accounts(src, dst)]
         assert repeater_class.return_value.method_calls == expected
+        assert client.mock_calls == ([
+            call.users.get_accounts(),
+            call.operations.get_portfolio(account_id='1'),
+            call.operations.get_portfolio(account_id='2'),
+        ] if method == 'run' else [])
 
 
 @pytest.fixture(name='invest_environment')
