@@ -1,0 +1,14 @@
+[run]
+source = .
+relative_files = True
+omit =
+    test/*
+    build/*
+    .venv*/*
+    venv/*
+    env/*
+
+[report]
+fail_under = 90
+precision = 2
+show_missing = True

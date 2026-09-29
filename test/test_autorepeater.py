@@ -1,14 +1,22 @@
-# pylint: disable=R0903, R0913, R0917
+# pylint: disable=R0913, R0917, too-many-lines
 """tests"""
+import inspect
+import json
+import logging
+import runpy
+import sys
 from decimal import Decimal
+from unittest.mock import Mock, call, create_autospec, patch
 
 import pytest
+from grpc import StatusCode
 
 from t_tech.invest import MoneyValue
 from t_tech.invest import Instrument
 from t_tech.invest import PortfolioPosition
 from t_tech.invest import Quotation
 from t_tech.invest import PositionData
+from t_tech.invest import PositionsStreamResponse
 from t_tech.invest import PositionsMoney
 from t_tech.invest import PositionsSecurities
 from t_tech.invest import OrderDirection
@@ -25,6 +33,11 @@ from t_tech.invest import InstrumentIdType
 from t_tech.invest import SecurityTradingStatus
 from t_tech.invest import PostOrderResponse
 from t_tech.invest import RequestError
+from t_tech.invest.services import InstrumentsService
+from t_tech.invest.services import OperationsService
+from t_tech.invest.services import UsersService
+from t_tech.invest.services import OrdersService
+from t_tech.invest.services import OperationsStreamService
 
 from autorepeater.constants import DST_MONEY_RESERVED
 from autorepeater.constants import THRESHOLD
@@ -40,6 +53,12 @@ from autorepeater.orders import get_max_sum_positions_price
 from autorepeater.repeater import AutoRepeater
 from autorepeater.repeater import GetInstrumentException
 from autorepeater.triggers import check_triggers
+from autorepeater import logging_config
+from autorepeater import runner as runner_module
+from autorepeater import serverless
+from autorepeater.runner import RunnerParams
+import handler as cloud_entrypoint
+import main as cli
 
 
 class TestException(Exception):
@@ -385,193 +404,131 @@ def test_get_max_sum_positions_price(sell_orders_params, buy_orders_params,
     assert result == expected
 
 
-class FakeClient:
-    """FakeClient mock для клиента тинькофф инвестиций"""
-    class FakeInstruments:
-        """FakeInstruments mock для работы с инструментами тинькофф инвестиций"""
-
-        def find_instrument(self, query):
-            """find_instrument mock для поиска инструмента"""
-            names = {
-                "1": "share1",
-                "2": "etf2"
-            }
-            tickers = {
-                "1": "SHR",
-                "2": "ETF"
-            }
-            try:
-                return FindInstrumentResponse(
-                    instruments=[InstrumentShort(
-                        name=names[query], ticker=tickers[query])]
-                )
-            except KeyError:
-                return FindInstrumentResponse(
-                    instruments=[]
-                )
-
-# pylint: disable=W0622,C0103
-        def get_instrument_by(self, id_type, id):
-            """get_instrument_by mock для получения инструмента по его id"""
-            assert id_type == InstrumentIdType.INSTRUMENT_ID_TYPE_UID
-            names = {
-                "1": "share1",
-                "2": "etf2"
-            }
-            tickers = {
-                "1": "SHR",
-                "2": "ETF"
-            }
-            try:
-                return InstrumentResponse(
-                    instrument=Instrument(
-                        name=names[id],
-                        ticker=tickers[id],
-                        trading_status=SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING,
-                        lot=1))
-            except KeyError:
-                assert False
-# pylint: enable=W0622,C0103
-
-    class FakeOperations:
-        """FakeOperations mock для работы с операциями тинькофф инвестиций"""
-
-        def get_portfolio(self, account_id):
-            """get_portfolio mock для получения данных о составе инструментов на брокерском счёте"""
-            if account_id == '1':
-                return PortfolioResponse(
-                    positions=[
-                        PortfolioPosition(
-                            instrument_type='currency',
-                            current_price=MoneyValue(
-                                currency='RUB',
-                                units=1,
-                                nano=200000000),
-                            quantity=Quotation(
-                                units=2,
-                                nano=0))])
-            if account_id == '4':
-                return PortfolioResponse(
-                    positions=[
-                        PortfolioPosition(
-                            instrument_type='share',
-                            instrument_uid='1',
-                            current_price=MoneyValue(
-                                currency='RUB',
-                                units=1,
-                                nano=200000000),
-                            quantity=Quotation(
-                                units=2,
-                                nano=0))])
-            if account_id == '5':
-                return PortfolioResponse(
-                    positions=[
-                        PortfolioPosition(
-                            instrument_type='currency',
-                            current_price=MoneyValue(
-                                currency='RUB',
-                                units=1,
-                                nano=200000000),
-                            quantity=Quotation(
-                                units=2,
-                                nano=0))])
-            return PortfolioResponse(positions=[])
-
-    class FakeUsers:
-        """FakeUsers mock для работы с аккаунтами тинькофф инвестиций"""
-
-        def get_accounts(self):
-            """get_accounts mock для получения списка брокерских счетов"""
-            return GetAccountsResponse(
-                accounts=[
-                    Account(
-                        id='1',
-                        type=AccountType.ACCOUNT_TYPE_TINKOFF,
-                        name='account name',
-                        status=AccountStatus.ACCOUNT_STATUS_OPEN),
-                    Account(
-                        id='2',
-                        type=AccountType.ACCOUNT_TYPE_TINKOFF,
-                        name='account name',
-                        status=AccountStatus.ACCOUNT_STATUS_OPEN)])
-
-    class FakeOrders:
-        """FakeOrders mock для работы с заявками тинькофф инвестиций"""
-
-        def post_order(
-            self,
-            quantity,
-            direction,
-            account_id,
-            order_type,
-            instrument_id,
-        ):
-            """post_order mock для отправки заявки"""
-            assert order_type == OrderType.ORDER_TYPE_BESTPRICE
-            if account_id == '1':
-                if direction == OrderDirection.ORDER_DIRECTION_BUY:
-                    assert instrument_id == '2'
-                    assert quantity == 50
-                elif direction == OrderDirection.ORDER_DIRECTION_SELL:
-                    assert instrument_id == '1'
-                    assert quantity == 100
-                else:
-                    assert False
-            elif account_id == '5':
-                if direction == OrderDirection.ORDER_DIRECTION_BUY:
-                    assert instrument_id == '1'
-                    assert quantity == 2
-                elif direction == OrderDirection.ORDER_DIRECTION_SELL:
-                    assert instrument_id == '1'
-                    assert quantity == 100
-                else:
-                    assert False
-
-            return PostOrderResponse()
-
-    class FakeOperationsStream:
-        """FakeOperationsStream mock для работы с потоком операций тинькофф инвестиций"""
-        count_operations: int
-
-        def positions_stream(self, accounts):
-            """positions_stream mock для получения операций по списку счетов"""
-            self.count_operations = self.count_operations + 1
-            assert accounts == ['4', '5']
-            # 2 запуска и кидаем исключение, что бы не уйти в бесконечный цикл
-            if (self.count_operations) <= 2:
-                return []
-            if self.count_operations == 3:
-                raise RequestError(
-                    code='1', details='details', metadata='metadata')
-            raise TestException()
-
-        def __init__(self):
-            self.count_operations = 0
-
-    instruments: FakeInstruments
-    operations: FakeOperations
-    operations_stream: FakeOperationsStream
-    users: FakeUsers
-    orders: FakeOrders
-
-    def __init__(self):
-        self.instruments = FakeClient.FakeInstruments()
-        self.operations = FakeClient.FakeOperations()
-        self.operations_stream = FakeClient.FakeOperationsStream()
-        self.users = FakeClient.FakeUsers()
-        self.orders = FakeClient.FakeOrders()
-
-
 @pytest.fixture(name='client')
 def client_tinvest():
-    """client_tinvest - фикстура создаёт и возвращает mock клиента"""
-    return FakeClient()
+    """SDK services enforce signatures; response data stays explicit."""
+    services = {
+        'instruments': InstrumentsService,
+        'operations': OperationsService,
+        'users': UsersService,
+        'orders': OrdersService,
+        'operations_stream': OperationsStreamService,
+    }
+    client = Mock(spec_set=list(services))
+    for name, service in services.items():
+        setattr(client, name, create_autospec(
+            inspect.unwrap(service), instance=True, spec_set=True))
+
+    instrument_names = {'1': ('share1', 'SHR'), '2': ('etf2', 'ETF')}
+    search_results = {
+        uid: FindInstrumentResponse(
+            instruments=[InstrumentShort(name=name, ticker=ticker)])
+        for uid, (name, ticker) in instrument_names.items()
+    }
+    instruments = {
+        uid: InstrumentResponse(instrument=Instrument(
+            name=name,
+            ticker=ticker,
+            trading_status=SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING,
+            lot=1))
+        for uid, (name, ticker) in instrument_names.items()
+    }
+    client.instruments.find_instrument.side_effect = lambda **kwargs: search_results.get(
+        kwargs['query'], FindInstrumentResponse(instruments=[]))
+    client.instruments.get_instrument_by.side_effect = lambda **kwargs: instruments[kwargs['id']]
+
+    portfolios = {
+        '1': PortfolioResponse(positions=[
+            PortfolioPosition(
+                instrument_type='currency',
+                current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
+                quantity=Quotation(units=2, nano=0))]),
+        '4': PortfolioResponse(positions=[
+            PortfolioPosition(
+                instrument_type='share',
+                instrument_uid='1',
+                current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
+                quantity=Quotation(units=2, nano=0))]),
+        '5': PortfolioResponse(positions=[
+            PortfolioPosition(
+                instrument_type='currency',
+                current_price=MoneyValue(currency='RUB', units=1, nano=200000000),
+                quantity=Quotation(units=2, nano=0))]),
+    }
+    client.operations.get_portfolio.side_effect = lambda **kwargs: portfolios.get(
+        kwargs['account_id'], PortfolioResponse(positions=[]))
+    client.users.get_accounts.return_value = GetAccountsResponse(accounts=[
+        Account(
+            id='1',
+            type=AccountType.ACCOUNT_TYPE_TINKOFF,
+            name='account name',
+            status=AccountStatus.ACCOUNT_STATUS_OPEN),
+        Account(
+            id='2',
+            type=AccountType.ACCOUNT_TYPE_TINKOFF,
+            name='account name',
+            status=AccountStatus.ACCOUNT_STATUS_OPEN),
+    ])
+    client.orders.post_order.return_value = PostOrderResponse()
+    client.operations_stream.positions_stream.side_effect = [
+        iter(()),
+        iter(()),
+        RequestError(code='1', details='details', metadata='metadata'),
+        TestException(),
+    ]
+    return client
 
 
 @pytest.fixture(name='auto_repeater')
 def auto_repeater_fixture(client):
     """auto_repeater_fixture - фикстура создаёт и возвращает основной класс передав ему клиента"""
     return AutoRepeater(client)
+
+
+@pytest.mark.parametrize(
+    'service_name, method_name, kwargs',
+    [
+        ('instruments', 'find_instrument', {'query': '1'}),
+        ('instruments', 'get_instrument_by', {
+            'id_type': InstrumentIdType.INSTRUMENT_ID_TYPE_UID, 'id': '1'}),
+        ('operations', 'get_portfolio', {'account_id': '4'}),
+        ('users', 'get_accounts', {}),
+        ('orders', 'post_order', {
+            'instrument_id': '1', 'quantity': 2,
+            'direction': OrderDirection.ORDER_DIRECTION_BUY,
+            'account_id': '5', 'order_type': OrderType.ORDER_TYPE_BESTPRICE}),
+        ('operations_stream', 'positions_stream', {'accounts': ['4', '5']}),
+    ],
+)
+def test_client_service_contract(client, service_name, method_name, kwargs):
+    """The actual fixture accepts SDK calls and rejects misspelled API names."""
+    service = getattr(client, service_name)
+    method = getattr(service, method_name)
+    assert method(**kwargs) is not None
+    method.assert_called_once_with(**kwargs)
+
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        method(**kwargs, unknown_argument=True)
+    method.assert_called_once_with(**kwargs)
+    with pytest.raises(AttributeError):
+        getattr(service, 'unknown_method')
+    with pytest.raises(AttributeError):
+        service.unknown_method = Mock()
+
+
+def test_client_unknown_service(client):
+    """The client container only permits the five configured services."""
+    with pytest.raises(AttributeError):
+        getattr(client, 'unknown_service')
+    with pytest.raises(AttributeError):
+        client.unknown_service = Mock()
+
+
+def test_client_empty_portfolio(client):
+    """An account without configured positions retains the empty fallback."""
+    response = client.operations.get_portfolio(account_id='unknown')
+    assert isinstance(response, PortfolioResponse)
+    assert response.positions == []
 
 
 def test_init(auto_repeater):
@@ -724,18 +681,20 @@ def test_postiton_to_string(
     assert result == expected
 
 
-def test_get_instrument(auto_repeater):
+def test_get_instrument(auto_repeater, client):
     """test_get_instrument"""
     instrument_id = "1"
     result = auto_repeater.get_instrument(instrument_id)
     assert result is not None
+    client.instruments.find_instrument.assert_called_once_with(query='1')
 
 
-def test_get_instrument_fail(auto_repeater):
+def test_get_instrument_fail(auto_repeater, client):
     """test_get_instrument_fail"""
     instrument_id = "none_id"
     with pytest.raises(GetInstrumentException):
         auto_repeater.get_instrument(instrument_id)
+    client.instruments.find_instrument.assert_called_once_with(query='none_id')
 
 
 def test_calc_ratio(auto_repeater):
@@ -758,7 +717,7 @@ def test_calc_ratio(auto_repeater):
     assert result[3] == Decimal('2.376')
 
 
-def test_calc_sell_positions(auto_repeater):
+def test_calc_sell_positions(auto_repeater, client):
     """test_calc_sell_positions"""
     test_cases = [
         # Базовый случай
@@ -838,8 +797,15 @@ def test_calc_sell_positions(auto_repeater):
             case['dst_positions'], case['target_positions'])
         assert result == case['expected']
 
+    assert client.instruments.get_instrument_by.call_args_list == [
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1'),
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='2'),
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1'),
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1'),
+    ]
 
-def test_calc_buy_positions(auto_repeater):
+
+def test_calc_buy_positions(auto_repeater, client):
     """test_calc_buy_positions"""
     test_cases = [
         # Базовый случай
@@ -936,8 +902,15 @@ def test_calc_buy_positions(auto_repeater):
             case['target_positions'])
         assert result == case['expected']
 
+    assert client.instruments.get_instrument_by.call_args_list == [
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1'),
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='2'),
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1'),
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1'),
+    ]
 
-def test_post_orders(auto_repeater):
+
+def test_post_orders(auto_repeater, client):
     """test_post_orders"""
     dst_account_id = '1'
     orders_params_sell = [
@@ -959,20 +932,457 @@ def test_post_orders(auto_repeater):
     ]
     auto_repeater.post_orders(
         dst_account_id, orders_params_sell, orders_params_buy)
+    assert client.orders.post_order.call_args_list == [
+        call(instrument_id='1', quantity=100,
+             direction=OrderDirection.ORDER_DIRECTION_SELL,
+             account_id='1', order_type=OrderType.ORDER_TYPE_BESTPRICE),
+        call(instrument_id='2', quantity=50,
+             direction=OrderDirection.ORDER_DIRECTION_BUY,
+             account_id='1', order_type=OrderType.ORDER_TYPE_BESTPRICE),
+    ]
 
 
-def test_sync_accounts(auto_repeater):
+def test_sync_accounts(auto_repeater, client):
     """test_sync_accounts"""
     src_account_id = '4'
     dst_account_id = '5'
     auto_repeater.sync_accounts(src_account_id, dst_account_id)
+    client.instruments.get_instrument_by.assert_called_once_with(
+        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1')
+    client.orders.post_order.assert_called_once_with(
+        instrument_id='1', quantity=2,
+        direction=OrderDirection.ORDER_DIRECTION_BUY,
+        account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)
 
 
-def test_mainflow(auto_repeater):
+@pytest.mark.parametrize(
+    'debug, threshold, held_quantity, expected_quantity',
+    [
+        (True, Decimal('0'), 99, 0),
+        (False, Decimal('0.0101'), 99, 0),
+        (False, Decimal('0.01'), 99, 0),
+        (False, Decimal('0.0099'), 99, 1),
+        (False, Decimal('0'), 100, 0),
+    ],
+    ids=['debug', 'below_threshold', 'exact_threshold', 'above_threshold', 'no_changes'],
+)
+def test_sync_accounts_submission_conditions(
+        auto_repeater, client, debug, threshold, held_quantity, expected_quantity):
+    """A one-ruble deficit in a 100-ruble portfolio tests the exact 1% boundary."""
+    src_positions = {'1': PortfolioPosition(
+        instrument_type='share', instrument_uid='1',
+        current_price=MoneyValue(currency='RUB', units=1, nano=0),
+        quantity=Quotation(units=100, nano=0))}
+    dst_positions = {'1': PortfolioPosition(
+        instrument_type='share', instrument_uid='1',
+        current_price=MoneyValue(currency='RUB', units=1, nano=0),
+        quantity=Quotation(units=held_quantity, nano=0))}
+    client.operations.get_portfolio.side_effect = [
+        PortfolioResponse(positions=list(src_positions.values())),
+        PortfolioResponse(positions=[*dst_positions.values(), PortfolioPosition(
+            instrument_type='currency',
+            current_price=MoneyValue(currency='RUB', units=1, nano=0),
+            quantity=Quotation(units=100 - held_quantity, nano=0))]),
+    ]
+    auto_repeater.set_reserve(Decimal('0'))
+    auto_repeater.set_threshold(threshold)
+    auto_repeater.set_debug(debug)
+
+    # Suppression scenarios still have a real order to suppress, except no_changes.
+    target_positions = {'1': Decimal('100')}
+    assert auto_repeater.calc_sell_positions(dst_positions, target_positions) == []
+    assert auto_repeater.calc_buy_positions(
+        src_positions, dst_positions, target_positions) == (
+            [OrderParams('1', 1, OrderDirection.ORDER_DIRECTION_BUY,
+                         OrderType.ORDER_TYPE_BESTPRICE)] if held_quantity == 99 else [])
+
+    auto_repeater.sync_accounts('4', '5')
+
+    assert client.operations.get_portfolio.call_args_list == [
+        call(account_id='4'), call(account_id='5')]
+    if expected_quantity:
+        client.orders.post_order.assert_called_once_with(
+            instrument_id='1', quantity=expected_quantity,
+            direction=OrderDirection.ORDER_DIRECTION_BUY,
+            account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)
+    else:
+        client.orders.post_order.assert_not_called()
+
+
+@pytest.fixture(name='rotation_portfolios')
+def rotation_portfolios_fixture(client):
+    """Equal-value portfolios require selling 100 shares before buying 50 ETFs."""
+    src_positions = {'2': PortfolioPosition(
+        instrument_type='etf', instrument_uid='2',
+        current_price=MoneyValue(currency='RUB', units=2, nano=0),
+        quantity=Quotation(units=50, nano=0))}
+    dst_positions = {'1': PortfolioPosition(
+        instrument_type='share', instrument_uid='1',
+        current_price=MoneyValue(currency='RUB', units=1, nano=0),
+        quantity=Quotation(units=100, nano=0))}
+    client.operations.get_portfolio.side_effect = [
+        PortfolioResponse(positions=list(src_positions.values())),
+        PortfolioResponse(positions=list(dst_positions.values())),
+    ]
+    return src_positions, dst_positions
+
+
+@pytest.mark.parametrize('closed_instrument', ['1', '2'], ids=['sell_closed', 'buy_closed'])
+def test_sync_accounts_non_trading_instrument(
+        auto_repeater, client, rotation_portfolios, closed_instrument):
+    """Closed instruments are excluded from calculation and submission."""
+    instruments = {
+        uid: InstrumentResponse(instrument=Instrument(
+            uid=uid, name=f'instrument {uid}', ticker=f'TEST{uid}', lot=1,
+            trading_status=(SecurityTradingStatus.SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING
+                            if uid == closed_instrument else
+                            SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING)))
+        for uid in ('1', '2')
+    }
+    client.instruments.get_instrument_by.side_effect = lambda **kwargs: instruments[kwargs['id']]
+    auto_repeater.set_reserve(Decimal('0'))
+    src_positions, dst_positions = rotation_portfolios
+    target_positions = {'2': Decimal('50')}
+
+    assert auto_repeater.calc_sell_positions(dst_positions, target_positions) == (
+        [] if closed_instrument == '1' else [OrderParams(
+            '1', 100, OrderDirection.ORDER_DIRECTION_SELL, OrderType.ORDER_TYPE_BESTPRICE)])
+    assert auto_repeater.calc_buy_positions(src_positions, dst_positions, target_positions) == (
+        [] if closed_instrument == '2' else [OrderParams(
+            '2', 50, OrderDirection.ORDER_DIRECTION_BUY, OrderType.ORDER_TYPE_BESTPRICE)])
+
+    auto_repeater.sync_accounts('4', '5')
+
+    if closed_instrument == '1':
+        client.orders.post_order.assert_called_once_with(
+            instrument_id='2', quantity=50,
+            direction=OrderDirection.ORDER_DIRECTION_BUY,
+            account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)
+    else:
+        client.orders.post_order.assert_called_once_with(
+            instrument_id='1', quantity=100,
+            direction=OrderDirection.ORDER_DIRECTION_SELL,
+            account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)
+
+
+def test_sync_accounts_sale_error_stops_purchase(auto_repeater, client, rotation_portfolios):
+    """The SDK sale error propagates before any purchase can be submitted."""
+    auto_repeater.set_reserve(Decimal('0'))
+    src_positions, dst_positions = rotation_portfolios
+    assert auto_repeater.calc_buy_positions(
+        src_positions, dst_positions, {'2': Decimal('50')}) == [OrderParams(
+            '2', 50, OrderDirection.ORDER_DIRECTION_BUY, OrderType.ORDER_TYPE_BESTPRICE)]
+    error = RequestError(code=StatusCode.UNAVAILABLE, details='sale unavailable', metadata=())
+    client.orders.post_order.side_effect = error
+
+    with pytest.raises(RequestError) as raised:
+        auto_repeater.sync_accounts('4', '5')
+
+    assert raised.value is error
+    client.orders.post_order.assert_called_once_with(
+        instrument_id='1', quantity=100,
+        direction=OrderDirection.ORDER_DIRECTION_SELL,
+        account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)
+
+
+def test_mainflow(auto_repeater, client):
     """test_mainflow"""
     src_account_id = '4'
     dst_account_id = '5'
-    try:
+    with pytest.raises(TestException):
         auto_repeater.mainflow(src_account_id, dst_account_id)
-    except TestException:
-        pass
+    assert client.operations_stream.positions_stream.call_args_list == [
+        call(accounts=['4', '5']),
+        call(accounts=['4', '5']),
+        call(accounts=['4', '5']),
+        call(accounts=['4', '5']),
+    ]
+    client.instruments.get_instrument_by.assert_called_once_with(
+        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='1')
+    client.orders.post_order.assert_called_once_with(
+        instrument_id='1', quantity=2,
+        direction=OrderDirection.ORDER_DIRECTION_BUY,
+        account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)
+
+
+@pytest.mark.parametrize(
+    'position, expected_sync_calls',
+    [
+        (PositionData(
+            account_id='4', securities=[PositionsSecurities(instrument_uid='1', blocked=0)],
+            money=[]), [call('4', '5'), call('4', '5')]),
+        (PositionData(
+            account_id='4', securities=[PositionsSecurities(instrument_uid='1', blocked=1)],
+            money=[]), [call('4', '5')]),
+        (PositionData(
+            account_id='5', securities=[], money=[PositionsMoney(
+                available_value=MoneyValue(currency='RUB', units=100, nano=0),
+                blocked_value=MoneyValue(currency='RUB', units=0, nano=0))]),
+         [call('4', '5'), call('4', '5')]),
+        (PositionData(
+            account_id='5', securities=[], money=[PositionsMoney(
+                available_value=MoneyValue(currency='RUB', units=100, nano=0),
+                blocked_value=MoneyValue(currency='RUB', units=0, nano=1))]),
+         [call('4', '5')]),
+    ],
+    ids=['source_unblocked', 'source_blocked', 'destination_unblocked', 'destination_blocked'],
+)
+def test_mainflow_position_events(auto_repeater, client, position, expected_sync_calls):
+    """Only matching position events add a sync after the initial one."""
+    client.operations_stream.positions_stream.side_effect = [
+        iter([PositionsStreamResponse(position=position)]),
+        TestException(),
+    ]
+
+    with patch.object(auto_repeater, 'sync_accounts', autospec=True) as sync_accounts:
+        with pytest.raises(TestException):
+            auto_repeater.mainflow('4', '5')
+        assert sync_accounts.call_args_list == expected_sync_calls
+
+    assert client.operations_stream.positions_stream.call_args_list == [
+        call(accounts=['4', '5']), call(accounts=['4', '5']),
+    ]
+
+
+def test_mainflow_stream_iteration_error(auto_repeater, client):
+    """An error while reading a stream leads to a working new subscription."""
+    def interrupted_stream():
+        yield PositionsStreamResponse(position=PositionData(
+            account_id='4', securities=[PositionsSecurities(instrument_uid='1', blocked=1)],
+            money=[]))
+        raise RequestError(code=StatusCode.UNAVAILABLE, details='stream unavailable', metadata=())
+
+    client.operations_stream.positions_stream.side_effect = [
+        interrupted_stream(),
+        iter([PositionsStreamResponse(position=PositionData(
+            account_id='4', securities=[PositionsSecurities(instrument_uid='1', blocked=0)],
+            money=[]))]),
+        TestException(),
+    ]
+
+    with patch.object(auto_repeater, 'sync_accounts', autospec=True) as sync_accounts:
+        with pytest.raises(TestException):
+            auto_repeater.mainflow('4', '5')
+        assert sync_accounts.call_args_list == [call('4', '5'), call('4', '5')]
+
+    assert client.operations_stream.positions_stream.call_args_list == [
+        call(accounts=['4', '5']), call(accounts=['4', '5']), call(accounts=['4', '5']),
+    ]
+
+
+def test_mainflow_initial_sync_error(auto_repeater, client):
+    """A failed initial sync still allows subscribing and syncing on an event."""
+    client.operations_stream.positions_stream.side_effect = [
+        iter([PositionsStreamResponse(position=PositionData(
+            account_id='4', securities=[PositionsSecurities(instrument_uid='1', blocked=0)],
+            money=[]))]),
+        TestException(),
+    ]
+    error = RequestError(code=StatusCode.UNAVAILABLE, details='sync unavailable', metadata=())
+
+    with patch.object(auto_repeater, 'sync_accounts', autospec=True,
+                      side_effect=[error, None]) as sync_accounts:
+        with pytest.raises(TestException):
+            auto_repeater.mainflow('4', '5')
+        assert sync_accounts.call_args_list == [call('4', '5'), call('4', '5')]
+
+    assert client.operations_stream.positions_stream.call_args_list == [
+        call(accounts=['4', '5']), call(accounts=['4', '5']),
+    ]
+
+
+def test_print_all_portfolios(auto_repeater, client, caplog):
+    """Account output includes empty portfolios and calculated currency totals."""
+    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+        auto_repeater.print_all_portfolio()
+
+    client.users.get_accounts.assert_called_once_with()
+    assert client.operations.get_portfolio.call_args_list == [
+        call(account_id='1'), call(account_id='2')]
+    assert 'account name (1)' in caplog.text
+    assert 'account name (2)' in caplog.text
+    assert 'RUB - 2.4' in caplog.text
+    assert 'total: 2.400000000' in caplog.text
+    assert 'total: 0' in caplog.text
+
+
+def test_position_unknown_type(auto_repeater):
+    """Unknown instrument types retain the SDK's string representation."""
+    position = PortfolioPosition(instrument_type='unknown')
+    assert auto_repeater.postiton_to_string(position) == str(position)
+
+
+@pytest.mark.parametrize('method', ['run', 'run_sync'])
+@pytest.mark.parametrize('src, dst', [('4', '5'), (None, '5'), ('4', None)])
+def test_runner_modes(method, src, dst, client):
+    """Runner applies parameters and selects the requested mode inside the client context."""
+    params = RunnerParams(debug=True, threshold=0.01, reserve=0.02)
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(runner_module, 'AutoRepeater', autospec=True) as repeater_class, \
+            patch.object(runner_module, 'configure_local_logging', autospec=True) as configure:
+        sdk_client.return_value.__enter__.return_value = client
+        runner = runner_module.Runner('test-token', src, dst, params)
+        getattr(runner, method)()
+
+        configure.assert_called_once_with()
+        sdk_client.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
+        sdk_client.return_value.__enter__.assert_called_once_with()
+        sdk_client.return_value.__exit__.assert_called_once_with(None, None, None)
+        repeater_class.assert_called_once_with(client)
+        expected = [call.print_all_portfolio()] if method == 'run' else []
+        expected += [call.set_debug(True), call.set_threshold(0.01), call.set_reserve(0.02)]
+        if src and dst:
+            expected += [call.mainflow(src, dst) if method == 'run'
+                         else call.sync_accounts(src, dst)]
+        assert repeater_class.return_value.method_calls == expected
+
+
+@pytest.fixture(name='invest_environment')
+def invest_environment_fixture(monkeypatch):
+    """All entrypoint tests use controlled credentials and account parameters."""
+    for name in ('INVEST_TOKEN', 't_token', 'SRC_ACCOUNT', 'DST_ACCOUNT'):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+@pytest.mark.parametrize(
+    'event, environment, expected',
+    [
+        ({'queryStringParameters': {
+            'src': 'query-src', 'dst': 'query-dst', 'token': 'query-token'}},
+         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
+          't_token': 'legacy-token'}, ('query-src', 'query-dst', 'query-token')),
+        ({'queryStringParameters': None},
+         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
+          't_token': 'legacy-token'}, ('env-src', 'env-dst', 'env-token')),
+        ({'queryStringParameters': {'src': '', 'dst': '', 'token': ''}},
+         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token'},
+         ('env-src', 'env-dst', 'env-token')),
+        ({}, {'t_token': 'legacy-token'},
+         (serverless.DEFAULT_SRC_ACCOUNT, serverless.DEFAULT_DST_ACCOUNT, 'legacy-token')),
+        (None, {'INVEST_TOKEN': 'env-token'},
+         (serverless.DEFAULT_SRC_ACCOUNT, serverless.DEFAULT_DST_ACCOUNT, 'env-token')),
+    ],
+    ids=['query_priority', 'null_query', 'empty_query_values', 'legacy_token', 'no_event'],
+)
+def test_cloud_entrypoint(event, environment, expected, invest_environment):
+    """The deployed entrypoint resolves parameters and performs exactly one sync."""
+    for name, value in environment.items():
+        invest_environment.setenv(name, value)
+    src, dst, token = expected
+    with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
+            patch.object(serverless, 'configure_yc_logging', autospec=True) as configure:
+        result = cloud_entrypoint.handler(event, None)
+
+        configure.assert_called_once_with()
+        runner_class.assert_called_once_with(token=token, src=src, dst=dst)
+        assert runner_class.return_value.method_calls == [call.run_sync()]
+        assert result == {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'text/plain'},
+            'isBase64Encoded': False,
+            'body': f'Success sync, {src} {dst}!',
+        }
+
+
+def test_cloud_missing_token(invest_environment):
+    """Missing credentials fail before creating the runner."""
+    invest_environment.delenv('INVEST_TOKEN', raising=False)
+    with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
+            patch.object(serverless, 'configure_yc_logging', autospec=True):
+        with pytest.raises(KeyError, match='t_token'):
+            cloud_entrypoint.handler({}, None)
+        runner_class.assert_not_called()
+
+
+def test_cloud_sync_error(invest_environment):
+    """A failed sync must not produce a successful HTTP response."""
+    invest_environment.setenv('INVEST_TOKEN', 'test-token')
+    error = RequestError(code=StatusCode.UNAVAILABLE, details='sync unavailable', metadata=())
+    with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
+            patch.object(serverless, 'configure_yc_logging', autospec=True):
+        runner_class.return_value.run_sync.side_effect = error
+        with pytest.raises(RequestError) as raised:
+            cloud_entrypoint.handler({}, None)
+        assert raised.value is error
+        runner_class.return_value.run_sync.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    'arguments, src, dst, params',
+    [
+        ([], None, None, RunnerParams(debug=False, threshold=None, reserve=None)),
+        (['-s', '4', '-d', '5', '--debug', '-t', '0.01', '-r', '0.02'],
+         '4', '5', RunnerParams(debug=True, threshold=0.01, reserve=0.02)),
+    ],
+    ids=['defaults', 'all_options'],
+)
+def test_cli(arguments, src, dst, params, invest_environment):
+    """Command-line options and environment credentials reach the local runner."""
+    invest_environment.setenv('INVEST_TOKEN', 'cli-token')
+    invest_environment.setattr(sys, 'argv', ['main.py', *arguments])
+    with patch.object(cli, 'Runner', autospec=True) as runner_class:
+        cli.main()
+        runner_class.assert_called_once_with(token='cli-token', src=src, dst=dst, params=params)
+        assert runner_class.return_value.method_calls == [call.run()]
+
+
+def test_cli_script(invest_environment):
+    """Executing main.py invokes the local runner without connecting to the API."""
+    invest_environment.setenv('INVEST_TOKEN', 'cli-token')
+    invest_environment.setattr(sys, 'argv', ['main.py'])
+    with patch.object(runner_module, 'Runner', autospec=True) as runner_class:
+        runpy.run_path('main.py', run_name='__main__')
+        runner_class.assert_called_once_with(
+            token='cli-token', src=None, dst=None,
+            params=RunnerParams(debug=False, threshold=None, reserve=None))
+        runner_class.return_value.run.assert_called_once_with()
+
+
+@pytest.mark.parametrize('arguments', [[], ['--threshold', 'invalid']])
+def test_cli_invalid_input(arguments, invest_environment):
+    """Missing credentials and invalid CLI arguments cannot start a runner."""
+    invest_environment.setattr(sys, 'argv', ['main.py', *arguments])
+    with patch.object(cli, 'Runner', autospec=True) as runner_class:
+        if arguments:
+            with pytest.raises(SystemExit) as raised:
+                cli.main()
+            assert raised.value.code == 2
+        else:
+            with pytest.raises(KeyError, match='INVEST_TOKEN'):
+                cli.main()
+        runner_class.assert_not_called()
+
+
+def test_local_logging(monkeypatch):
+    """Local logging enables the custom user-output level."""
+    root_logger = logging.getLogger()
+    monkeypatch.setattr(root_logger, 'level', logging.WARNING)
+    with patch.object(logging, 'addLevelName', wraps=logging.addLevelName) as add_level:
+        logging_config.configure_local_logging()
+        add_level.assert_called_once_with(logging_config.IMPORTANT, 'IMPORTANT')
+    assert root_logger.level == logging_config.IMPORTANT
+
+
+@pytest.mark.parametrize(
+    'level, expected',
+    [(logging_config.IMPORTANT, 'INFO'), (logging.WARNING, 'WARN'), (logging.CRITICAL, 'FATAL')],
+)
+def test_cloud_logging(level, expected, monkeypatch):
+    """Repeated cloud calls reuse a single handler and emit Yandex JSON levels."""
+    logger = logging_config.logger
+    monkeypatch.setattr(logger, 'handlers', [])
+    monkeypatch.setattr(logger, 'level', logging.NOTSET)
+    monkeypatch.setattr(logger, 'propagate', True)
+    logging_config.configure_yc_logging()
+    first_handler = logger.handlers[0]
+    logging_config.configure_yc_logging()
+
+    assert logger.handlers == [first_handler]
+    assert logger.level == logging_config.IMPORTANT
+    assert logger.propagate is False
+    record = logging.LogRecord(logger.name, level, __file__, 0, 'sync %s', ('complete',), None)
+    result = json.loads(first_handler.format(record))
+    assert result['message'] == 'sync complete'
+    assert result['level'] == expected
+    assert result['logger'] == logging_config.LOGGER_NAME

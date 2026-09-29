@@ -15,6 +15,13 @@ pip install -r requirements.txt
 pytest test/test_autorepeater.py          # весь файл
 pytest test/test_autorepeater.py -k имя_теста   # один тест
 
+# Покрытие: исполняемые строки рабочего кода, включая main.py и handler.py
+pip install pytest-cov==7.1.0 diff-cover==10.6.0
+pytest --cov --cov-report=term-missing --cov-report=xml
+coverage report --fail-under=90
+git fetch origin master
+diff-cover coverage.xml --compare-branch=origin/master --fail-under=90
+
 # Линтеры (конфигов нет, используются дефолтные настройки CI)
 pylint $(git ls-files '*.py')
 flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
@@ -24,7 +31,15 @@ flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statist
 make claude-yandex-archive
 ```
 
-CI (GitHub Actions, Python 3.10) гоняет pylint по всем файлам и pytest — оба должны проходить. Падения pylint блокируют push.
+CI (GitHub Actions, Python 3.12) гоняет pylint по всем файлам, flake8 и pytest.
+Общее линейное покрытие должно быть не менее 90%, покрытие добавленных и
+изменённых исполняемых строк — тоже не менее 90%. Пороги проверяются отдельными
+шагами, `coverage.xml` сохраняется как артефакт. Область покрытия задана в
+`.coveragerc`: рабочий код, включая точки входа; тесты, сборочные копии и
+виртуальные окружения не учитываются. Для PR diff сравнивается с SHA базовой
+ветки, для push в `master` — с предыдущим SHA push. Diff без исполняемых строк
+проходит без расчёта процента. Триггеры сохранены: pytest/покрытие на PR в
+`master` и push в `master`, pylint на каждый push. Ошибки проверок делают CI красным.
 
 ## Запуск
 
@@ -66,7 +81,7 @@ Yandex Cloud Functions может использовать корневой `han
 - Все денежные расчёты — **только `Decimal`** (units + nano/1e9), точность контекста 28. `float` допустим только на границе (CLI-параметры), там `Decimal(str(x))`.
 - Константы `DST_MONEY_RESERVED`, `THRESHOLD`, `IMPORTANT` (кастомный уровень логирования = 25) объявлены вверху модуля и импортируются тестами — не переименовывать молча.
 - Логирование через `logging.log(IMPORTANT, ...)` — это пользовательский вывод робота, не отладка.
-- Тесты в `test/test_autorepeater.py` строят моки SDK-объектов (`MoneyValue`, `PortfolioPosition`, `Instrument` и т.д.) руками и используют `TestException` для прерывания бесконечного цикла `mainflow`.
+- Тесты в `test/test_autorepeater.py` создают настоящие SDK DTO (`MoneyValue`, `Quotation`, `PortfolioPosition`, `Instrument`, ответы и события) с явными детерминированными данными. Сервисы SDK подменяются через `unittest.mock.create_autospec`; ожидания задаются в тестах. Конечный сценарий стрима завершается через `TestException`, проверяемый с `pytest.raises`.
 
 ## Договорённости для разработки
 
@@ -80,11 +95,40 @@ Yandex Cloud Functions может использовать корневой `han
 8. При работе с инструментами учитывать торговый статус: заявки выставлять только для `SECURITY_TRADING_STATUS_NORMAL_TRADING`.
 9. Валюты на счёте-источнике не участвуют в расчёте портфеля. Валюты на счёте назначения учитываются в общей стоимости, после чего применяется `reserve`.
 10. Строковое форматирование денег сохранять совместимым с текущими тестами: без научной нотации, целые значения выводить с `.0`, nano-точность до 9 знаков.
-11. Тесты писать на `pytest`. SDK-объекты Tinkoff Invest создавать руками, как в существующих тестах, без внешних мок-фреймворков.
-12. Для бесконечных циклов в тестах использовать контролируемые fake-клиенты и исключение вроде `TestException`, чтобы тест завершался детерминированно.
-13. Новую бизнес-логику покрывать тестами на расчётные функции отдельно от отправки заявок. Для изменений в `mainflow`/стримах добавлять fake stream-сценарии.
-14. Не добавлять новые зависимости без явной необходимости и согласования. Сейчас проект минимальный: `t-tech-investments`, `python-json-logger`, `pytest` используется для тестов.
-15. Перед финалом изменений запускать минимум `pytest test/test_autorepeater.py`, а при изменении стиля/импортов — `pylint $(git ls-files '*.py')`.
-16. Стиль кода сохранять совместимым с текущими CI-настройками: обычный Python 3.10, без тяжёлой типизации, без dataclass-усложнений там, где хватает простой функции или небольшого DTO.
+11. Тесты писать на `pytest`. SDK DTO создавать явно, сервисы подменять через стандартный `unittest.mock.create_autospec(inspect.unwrap(Service), instance=True, spec_set=True)` в существующей function-scoped фикстуре `client`. В SDK 1.51.0 экспортированные сервисы обёрнуты декоратором: `inspect.unwrap` обязателен, иначе autospec ошибочно требует `self`. Autospec проверяет сигнатуры вызовов, `spec_set=True` запрещает неизвестные атрибуты и методы. Контейнер `Mock(spec_set=[...])` разрешает только пять используемых сервисов; конструкторы SDK не вызывать. Ответы задавать через `return_value` или `side_effect`, без новых зависимостей и ручных Fake-сервисов.
+12. Для `mainflow` задавать конечную последовательность итераторов и исключений через `positions_stream.side_effect`, заканчивать её `TestException()` и вызывать цикл внутри `pytest.raises(TestException)`. Для ошибки во время чтения использовать конечный генератор, который выдаёт явное событие SDK и выбрасывает `RequestError`. Каждый тест получает свежие моки; число и аргументы подписок и синхронизаций проверять явно.
+13. Новую бизнес-логику покрывать тестами на расчётные функции отдельно от отправки заявок. Ожидания проверять в тестах через `assert_called_once_with`, `assert_not_called` или точное равенство `call_args_list` списку `call(...)`: это проверяет параметры, порядок и отсутствие лишних вызовов. Одного `assert_has_calls` без проверки общего числа вызовов недостаточно. Для изменений в `mainflow`/стримах добавлять детерминированные сценарии событий и восстановления; локальный `patch.object(..., autospec=True)` для `sync_accounts` допустим при отдельном покрытии отправки заявок.
+14. Не добавлять новые зависимости без явной необходимости и согласования. Рабочие зависимости: `t-tech-investments`, `python-json-logger`. Для тестов и покрытия используются `pytest`, `pytest-cov`, `diff-cover`; инструменты проверок не включать в облачный `requirements.txt`.
+15. Перед финалом изменений запускать полный `pytest --cov --cov-report=term-missing --cov-report=xml` и `diff-cover coverage.xml --compare-branch=origin/master --fail-under=90`, а при изменении стиля/импортов — `pylint $(git ls-files '*.py')`. Оба порога покрытия — 90%; не снижать их и не исключать рабочий код ради прохождения CI.
+16. Стиль кода сохранять совместимым с текущими CI-настройками: обычный Python 3.12, без тяжёлой типизации, без dataclass-усложнений там, где хватает простой функции или небольшого DTO.
 17. Комментарии и docstring можно писать по-русски или по-английски, но они должны объяснять смысл бизнес-правила, а не пересказывать строку кода.
 18. Не исправлять опечатки в публичных/используемых именах вроде `postiton_to_string`, если это не отдельная согласованная задача с обновлением тестов.
+
+### Пример фикстуры SDK-сервисов
+
+Сокращённый пример существующей `client_tinvest`: `pytest`, SDK-классы и
+`PostOrderResponse` уже импортированы в тестовом файле. Ответы остальных
+методов задаются явными DTO в общей фикстуре или конкретном тесте.
+
+```python
+import inspect
+from unittest.mock import Mock, create_autospec
+
+
+@pytest.fixture(name='client')
+def client_tinvest():
+    services = {
+        'instruments': InstrumentsService,
+        'operations': OperationsService,
+        'users': UsersService,
+        'orders': OrdersService,
+        'operations_stream': OperationsStreamService,
+    }
+    client = Mock(spec_set=list(services))
+    for name, service in services.items():
+        setattr(client, name, create_autospec(
+            inspect.unwrap(service), instance=True, spec_set=True))
+    client.orders.post_order.return_value = PostOrderResponse()
+    client.operations_stream.positions_stream.side_effect = [iter(()), TestException()]
+    return client
+```
