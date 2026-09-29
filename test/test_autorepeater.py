@@ -1,6 +1,10 @@
 # pylint: disable=R0913, R0917, too-many-lines
 """tests"""
 import inspect
+import json
+import logging
+import runpy
+import sys
 from decimal import Decimal
 from unittest.mock import Mock, call, create_autospec, patch
 
@@ -49,6 +53,12 @@ from autorepeater.orders import get_max_sum_positions_price
 from autorepeater.repeater import AutoRepeater
 from autorepeater.repeater import GetInstrumentException
 from autorepeater.triggers import check_triggers
+from autorepeater import logging_config
+from autorepeater import runner as runner_module
+from autorepeater import serverless
+from autorepeater.runner import RunnerParams
+import handler as cloud_entrypoint
+import main as cli
 
 
 class TestException(Exception):
@@ -1179,3 +1189,200 @@ def test_mainflow_initial_sync_error(auto_repeater, client):
     assert client.operations_stream.positions_stream.call_args_list == [
         call(accounts=['4', '5']), call(accounts=['4', '5']),
     ]
+
+
+def test_print_all_portfolios(auto_repeater, client, caplog):
+    """Account output includes empty portfolios and calculated currency totals."""
+    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+        auto_repeater.print_all_portfolio()
+
+    client.users.get_accounts.assert_called_once_with()
+    assert client.operations.get_portfolio.call_args_list == [
+        call(account_id='1'), call(account_id='2')]
+    assert 'account name (1)' in caplog.text
+    assert 'account name (2)' in caplog.text
+    assert 'RUB - 2.4' in caplog.text
+    assert 'total: 2.400000000' in caplog.text
+    assert 'total: 0' in caplog.text
+
+
+def test_position_unknown_type(auto_repeater):
+    """Unknown instrument types retain the SDK's string representation."""
+    position = PortfolioPosition(instrument_type='unknown')
+    assert auto_repeater.postiton_to_string(position) == str(position)
+
+
+@pytest.mark.parametrize('method', ['run', 'run_sync'])
+@pytest.mark.parametrize('src, dst', [('4', '5'), (None, '5'), ('4', None)])
+def test_runner_modes(method, src, dst, client):
+    """Runner applies parameters and selects the requested mode inside the client context."""
+    params = RunnerParams(debug=True, threshold=0.01, reserve=0.02)
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(runner_module, 'AutoRepeater', autospec=True) as repeater_class, \
+            patch.object(runner_module, 'configure_local_logging', autospec=True) as configure:
+        sdk_client.return_value.__enter__.return_value = client
+        runner = runner_module.Runner('test-token', src, dst, params)
+        getattr(runner, method)()
+
+        configure.assert_called_once_with()
+        sdk_client.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
+        sdk_client.return_value.__enter__.assert_called_once_with()
+        sdk_client.return_value.__exit__.assert_called_once_with(None, None, None)
+        repeater_class.assert_called_once_with(client)
+        expected = [call.print_all_portfolio()] if method == 'run' else []
+        expected += [call.set_debug(True), call.set_threshold(0.01), call.set_reserve(0.02)]
+        if src and dst:
+            expected += [call.mainflow(src, dst) if method == 'run'
+                         else call.sync_accounts(src, dst)]
+        assert repeater_class.return_value.method_calls == expected
+
+
+@pytest.fixture(name='invest_environment')
+def invest_environment_fixture(monkeypatch):
+    """All entrypoint tests use controlled credentials and account parameters."""
+    for name in ('INVEST_TOKEN', 't_token', 'SRC_ACCOUNT', 'DST_ACCOUNT'):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+@pytest.mark.parametrize(
+    'event, environment, expected',
+    [
+        ({'queryStringParameters': {
+            'src': 'query-src', 'dst': 'query-dst', 'token': 'query-token'}},
+         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
+          't_token': 'legacy-token'}, ('query-src', 'query-dst', 'query-token')),
+        ({'queryStringParameters': None},
+         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
+          't_token': 'legacy-token'}, ('env-src', 'env-dst', 'env-token')),
+        ({'queryStringParameters': {'src': '', 'dst': '', 'token': ''}},
+         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token'},
+         ('env-src', 'env-dst', 'env-token')),
+        ({}, {'t_token': 'legacy-token'},
+         (serverless.DEFAULT_SRC_ACCOUNT, serverless.DEFAULT_DST_ACCOUNT, 'legacy-token')),
+        (None, {'INVEST_TOKEN': 'env-token'},
+         (serverless.DEFAULT_SRC_ACCOUNT, serverless.DEFAULT_DST_ACCOUNT, 'env-token')),
+    ],
+    ids=['query_priority', 'null_query', 'empty_query_values', 'legacy_token', 'no_event'],
+)
+def test_cloud_entrypoint(event, environment, expected, invest_environment):
+    """The deployed entrypoint resolves parameters and performs exactly one sync."""
+    for name, value in environment.items():
+        invest_environment.setenv(name, value)
+    src, dst, token = expected
+    with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
+            patch.object(serverless, 'configure_yc_logging', autospec=True) as configure:
+        result = cloud_entrypoint.handler(event, None)
+
+        configure.assert_called_once_with()
+        runner_class.assert_called_once_with(token=token, src=src, dst=dst)
+        assert runner_class.return_value.method_calls == [call.run_sync()]
+        assert result == {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'text/plain'},
+            'isBase64Encoded': False,
+            'body': f'Success sync, {src} {dst}!',
+        }
+
+
+def test_cloud_missing_token(invest_environment):
+    """Missing credentials fail before creating the runner."""
+    invest_environment.delenv('INVEST_TOKEN', raising=False)
+    with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
+            patch.object(serverless, 'configure_yc_logging', autospec=True):
+        with pytest.raises(KeyError, match='t_token'):
+            cloud_entrypoint.handler({}, None)
+        runner_class.assert_not_called()
+
+
+def test_cloud_sync_error(invest_environment):
+    """A failed sync must not produce a successful HTTP response."""
+    invest_environment.setenv('INVEST_TOKEN', 'test-token')
+    error = RequestError(code=StatusCode.UNAVAILABLE, details='sync unavailable', metadata=())
+    with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
+            patch.object(serverless, 'configure_yc_logging', autospec=True):
+        runner_class.return_value.run_sync.side_effect = error
+        with pytest.raises(RequestError) as raised:
+            cloud_entrypoint.handler({}, None)
+        assert raised.value is error
+        runner_class.return_value.run_sync.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    'arguments, src, dst, params',
+    [
+        ([], None, None, RunnerParams(debug=False, threshold=None, reserve=None)),
+        (['-s', '4', '-d', '5', '--debug', '-t', '0.01', '-r', '0.02'],
+         '4', '5', RunnerParams(debug=True, threshold=0.01, reserve=0.02)),
+    ],
+    ids=['defaults', 'all_options'],
+)
+def test_cli(arguments, src, dst, params, invest_environment):
+    """Command-line options and environment credentials reach the local runner."""
+    invest_environment.setenv('INVEST_TOKEN', 'cli-token')
+    invest_environment.setattr(sys, 'argv', ['main.py', *arguments])
+    with patch.object(cli, 'Runner', autospec=True) as runner_class:
+        cli.main()
+        runner_class.assert_called_once_with(token='cli-token', src=src, dst=dst, params=params)
+        assert runner_class.return_value.method_calls == [call.run()]
+
+
+def test_cli_script(invest_environment):
+    """Executing main.py invokes the local runner without connecting to the API."""
+    invest_environment.setenv('INVEST_TOKEN', 'cli-token')
+    invest_environment.setattr(sys, 'argv', ['main.py'])
+    with patch.object(runner_module, 'Runner', autospec=True) as runner_class:
+        runpy.run_path('main.py', run_name='__main__')
+        runner_class.assert_called_once_with(
+            token='cli-token', src=None, dst=None,
+            params=RunnerParams(debug=False, threshold=None, reserve=None))
+        runner_class.return_value.run.assert_called_once_with()
+
+
+@pytest.mark.parametrize('arguments', [[], ['--threshold', 'invalid']])
+def test_cli_invalid_input(arguments, invest_environment):
+    """Missing credentials and invalid CLI arguments cannot start a runner."""
+    invest_environment.setattr(sys, 'argv', ['main.py', *arguments])
+    with patch.object(cli, 'Runner', autospec=True) as runner_class:
+        if arguments:
+            with pytest.raises(SystemExit) as raised:
+                cli.main()
+            assert raised.value.code == 2
+        else:
+            with pytest.raises(KeyError, match='INVEST_TOKEN'):
+                cli.main()
+        runner_class.assert_not_called()
+
+
+def test_local_logging(monkeypatch):
+    """Local logging enables the custom user-output level."""
+    root_logger = logging.getLogger()
+    monkeypatch.setattr(root_logger, 'level', logging.WARNING)
+    with patch.object(logging, 'addLevelName', wraps=logging.addLevelName) as add_level:
+        logging_config.configure_local_logging()
+        add_level.assert_called_once_with(logging_config.IMPORTANT, 'IMPORTANT')
+    assert root_logger.level == logging_config.IMPORTANT
+
+
+@pytest.mark.parametrize(
+    'level, expected',
+    [(logging_config.IMPORTANT, 'INFO'), (logging.WARNING, 'WARN'), (logging.CRITICAL, 'FATAL')],
+)
+def test_cloud_logging(level, expected, monkeypatch):
+    """Repeated cloud calls reuse a single handler and emit Yandex JSON levels."""
+    logger = logging_config.logger
+    monkeypatch.setattr(logger, 'handlers', [])
+    monkeypatch.setattr(logger, 'level', logging.NOTSET)
+    monkeypatch.setattr(logger, 'propagate', True)
+    logging_config.configure_yc_logging()
+    first_handler = logger.handlers[0]
+    logging_config.configure_yc_logging()
+
+    assert logger.handlers == [first_handler]
+    assert logger.level == logging_config.IMPORTANT
+    assert logger.propagate is False
+    record = logging.LogRecord(logger.name, level, __file__, 0, 'sync %s', ('complete',), None)
+    result = json.loads(first_handler.format(record))
+    assert result['message'] == 'sync complete'
+    assert result['level'] == expected
+    assert result['logger'] == logging_config.LOGGER_NAME
