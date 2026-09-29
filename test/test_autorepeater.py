@@ -41,6 +41,7 @@ from t_tech.invest.services import OperationsStreamService
 
 from autorepeater.constants import DST_MONEY_RESERVED
 from autorepeater.constants import THRESHOLD
+from autorepeater.account_strategy import AccountStrategy
 from autorepeater.money import blocked_to_string
 from autorepeater.money import currency_to_decimal
 from autorepeater.money import currency_to_decimal_price
@@ -51,6 +52,8 @@ from autorepeater.money import no_money_to_string
 from autorepeater.orders import OrderParams
 from autorepeater.orders import get_max_sum_positions_price
 from autorepeater.portfolio import get_portfolio
+from autorepeater.portfolio import TargetPortfolio
+from autorepeater.portfolio import validate_target
 from autorepeater.repeater import AutoRepeater
 from autorepeater.reporting import GetInstrumentException
 from autorepeater.triggers import check_triggers
@@ -58,6 +61,7 @@ from autorepeater import logging_config
 from autorepeater import reporting
 from autorepeater import runner as runner_module
 from autorepeater import serverless
+from autorepeater import strategies
 from autorepeater.runner import RunnerParams
 import handler as cloud_entrypoint
 import main as cli
@@ -1062,6 +1066,271 @@ def fractional_portfolios_fixture(client):
     }
     client.instruments.get_instrument_by.side_effect = lambda **kwargs: instruments[kwargs['id']]
     return src_positions, dst_positions
+
+
+@pytest.mark.parametrize('quantities, prices', [
+    ({}, {}),
+    ({'1': Decimal('2'), '2': Decimal('0')}, {'1': Decimal('1.25'), '2': Decimal('0')}),
+    ({'1': Decimal('2')}, {'1': Decimal('-1.25'), 'unused': None}),
+    ({}, {'unused': Decimal('NaN')}),
+])
+def test_validate_target_accepts_complete_prices(quantities, prices):
+    """Zero and negative estimates are valid; unused prices impose no constraints."""
+    target = TargetPortfolio(quantities, prices)
+
+    assert validate_target(target) is None
+    assert target.quantities == quantities
+    assert target.prices == prices
+
+
+@pytest.mark.parametrize('quantity', [Decimal('0'), Decimal('2')])
+@pytest.mark.parametrize('prices', [
+    {}, {'missing': None}, {'missing': 0}, {'missing': 1.25},
+    {'missing': '1.25'}, {'missing': True}, {'missing': Decimal('NaN')},
+    {'missing': Decimal('sNaN')}, {'missing': Decimal('Infinity')},
+    {'missing': Decimal('-Infinity')},
+])
+def test_validate_target_rejects_invalid_price_for_every_uid(quantity, prices):
+    """Every UID needs a finite Decimal, including targets with zero quantities."""
+    target = TargetPortfolio(
+        {'valid': Decimal('1'), 'missing': quantity}, {'valid': Decimal('2'), **prices})
+
+    with pytest.raises(ValueError, match='UID: missing'):
+        validate_target(target)
+
+
+@pytest.mark.parametrize('src', ['4', '0004', '0', '123456789012345678901234567890'])
+def test_strategy_account_selection_without_sdk(src, client):
+    """Account identifiers retain leading zeros and have no new length restriction."""
+    with patch('t_tech.invest.Client', autospec=True) as sdk_client, \
+            patch.object(strategies, 'AccountStrategy', wraps=AccountStrategy) as account_factory:
+        assert strategies.validate_src(src) is None
+        account_factory.assert_not_called()
+        strategy = strategies.create_strategy(src)
+        direct = AccountStrategy(src)
+
+    assert isinstance(strategy, AccountStrategy)
+    assert strategy.src == direct.src == src
+    account_factory.assert_called_once_with(src)
+    sdk_client.assert_not_called()
+    assert client.mock_calls == []
+
+
+@pytest.mark.parametrize('src, message', [
+    (None, 'src is required'), ('', 'src is required'), (' \t\n', 'src is required'),
+    ('IMOEX', 'unsupported src: IMOEX'), ('unknown', 'unsupported src: unknown'),
+    (' 123 ', 'unsupported src:  123 '), ('123\n', 'unsupported src: 123\n'),
+    ('\u0661\u0662\u0663', 'unsupported src: \u0661\u0662\u0663'),
+    ('\uff11\uff12\uff13', 'unsupported src: \uff11\uff12\uff13'),
+    ('\u00b2', 'unsupported src: \u00b2'), ('+123', 'unsupported src: +123'),
+    ('-123', 'unsupported src: -123'), ('12.3', 'unsupported src: 12.3'),
+    (123, 'unsupported src: 123'), ([], 'unsupported src: []'),
+])
+def test_strategy_rejects_unsupported_source_without_construction(src, message):
+    """Neither validation nor selection normalizes input or falls back to SDK accounts."""
+    with patch.object(strategies, 'AccountStrategy', autospec=True) as account_factory, \
+            patch('t_tech.invest.Client', autospec=True) as sdk_client:
+        for select in [strategies.validate_src, strategies.create_strategy]:
+            with pytest.raises(strategies.UnsupportedSourceError) as exc_info:
+                select(src)
+            assert isinstance(exc_info.value, ValueError)
+            assert str(exc_info.value) == message
+
+    account_factory.assert_not_called()
+    sdk_client.assert_not_called()
+
+
+def test_strategy_named_registration_is_exact_and_validation_is_pure(monkeypatch):
+    """Only a registered factory constructs the named strategy, once and with unchanged src."""
+    assert not strategies.NAMED_STRATEGIES
+    strategy = Mock(spec_set=['load_snapshot', 'build_target', 'events'])
+    factory = Mock(return_value=strategy)
+    monkeypatch.setitem(strategies.NAMED_STRATEGIES, 'TEST', factory)
+
+    with patch.object(strategies, 'AccountStrategy', autospec=True) as account_factory, \
+            patch('t_tech.invest.Client', autospec=True) as sdk_client:
+        assert strategies.validate_src('TEST') is None
+        factory.assert_not_called()
+        assert strategies.create_strategy('TEST') is strategy
+        for src in ['test', ' TEST', 'TEST ']:
+            with pytest.raises(strategies.UnsupportedSourceError):
+                strategies.create_strategy(src)
+
+    factory.assert_called_once_with('TEST')
+    account_factory.assert_not_called()
+    sdk_client.assert_not_called()
+
+
+def test_strategy_numeric_source_precedes_registry(monkeypatch):
+    """A registry entry cannot replace the account interpretation of ASCII digits."""
+    factory = Mock()
+    monkeypatch.setitem(strategies.NAMED_STRATEGIES, '0004', factory)
+
+    assert strategies.create_strategy('0004').src == '0004'
+    factory.assert_not_called()
+
+
+def test_account_strategy_fractional_target(client, fractional_portfolios, caplog):
+    """Source cash is reported but excluded; quantities and prices share one snapshot."""
+    src_positions, _ = fractional_portfolios
+    strategy = AccountStrategy('4')
+    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+        snapshot = strategy.load_snapshot(client)
+
+    assert snapshot == (src_positions, Decimal('204'))
+    assert client.mock_calls == [
+        call.operations.get_portfolio(account_id='4'),
+        call.instruments.find_instrument(query='1'),
+        call.instruments.find_instrument(query='2'),
+    ]
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging_config.IMPORTANT, message) for message in [
+            'src account', 'share1(SHR) - 10.5 - RUB - 42.0',
+            'etf2(ETF) - 20.25 - RUB - 162.0', 'RUB - 999.0', 'total: 204.000000000']]
+
+    client.reset_mock()
+    with patch('t_tech.invest.Client', autospec=True) as sdk_client:
+        target = strategy.build_target(snapshot, Decimal('153'))
+    assert target == TargetPortfolio(
+        {'1': Decimal('7.875'), '2': Decimal('15.1875')},
+        {'1': Decimal('4'), '2': Decimal('8')})
+    validate_target(target)
+    assert client.mock_calls == []
+    sdk_client.assert_not_called()
+
+
+def test_account_strategy_target_preserves_division_before_multiplication(client):
+    """Decimal precision makes computing ratio first observably different from weights."""
+    snapshot = ({
+        '1': PortfolioPosition(current_price=MoneyValue('RUB', 1, 0), quantity=Quotation(3, 0)),
+        '2': PortfolioPosition(current_price=MoneyValue('RUB', 0, 1), quantity=Quotation(0, 0)),
+        '3': PortfolioPosition(current_price=MoneyValue('RUB', 0, 0), quantity=Quotation(0, 1)),
+    }, Decimal('3'))
+
+    target = AccountStrategy('4').build_target(snapshot, Decimal('1'))
+
+    assert target == TargetPortfolio({
+        '1': Decimal('0.9999999999999999999999999999'), '2': Decimal('0'),
+        '3': Decimal('3.333333333333333333333333333E-10'),
+    }, {'1': Decimal('1'), '2': Decimal('0.000000001'), '3': Decimal('0')})
+    assert client.mock_calls == []
+    validate_target(target)
+
+
+def test_account_strategy_loads_fresh_snapshot(client):
+    """A new synchronization sees new quantities and prices without mutating the old snapshot."""
+    client.operations.get_portfolio.side_effect = [
+        PortfolioResponse(positions=[PortfolioPosition(
+            instrument_uid='1', instrument_type='share',
+            quantity=Quotation(2, 0), current_price=MoneyValue('RUB', 4, 0))]),
+        PortfolioResponse(positions=[PortfolioPosition(
+            instrument_uid='2', instrument_type='etf',
+            quantity=Quotation(3, 0), current_price=MoneyValue('RUB', 5, 0))]),
+    ]
+    strategy = AccountStrategy('0004')
+    first = strategy.load_snapshot(client)
+    second = strategy.load_snapshot(client)
+
+    assert strategy.build_target(first, Decimal('8')) == TargetPortfolio(
+        {'1': Decimal('2')}, {'1': Decimal('4')})
+    assert strategy.build_target(second, Decimal('30')) == TargetPortfolio(
+        {'2': Decimal('6')}, {'2': Decimal('5')})
+    assert client.mock_calls == [
+        call.operations.get_portfolio(account_id='0004'),
+        call.instruments.find_instrument(query='1'),
+        call.operations.get_portfolio(account_id='0004'),
+        call.instruments.find_instrument(query='2')]
+
+
+def test_account_strategy_load_error(client, caplog):
+    """A failed source read propagates its error instead of becoming a liquidation target."""
+    error = RequestError(code=StatusCode.UNAVAILABLE, details='source unavailable', metadata=())
+    client.operations.get_portfolio.side_effect = error
+
+    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME), \
+            pytest.raises(RequestError) as exc_info:
+        AccountStrategy('4').load_snapshot(client)
+
+    assert exc_info.value is error
+    assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
+    assert [record.getMessage() for record in caplog.records] == ['src account']
+
+
+@pytest.mark.parametrize('positions', [
+    [],
+    [PortfolioPosition(instrument_type='currency', instrument_uid='cash',
+                       current_price=MoneyValue('RUB', 1, 0), quantity=Quotation(100, 0))],
+    [PortfolioPosition(instrument_type='share', instrument_uid='1',
+                       current_price=MoneyValue('RUB', 0, 0), quantity=Quotation(100, 0))],
+])
+def test_account_strategy_zero_source_value(client, positions):
+    """Zero source value retains its division error and never yields an empty target."""
+    client.operations.get_portfolio.side_effect = [PortfolioResponse(positions=positions)]
+    strategy = AccountStrategy('4')
+    snapshot = strategy.load_snapshot(client)
+    client.reset_mock()
+
+    with pytest.raises(DivisionByZero):
+        strategy.build_target(snapshot, Decimal('100'))
+
+    assert client.mock_calls == []
+
+
+@pytest.mark.parametrize('position, expected', [
+    (None, False),
+    (PositionData(account_id='4', money=[], securities=[
+        PositionsSecurities(instrument_uid='1', blocked=0)]), True),
+    (PositionData(account_id='4', money=[], securities=[
+        PositionsSecurities(instrument_uid='1', blocked=1)]), False),
+    (PositionData(account_id='5', securities=[], money=[PositionsMoney(
+        available_value=MoneyValue('RUB', 100, 0), blocked_value=MoneyValue('RUB', 0, 0))]), True),
+    (PositionData(account_id='5', securities=[], money=[PositionsMoney(
+        available_value=MoneyValue('RUB', 100, 0), blocked_value=MoneyValue('RUB', 0, 1))]), False),
+    (PositionData(account_id='other', money=[], securities=[
+        PositionsSecurities(instrument_uid='1', blocked=0)]), False),
+])
+def test_account_strategy_events(client, position, expected, caplog):
+    """One call consumes one subscription and reports only skipped SDK responses."""
+    event = PositionsStreamResponse(position=position)
+    client.operations_stream.positions_stream.side_effect = [iter([event])]
+
+    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+        assert list(AccountStrategy('4').events(client, '5')) == [expected]
+
+    assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['4', '5'])]
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == (
+        [] if expected else [(logging_config.IMPORTANT, str(event))])
+
+
+def test_account_strategy_empty_events(client):
+    """An exhausted stream returns control to the engine without resubscribing itself."""
+    client.operations_stream.positions_stream.side_effect = [iter(())]
+
+    assert not list(AccountStrategy('0004').events(client, '5'))
+    assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['0004', '5'])]
+
+
+@pytest.mark.parametrize('during_iteration', [False, True])
+def test_account_strategy_event_errors(client, during_iteration):
+    """Errors opening or reading a stream reach the engine after at most one subscription."""
+    error = RequestError(code=StatusCode.UNAVAILABLE, details='stream unavailable', metadata=())
+
+    def interrupted_stream():
+        yield PositionsStreamResponse(position=PositionData(
+            account_id='4', money=[], securities=[
+                PositionsSecurities(instrument_uid='1', blocked=0)]))
+        raise error
+
+    client.operations_stream.positions_stream.side_effect = [
+        interrupted_stream() if during_iteration else error]
+    events = AccountStrategy('4').events(client, '5')
+    if during_iteration:
+        assert next(events) is True
+    with pytest.raises(RequestError) as exc_info:
+        next(events)
+
+    assert exc_info.value is error
+    assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['4', '5'])]
 
 
 def test_calc_ratio_fractional_portfolios(auto_repeater, client, fractional_portfolios):
