@@ -2077,23 +2077,159 @@ def invest_environment_fixture(monkeypatch):
     return monkeypatch
 
 
+@pytest.fixture(name='named_strategy_factory')
+def named_strategy_factory_fixture(client, target_strategy, monkeypatch):
+    """Register a source with no account ID or source positions; SDK access is destination-only."""
+    target_strategy.build_target.return_value = TargetPortfolio(
+        {'1': Decimal('2'), '2': Decimal('3')},
+        {'1': Decimal('5'), '2': Decimal('10')})
+    target_strategy.events.side_effect = [iter([False, True, False]), TestException()]
+    factory = Mock(return_value=target_strategy)
+    monkeypatch.setitem(strategies.NAMED_STRATEGIES, 'TEST', factory)
+    portfolios = {'5': PortfolioResponse(positions=[
+        PortfolioPosition(
+            instrument_type='share', instrument_uid='1',
+            current_price=MoneyValue(currency='RUB', units=4, nano=0),
+            quantity=Quotation(units=5, nano=0)),
+        PortfolioPosition(
+            instrument_type='currency', instrument_uid='cash',
+            current_price=MoneyValue(currency='RUB', units=1, nano=0),
+            quantity=Quotation(units=80, nano=0)),
+    ])}
+    client.operations.get_portfolio.side_effect = lambda **kwargs: portfolios[kwargs['account_id']]
+    client.users.get_accounts.return_value = GetAccountsResponse(accounts=[])
+    client.operations_stream.positions_stream.side_effect = AssertionError(
+        'Named strategies must not subscribe to account positions')
+    return factory
+
+
+@pytest.mark.parametrize('entrypoint', ['run_sync', 'run', 'cli', 'query', 'environment'])
+def test_named_strategy_launches(
+        entrypoint, client, target_strategy, named_strategy_factory, invest_environment):
+    """Real runners and engine submit destination orders using only the strategy contract."""
+    invest_environment.setenv('INVEST_TOKEN', 'test-token')
+    invest_environment.setenv('DST_ACCOUNT', '5')
+    invest_environment.setenv('SRC_ACCOUNT', 'TEST' if entrypoint == 'environment' else 'IMOEX')
+    invest_environment.setattr(sys, 'argv', ['main.py', '-s', 'TEST', '-d', '5'])
+    streaming = entrypoint in ['run', 'cli']
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(runner_module, 'configure_local_logging', autospec=True), \
+            patch.object(serverless, 'configure_yc_logging', autospec=True):
+        sdk_client.return_value.__enter__.return_value = client
+        if streaming:
+            with pytest.raises(TestException):
+                if entrypoint == 'cli':
+                    cli.main()
+                else:
+                    runner_module.Runner('test-token', 'TEST', '5').run()
+        elif entrypoint == 'run_sync':
+            runner_module.Runner('test-token', 'TEST', '5').run_sync()
+        else:
+            query = ({'src': 'TEST', 'dst': '5', 'token': 'test-token'}
+                     if entrypoint == 'query' else {})
+            result = cloud_entrypoint.handler({'queryStringParameters': query}, None)
+            assert result == {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'text/plain'},
+                'isBase64Encoded': False,
+                'body': 'Success sync, TEST 5!',
+            }
+        sdk_client.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
+        sdk_client.return_value.__enter__.assert_called_once_with()
+        sdk_client.return_value.__exit__.assert_called_once()
+
+    named_strategy_factory.assert_called_once_with('TEST')
+    sync_calls = [
+        call.load_snapshot(client),
+        call.build_target(target_strategy.load_snapshot.return_value, Decimal('99')),
+    ]
+    assert target_strategy.mock_calls == (sync_calls + [call.events(client, '5')] +
+                                         sync_calls + [call.events(client, '5')]
+                                         if streaming else sync_calls)
+    if not streaming:
+        target_strategy.events.assert_not_called()
+    sync_count = 2 if streaming else 1
+    assert client.operations.get_portfolio.call_args_list == [call(account_id='5')] * sync_count
+    assert client.users.get_accounts.call_args_list == ([call()] if streaming else [])
+    client.operations_stream.positions_stream.assert_not_called()
+    assert client.orders.post_order.call_args_list == [
+        call(instrument_id='1', quantity=3, direction=OrderDirection.ORDER_DIRECTION_SELL,
+             account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE),
+        call(instrument_id='2', quantity=3, direction=OrderDirection.ORDER_DIRECTION_BUY,
+             account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE),
+    ] * sync_count
+
+
+@pytest.mark.parametrize('has_token', [False, True])
+@pytest.mark.parametrize('arguments, message', [
+    ([], 'src is required'),
+    (['-s', ''], 'src is required'),
+    (['-s', ' \t '], 'src is required'),
+    (['-s', 'IMOEX'], 'unsupported src: IMOEX'),
+])
+def test_cli_rejects_source_before_credentials(
+        arguments, message, has_token, client, invest_environment):
+    """Source errors take precedence over credentials and cannot construct a client."""
+    if has_token:
+        invest_environment.setenv('INVEST_TOKEN', 'test-token')
+    invest_environment.setattr(sys, 'argv', ['main.py', *arguments])
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(cli, 'os', wraps=cli.os) as cli_os:
+        sdk_client.return_value.__enter__.return_value = client
+        with pytest.raises(strategies.UnsupportedSourceError, match=f'^{message}$'):
+            cli.main()
+        assert cli_os.mock_calls == []
+        sdk_client.assert_not_called()
+    assert client.mock_calls == []
+
+
+@pytest.mark.parametrize('has_token', [False, True])
+@pytest.mark.parametrize('source_location', ['query', 'environment'])
+@pytest.mark.parametrize('src, message', [
+    (None, 'src is required'), ('', 'src is required'), (' \t ', 'src is required'),
+    ('IMOEX', 'unsupported src: IMOEX'),
+])
+def test_cloud_rejects_source_before_credentials(
+        src, message, source_location, has_token, client, invest_environment):
+    """An explicit invalid query source never falls back to a valid environment source."""
+    if has_token:
+        invest_environment.setenv('INVEST_TOKEN', 'test-token')
+        invest_environment.setenv('t_token', 'legacy-token')
+    query = {}
+    if source_location == 'query':
+        query['src'] = src
+        invest_environment.setenv('SRC_ACCOUNT', '4')
+    elif src is not None:
+        invest_environment.setenv('SRC_ACCOUNT', src)
+    with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
+            patch.object(serverless, 'configure_yc_logging', autospec=True), \
+            patch.object(serverless, 'os', wraps=serverless.os) as cloud_os:
+        sdk_client.return_value.__enter__.return_value = client
+        with pytest.raises(strategies.UnsupportedSourceError, match=f'^{message}$'):
+            cloud_entrypoint.handler({'queryStringParameters': query}, None)
+        assert cloud_os.mock_calls == ([call.environ.get('SRC_ACCOUNT')]
+                                       if source_location == 'environment' else [])
+        sdk_client.assert_not_called()
+    assert client.mock_calls == []
+
+
 @pytest.mark.parametrize(
     'event, environment, expected',
     [
         ({'queryStringParameters': {
-            'src': 'query-src', 'dst': 'query-dst', 'token': 'query-token'}},
-         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
-          't_token': 'legacy-token'}, ('query-src', 'query-dst', 'query-token')),
+            'src': '4', 'dst': 'query-dst', 'token': 'query-token'}},
+         {'SRC_ACCOUNT': '6', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
+          't_token': 'legacy-token'}, ('4', 'query-dst', 'query-token')),
         ({'queryStringParameters': None},
-         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
-          't_token': 'legacy-token'}, ('env-src', 'env-dst', 'env-token')),
-        ({'queryStringParameters': {'src': '', 'dst': '', 'token': ''}},
-         {'SRC_ACCOUNT': 'env-src', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token'},
-         ('env-src', 'env-dst', 'env-token')),
-        ({}, {'t_token': 'legacy-token'},
-         (serverless.DEFAULT_SRC_ACCOUNT, serverless.DEFAULT_DST_ACCOUNT, 'legacy-token')),
-        (None, {'INVEST_TOKEN': 'env-token'},
-         (serverless.DEFAULT_SRC_ACCOUNT, serverless.DEFAULT_DST_ACCOUNT, 'env-token')),
+         {'SRC_ACCOUNT': '4', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
+          't_token': 'legacy-token'}, ('4', 'env-dst', 'env-token')),
+        ({'queryStringParameters': {'dst': '', 'token': ''}},
+         {'SRC_ACCOUNT': '4', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token'},
+         ('4', 'env-dst', 'env-token')),
+        ({}, {'SRC_ACCOUNT': '4', 't_token': 'legacy-token'},
+         ('4', serverless.DEFAULT_DST_ACCOUNT, 'legacy-token')),
+        (None, {'SRC_ACCOUNT': '4', 'INVEST_TOKEN': 'env-token'},
+         ('4', serverless.DEFAULT_DST_ACCOUNT, 'env-token')),
     ],
     ids=['query_priority', 'null_query', 'empty_query_values', 'legacy_token', 'no_event'],
 )
@@ -2120,6 +2256,7 @@ def test_cloud_entrypoint(event, environment, expected, invest_environment):
 def test_cloud_missing_token(invest_environment):
     """Missing credentials fail before creating the runner."""
     invest_environment.delenv('INVEST_TOKEN', raising=False)
+    invest_environment.setenv('SRC_ACCOUNT', '4')
     with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
             patch.object(serverless, 'configure_yc_logging', autospec=True):
         with pytest.raises(KeyError, match='t_token'):
@@ -2130,6 +2267,7 @@ def test_cloud_missing_token(invest_environment):
 def test_cloud_sync_error(invest_environment):
     """A failed sync must not produce a successful HTTP response."""
     invest_environment.setenv('INVEST_TOKEN', 'test-token')
+    invest_environment.setenv('SRC_ACCOUNT', '4')
     error = RequestError(code=StatusCode.UNAVAILABLE, details='sync unavailable', metadata=())
     with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
             patch.object(serverless, 'configure_yc_logging', autospec=True):
@@ -2143,7 +2281,7 @@ def test_cloud_sync_error(invest_environment):
 @pytest.mark.parametrize(
     'arguments, src, dst, params',
     [
-        ([], None, None, RunnerParams(debug=False, threshold=None, reserve=None)),
+        (['-s', '4'], '4', None, RunnerParams(debug=False, threshold=None, reserve=None)),
         (['-s', '4', '-d', '5', '--debug', '-t', '0.01', '-r', '0.02'],
          '4', '5', RunnerParams(debug=True, threshold=0.01, reserve=0.02)),
     ],
@@ -2162,21 +2300,21 @@ def test_cli(arguments, src, dst, params, invest_environment):
 def test_cli_script(invest_environment):
     """Executing main.py invokes the local runner without connecting to the API."""
     invest_environment.setenv('INVEST_TOKEN', 'cli-token')
-    invest_environment.setattr(sys, 'argv', ['main.py'])
+    invest_environment.setattr(sys, 'argv', ['main.py', '-s', '4'])
     with patch.object(runner_module, 'Runner', autospec=True) as runner_class:
         runpy.run_path('main.py', run_name='__main__')
         runner_class.assert_called_once_with(
-            token='cli-token', src=None, dst=None,
+            token='cli-token', src='4', dst=None,
             params=RunnerParams(debug=False, threshold=None, reserve=None))
         runner_class.return_value.run.assert_called_once_with()
 
 
-@pytest.mark.parametrize('arguments', [[], ['--threshold', 'invalid']])
+@pytest.mark.parametrize('arguments', [['-s', '4'], ['-s', '4', '--threshold', 'invalid']])
 def test_cli_invalid_input(arguments, invest_environment):
     """Missing credentials and invalid CLI arguments cannot start a runner."""
     invest_environment.setattr(sys, 'argv', ['main.py', *arguments])
     with patch.object(cli, 'Runner', autospec=True) as runner_class:
-        if arguments:
+        if '--threshold' in arguments:
             with pytest.raises(SystemExit) as raised:
                 cli.main()
             assert raised.value.code == 2
