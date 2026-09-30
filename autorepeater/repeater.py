@@ -28,7 +28,7 @@ class AutoRepeater:
         self.strategy = strategy
         self.debug = False
         self.threshold = Decimal(THRESHOLD)
-        self.reserve = Decimal(DST_MONEY_RESERVED)
+        self.reserve = getattr(strategy, 'default_reserve', Decimal(DST_MONEY_RESERVED))
 
     def set_debug(self, debug):
         """set debug flag"""
@@ -160,6 +160,9 @@ class AutoRepeater:
 
         target = self.strategy.build_target(snapshot, total_dst)
         validate_target(target)
+        if not target.quantities:
+            reporting.print_empty_target(dst_account_id)
+            return
 
         orders_params_sell = self.calc_sell_positions(
             dst_positions, target.quantities)

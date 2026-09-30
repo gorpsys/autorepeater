@@ -1,5 +1,7 @@
 """User-facing portfolio, order, and event output."""
+from datetime import datetime
 from decimal import Decimal
+import json
 
 from autorepeater.constants import IMPORTANT
 from autorepeater.logging_config import logger
@@ -93,3 +95,27 @@ def print_order_result(order_id):
 def print_skipped_event(response):
     """Report a stream event that did not request synchronization."""
     logger.log(IMPORTANT, response)
+
+
+def print_empty_target(dst_account_id):
+    """Explain why a synchronization leaves destination holdings untouched."""
+    logger.log(IMPORTANT, 'Skipping synchronization for destination %s: empty target',
+               dst_account_id)
+
+
+def _calibration_json_value(value):
+    if isinstance(value, Decimal):
+        return format(value, 'f')
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f'unsupported calibration value: {type(value).__name__}')
+
+
+def format_index_calibration(report):
+    """Preserve decimal precision and quotation timestamps in a reusable report."""
+    return json.dumps(report, default=_calibration_json_value, indent=2, allow_nan=False)
+
+
+def print_index_calibration(payload):
+    """Display the same public data that can be saved for offline reproduction."""
+    logger.log(IMPORTANT, '%s', payload)
