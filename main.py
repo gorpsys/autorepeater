@@ -5,30 +5,31 @@ import argparse
 
 from autorepeater.runner import RunnerParams
 from autorepeater.runner import Runner
-from autorepeater.strategies import validate_src
+from autorepeater.strategies import prepare_strategy
 
 def main():
     """main function"""
     parser = argparse.ArgumentParser(description="autorepeater")
 
     parser.add_argument("--debug", action='store_true', help="режим отладки")
-    parser.add_argument("-s", "--src", type=str, help="обязательный источник: номер счёта "
-                        "или имя зарегистрированной стратегии")
+    parser.add_argument("--algoritm", required=True, help="имя алгоритма")
+    parser.add_argument("-s", "--src", type=str, required=True,
+                        help="источник выбранного алгоритма")
     parser.add_argument("-d", "--dst", type=str, help="id счёта назначения")
     parser.add_argument("-t", "--threshold", type=float, help="порог стоимости, ниже "
                         "которого не выполняется синхронизация - доля стоимости счёта"
                         " назначения. По умолчанию 0.001")
-    parser.add_argument("-r", "--reserve", type=float, help="резев на счёте назначения"
-                        " для округлений и комиссий. Доля стоимости счёта назначения. "
-                        "По умолчания 0.005")
+    parser.add_argument("-r", "--reserve", type=float, help="переопределить резерв"
+                        " для округлений и комиссий (доля стоимости счёта назначения). "
+                        "По умолчанию из конфига стратегии; для повторения счёта 0.01")
     args = parser.parse_args()
 
-    validate_src(args.src)
+    prepared = prepare_strategy(args.algoritm, args.src)
     invest_token = os.environ["INVEST_TOKEN"]
 
     runer = Runner(
         token=invest_token,
-        src=args.src,
+        prepared_strategy=prepared,
         dst=args.dst,
         params=RunnerParams(
             debug=args.debug,

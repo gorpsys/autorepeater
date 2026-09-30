@@ -3,9 +3,11 @@ import os
 
 from autorepeater.logging_config import configure_yc_logging
 from autorepeater.runner import Runner
-from autorepeater.strategies import validate_src
+from autorepeater.strategies import prepare_strategy
 
 DEFAULT_DST_ACCOUNT = '2141399550'
+DEFAULT_ALGORITM = 'INDEX'
+DEFAULT_SRC = 'TMON'
 
 
 def get_query_params(event):
@@ -33,8 +35,12 @@ def handler(event, context):
     configure_yc_logging()
 
     params = get_query_params(event)
-    src = params['src'] if 'src' in params else os.environ.get('SRC_ACCOUNT')
-    validate_src(src)
+    algoritm = (
+        params['algoritm'] if 'algoritm' in params
+        else os.environ.get('ALGORITM', DEFAULT_ALGORITM))
+    default_src = DEFAULT_SRC if algoritm == DEFAULT_ALGORITM else None
+    src = params['src'] if 'src' in params else os.environ.get('SRC_ACCOUNT', default_src)
+    prepared = prepare_strategy(algoritm, src)
     dst = get_param(params, 'dst', 'DST_ACCOUNT', DEFAULT_DST_ACCOUNT)
     invest_token = get_param(params, 'token', 'INVEST_TOKEN')
     if invest_token is None:
@@ -42,7 +48,7 @@ def handler(event, context):
 
     runner = Runner(
         token=invest_token,
-        src=src,
+        prepared_strategy=prepared,
         dst=dst)
     runner.run_sync()
 
@@ -52,5 +58,5 @@ def handler(event, context):
             'Content-Type': 'text/plain',
         },
         'isBase64Encoded': False,
-        'body': f'Success sync, {src} {dst}!',
+        'body': f'Success sync, {prepared.source_display} {dst}!',
     }

@@ -7,7 +7,6 @@ from t_tech.invest import OrderType
 from t_tech.invest import RequestError
 from t_tech.invest import SecurityTradingStatus
 
-from autorepeater.constants import DST_MONEY_RESERVED
 from autorepeater.constants import THRESHOLD
 from autorepeater.logging_config import logger
 from autorepeater.money import currency_to_decimal
@@ -17,18 +16,21 @@ from autorepeater.orders import OrderParams
 from autorepeater.orders import get_max_sum_positions_price
 from autorepeater.portfolio import get_portfolio
 from autorepeater.portfolio import validate_target
+from autorepeater.strategy_contract import validate_strategy
+from autorepeater.strategy_data import DataAccessError
 from autorepeater import reporting
 
 
 class AutoRepeater:
     """Rebalance a destination using a strategy's targets and synchronization events."""
 
-    def __init__(self, client, strategy):
+    def __init__(self, client, strategy, data):
         self.client = client
-        self.strategy = strategy
+        self.strategy = validate_strategy(strategy)
+        self.data = data
         self.debug = False
         self.threshold = Decimal(THRESHOLD)
-        self.reserve = Decimal(DST_MONEY_RESERVED)
+        self.reserve = strategy.default_reserve
 
     def set_debug(self, debug):
         """set debug flag"""
@@ -47,10 +49,12 @@ class AutoRepeater:
     def set_reserve(self, reserve):
         """set reserve"""
         if reserve is not None:
-            if reserve < 0 or reserve > 1:
+            if isinstance(reserve, bool) or not isinstance(reserve, (int, float, Decimal)):
+                raise TypeError("Reserve must be between 0 and 1")
+            value = Decimal(str(reserve))
+            if not value.is_finite() or value < 0 or value > 1:
                 raise ValueError("Reserve must be between 0 and 1")
-            # Оставляем преобразование здесь, так как входной параметр float
-            self.reserve = Decimal(str(reserve))
+            self.reserve = value
 
     def calc_sell_positions(self, dst_positions, target_positions):
         """calc extra positions from dst accounts for sell"""
@@ -145,7 +149,7 @@ class AutoRepeater:
 
     def sync_accounts(self, dst_account_id):
         """Build and validate a fresh target before calculating any orders."""
-        snapshot = self.strategy.load_snapshot(self.client)
+        snapshot = self.strategy.load_snapshot(self.data)
         reporting.print_account_header('dst')
         portfolio_dst = get_portfolio(self.client, dst_account_id)
         total_dst = Decimal('0')
@@ -160,6 +164,9 @@ class AutoRepeater:
 
         target = self.strategy.build_target(snapshot, total_dst)
         validate_target(target)
+        if not target.quantities:
+            reporting.print_empty_target(dst_account_id)
+            return
 
         orders_params_sell = self.calc_sell_positions(
             dst_positions, target.quantities)
@@ -181,13 +188,13 @@ class AutoRepeater:
         """sync accounts when changing"""
         try:
             self.sync_accounts(dst)
-        except RequestError as err:
+        except (DataAccessError, RequestError) as err:
             logger.error(err)
 
         while True:
             try:
-                for triggered in self.strategy.events(self.client, dst):
+                for triggered in self.strategy.events(self.data, dst):
                     if triggered:
                         self.sync_accounts(dst)
-            except RequestError as err:
+            except (DataAccessError, RequestError) as err:
                 logger.error(err)

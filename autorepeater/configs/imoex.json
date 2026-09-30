@@ -1,0 +1,404 @@
+{
+  "name": "IMOEX",
+  "reserve": "0.01",
+  "max_lot_weight_error": "0.05",
+  "min_position_value": "3000",
+  "instruments": [
+    {
+      "ticker": "AFKS",
+      "reference_price": "7.079",
+      "effective_quantity": "1958950000",
+      "free_float": "0.29",
+      "weight_limit": "0.7",
+      "reference_weight": "0.25",
+      "reference_index_capitalization": "13867407050"
+    },
+    {
+      "ticker": "AFLT",
+      "reference_price": "32",
+      "effective_quantity": "795154243",
+      "free_float": "0.25",
+      "weight_limit": "0.8",
+      "reference_weight": "0.46",
+      "reference_index_capitalization": "25444935776"
+    },
+    {
+      "ticker": "ALRS",
+      "reference_price": "18.93",
+      "effective_quantity": "0",
+      "free_float": "0.34",
+      "weight_limit": "0.4",
+      "reference_weight": "0.34",
+      "reference_index_capitalization": "18960956715.12"
+    },
+    {
+      "ticker": "BSPB",
+      "reference_price": "262.75",
+      "effective_quantity": "0",
+      "free_float": "0.21",
+      "weight_limit": "1",
+      "reference_weight": "0.44",
+      "reference_index_capitalization": "24574321567.48"
+    },
+    {
+      "ticker": "CBOM",
+      "reference_price": "8.815",
+      "effective_quantity": "0",
+      "free_float": "0.22",
+      "weight_limit": "0.7",
+      "reference_weight": "0.81",
+      "reference_index_capitalization": "45381165440.19"
+    },
+    {
+      "ticker": "CHMF",
+      "reference_price": "623.8",
+      "effective_quantity": "0",
+      "free_float": "0.23",
+      "weight_limit": "0.4",
+      "reference_weight": "0.86",
+      "reference_index_capitalization": "48076338809.94"
+    },
+    {
+      "ticker": "CNRU",
+      "reference_price": "657.2",
+      "effective_quantity": "31068196",
+      "free_float": "0.4",
+      "weight_limit": "1",
+      "reference_weight": "0.37",
+      "reference_index_capitalization": "20418018411.2"
+    },
+    {
+      "ticker": "DOMRF",
+      "reference_price": "2025",
+      "effective_quantity": "0",
+      "free_float": "0.1",
+      "weight_limit": "1",
+      "reference_weight": "0.65",
+      "reference_index_capitalization": "36427465395"
+    },
+    {
+      "ticker": "ENPG",
+      "reference_price": "288.65",
+      "effective_quantity": "0",
+      "free_float": "0.19",
+      "weight_limit": "0.7",
+      "reference_weight": "0.44",
+      "reference_index_capitalization": "24525796599.44"
+    },
+    {
+      "ticker": "FLOT",
+      "reference_price": "81.16",
+      "effective_quantity": "0",
+      "free_float": "0.16",
+      "weight_limit": "0.7",
+      "reference_weight": "0.39",
+      "reference_index_capitalization": "21588504560.58"
+    },
+    {
+      "ticker": "GAZP",
+      "reference_price": "96.39",
+      "effective_quantity": "0",
+      "free_float": "0.47",
+      "weight_limit": "0.5",
+      "reference_weight": "9.59",
+      "reference_index_capitalization": "536244128481.29"
+    },
+    {
+      "ticker": "GMKN",
+      "reference_price": "117.76",
+      "effective_quantity": "0",
+      "free_float": "0.33",
+      "weight_limit": "0.4",
+      "reference_weight": "4.25",
+      "reference_index_capitalization": "237615755925.5"
+    },
+    {
+      "ticker": "HEAD",
+      "reference_price": "2712",
+      "effective_quantity": "0",
+      "free_float": "0.53",
+      "weight_limit": "1",
+      "reference_weight": "1.21",
+      "reference_index_capitalization": "67821713736.48"
+    },
+    {
+      "ticker": "IRAO",
+      "reference_price": "2.34",
+      "effective_quantity": "23385600000",
+      "free_float": "0.32",
+      "weight_limit": "0.7",
+      "reference_weight": "0.98",
+      "reference_index_capitalization": "54722304000"
+    },
+    {
+      "ticker": "LKOH",
+      "reference_price": "5299.5",
+      "effective_quantity": "0",
+      "free_float": "0.59",
+      "weight_limit": "0.4226207",
+      "reference_weight": "16.38",
+      "reference_index_capitalization": "915559923795.19"
+    },
+    {
+      "ticker": "MAGN",
+      "reference_price": "20.27",
+      "effective_quantity": "1340919600",
+      "free_float": "0.2",
+      "weight_limit": "0.6",
+      "reference_weight": "0.49",
+      "reference_index_capitalization": "27180440292"
+    },
+    {
+      "ticker": "MDMG",
+      "reference_price": "1284",
+      "effective_quantity": "0",
+      "free_float": "0.27",
+      "weight_limit": "0.9",
+      "reference_weight": "0.42",
+      "reference_index_capitalization": "23439904620.12"
+    },
+    {
+      "ticker": "MOEX",
+      "reference_price": "147.55",
+      "effective_quantity": "0",
+      "free_float": "0.61",
+      "weight_limit": "0.3",
+      "reference_weight": "1.1",
+      "reference_index_capitalization": "61466695428.41"
+    },
+    {
+      "ticker": "MTSS",
+      "reference_price": "174.05",
+      "effective_quantity": "0",
+      "free_float": "0.41",
+      "weight_limit": "0.4",
+      "reference_weight": "1.02",
+      "reference_index_capitalization": "57042203353.12"
+    },
+    {
+      "ticker": "NLMK",
+      "reference_price": "68.14",
+      "effective_quantity": "0",
+      "free_float": "0.21",
+      "weight_limit": "0.5",
+      "reference_weight": "0.77",
+      "reference_index_capitalization": "42879742934.03"
+    },
+    {
+      "ticker": "NVTK",
+      "reference_price": "1030.3",
+      "effective_quantity": "255049704",
+      "free_float": "0.21",
+      "weight_limit": "0.4",
+      "reference_weight": "4.7",
+      "reference_index_capitalization": "262777710031.2"
+    },
+    {
+      "ticker": "OZON",
+      "reference_price": "2919",
+      "effective_quantity": "0",
+      "free_float": "0.26",
+      "weight_limit": "1",
+      "reference_weight": "2.94",
+      "reference_index_capitalization": "164245038523.02"
+    },
+    {
+      "ticker": "PHOR",
+      "reference_price": "5043",
+      "effective_quantity": "7511000",
+      "free_float": "0.29",
+      "weight_limit": "0.2",
+      "reference_weight": "0.68",
+      "reference_index_capitalization": "37877973000"
+    },
+    {
+      "ticker": "PLZL",
+      "reference_price": "968",
+      "effective_quantity": "0",
+      "free_float": "0.22",
+      "weight_limit": "0.4",
+      "reference_weight": "2.07",
+      "reference_index_capitalization": "115909357781.18"
+    },
+    {
+      "ticker": "POSI",
+      "reference_price": "1026",
+      "effective_quantity": "19227780",
+      "free_float": "0.27",
+      "weight_limit": "1",
+      "reference_weight": "0.35",
+      "reference_index_capitalization": "19727702280"
+    },
+    {
+      "ticker": "RAGR",
+      "reference_price": "69.38",
+      "effective_quantity": "191749920",
+      "free_float": "0.2",
+      "weight_limit": "1",
+      "reference_weight": "0.24",
+      "reference_index_capitalization": "13303609449.6"
+    },
+    {
+      "ticker": "RENI",
+      "reference_price": "66.84",
+      "effective_quantity": "0",
+      "free_float": "0.32",
+      "weight_limit": "1",
+      "reference_weight": "0.21",
+      "reference_index_capitalization": "11912551620.86"
+    },
+    {
+      "ticker": "ROSN",
+      "reference_price": "352.25",
+      "effective_quantity": "0",
+      "free_float": "0.11",
+      "weight_limit": "0.4",
+      "reference_weight": "2.94",
+      "reference_index_capitalization": "164261157985.68"
+    },
+    {
+      "ticker": "RTKM",
+      "reference_price": "38.63",
+      "effective_quantity": "0",
+      "free_float": "0.29",
+      "weight_limit": "0.7",
+      "reference_weight": "0.46",
+      "reference_index_capitalization": "25744908629.45"
+    },
+    {
+      "ticker": "RUAL",
+      "reference_price": "23.195",
+      "effective_quantity": "0",
+      "free_float": "0.18",
+      "weight_limit": "0.7",
+      "reference_weight": "0.79",
+      "reference_index_capitalization": "44402649445.24"
+    },
+    {
+      "ticker": "SBER",
+      "reference_price": "272.45",
+      "effective_quantity": "0",
+      "free_float": "0.48",
+      "weight_limit": "0.2389355",
+      "reference_weight": "12.07",
+      "reference_index_capitalization": "674527989054.97"
+    },
+    {
+      "ticker": "SBERP",
+      "reference_price": "273.27",
+      "effective_quantity": "477871000",
+      "free_float": "1",
+      "weight_limit": "0.477871",
+      "reference_weight": "2.34",
+      "reference_index_capitalization": "130587808170"
+    },
+    {
+      "ticker": "SNGS",
+      "reference_price": "15.195",
+      "effective_quantity": "0",
+      "free_float": "0.25",
+      "weight_limit": "0.7",
+      "reference_weight": "1.7",
+      "reference_index_capitalization": "94999885669.93"
+    },
+    {
+      "ticker": "SNGSP",
+      "reference_price": "40.435",
+      "effective_quantity": "0",
+      "free_float": "0.73",
+      "weight_limit": "0.5",
+      "reference_weight": "2.03",
+      "reference_index_capitalization": "113672059000.76"
+    },
+    {
+      "ticker": "SVCB",
+      "reference_price": "9.33",
+      "effective_quantity": "0",
+      "free_float": "0.17",
+      "weight_limit": "1",
+      "reference_weight": "0.64",
+      "reference_index_capitalization": "35712990666.22"
+    },
+    {
+      "ticker": "T",
+      "reference_price": "249.18",
+      "effective_quantity": "0",
+      "free_float": "0.51",
+      "weight_limit": "0.8",
+      "reference_weight": "4.88",
+      "reference_index_capitalization": "272742741595.96"
+    },
+    {
+      "ticker": "TATN",
+      "reference_price": "627.6",
+      "effective_quantity": "0",
+      "free_float": "0.49",
+      "weight_limit": "0.5",
+      "reference_weight": "5.99",
+      "reference_index_capitalization": "334999839413.4"
+    },
+    {
+      "ticker": "TATNP",
+      "reference_price": "599.7",
+      "effective_quantity": "116531715",
+      "free_float": "0.79",
+      "weight_limit": "1",
+      "reference_weight": "1.25",
+      "reference_index_capitalization": "69884069485.5"
+    },
+    {
+      "ticker": "TRNFP",
+      "reference_price": "1019.8",
+      "effective_quantity": "27054825",
+      "free_float": "0.58",
+      "weight_limit": "0.3",
+      "reference_weight": "0.49",
+      "reference_index_capitalization": "27590510535"
+    },
+    {
+      "ticker": "UGLD",
+      "reference_price": "0.722",
+      "effective_quantity": "0",
+      "free_float": "0.11",
+      "weight_limit": "1",
+      "reference_weight": "0.32",
+      "reference_index_capitalization": "17693096191.71"
+    },
+    {
+      "ticker": "VKCO",
+      "reference_price": "110.9",
+      "effective_quantity": "0",
+      "free_float": "0.2",
+      "weight_limit": "0.9",
+      "reference_weight": "0.2",
+      "reference_index_capitalization": "11436313241.16"
+    },
+    {
+      "ticker": "VTBR",
+      "reference_price": "52.57",
+      "effective_quantity": "0",
+      "free_float": "0.2",
+      "weight_limit": "1",
+      "reference_weight": "2.43",
+      "reference_index_capitalization": "135922536097.82"
+    },
+    {
+      "ticker": "X5",
+      "reference_price": "1791.5",
+      "effective_quantity": "0",
+      "free_float": "0.29",
+      "weight_limit": "1",
+      "reference_weight": "2.52",
+      "reference_index_capitalization": "141091612054.52"
+    },
+    {
+      "ticker": "YDEX",
+      "reference_price": "3547",
+      "effective_quantity": "0",
+      "free_float": "0.26",
+      "weight_limit": "1",
+      "reference_weight": "6.53",
+      "reference_index_capitalization": "365211069204.54"
+    }
+  ]
+}

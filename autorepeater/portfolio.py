@@ -11,8 +11,16 @@ class TargetPortfolio:
 
 
 def validate_target(target):
-    """Require a finite Decimal price for every target UID, even a zero holding."""
-    for uid in target.quantities:
+    """Validate target maps, quantities, and per-unit estimates without coercion."""
+    if not isinstance(target.quantities, dict):
+        raise ValueError('target quantities must be a dict')
+    if not isinstance(target.prices, dict):
+        raise ValueError('target prices must be a dict')
+    for uid, quantity in target.quantities.items():
+        if not isinstance(uid, str) or not uid:
+            raise ValueError(f'invalid target quantity UID: {uid}')
+        if not isinstance(quantity, Decimal) or not quantity.is_finite():
+            raise ValueError(f'invalid target quantity for UID: {uid}')
         price = target.prices.get(uid)
         if not isinstance(price, Decimal) or not price.is_finite():
             raise ValueError(f'invalid target price for UID: {uid}')

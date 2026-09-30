@@ -1,0 +1,58 @@
+"""Shared structural contract and runtime validation for strategies."""
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Protocol
+
+from autorepeater.portfolio import TargetPortfolio
+from autorepeater.strategy_data import StrategyData
+
+
+class UnsupportedSourceError(ValueError):
+    """The selected algorithm cannot prepare this source."""
+
+
+@dataclass(frozen=True)
+class AlgorithmDefinition:
+    """Separate source preparation from strategy construction."""
+    prepare_source: Callable[[str], object]
+    create: Callable[[object], 'Strategy']
+
+
+@dataclass(frozen=True)
+class PreparedStrategy:
+    """One launch's factory and opaque prepared source, with a display label."""
+    create: Callable[[object], 'Strategy']
+    prepared_source: object
+    source_display: str
+
+
+class Strategy(Protocol):
+    """Behavior required by the rebalancing engine."""
+
+    @property
+    def default_reserve(self) -> Decimal:
+        """Return the strategy-owned reserve as a fraction of destination value."""
+
+    def load_snapshot(self, data: StrategyData) -> object:
+        """Load one source snapshot."""
+
+    def build_target(self, snapshot: object, budget: Decimal) -> TargetPortfolio:
+        """Build a complete target from one snapshot and the available budget."""
+
+    def events(self, data: StrategyData, dst_account_id: str) -> Iterable[bool]:
+        """Yield synchronization decisions from one event subscription."""
+
+
+def validate_strategy(strategy):
+    """Validate the runtime surface and strategy-owned reserve without invoking methods."""
+    for method_name in ('load_snapshot', 'build_target', 'events'):
+        if not callable(getattr(strategy, method_name, None)):
+            raise TypeError(f'strategy {method_name} must be callable')
+
+    reserve = getattr(strategy, 'default_reserve', None)
+    if not isinstance(reserve, Decimal):
+        raise TypeError('strategy default_reserve must be a Decimal')
+    if not reserve.is_finite() or reserve < 0 or reserve >= 1:
+        raise ValueError('strategy default_reserve must be finite and between 0 and 1')
+    return strategy
