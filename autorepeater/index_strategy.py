@@ -1,15 +1,20 @@
-"""Fresh SDK snapshots and pure index target calculation from a validated base."""
+"""Fresh data-port snapshots and pure index target calculation."""
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR
-
-from t_tech.invest import InstrumentIdType
+from decimal import Decimal, ROUND_FLOOR
 
 from autorepeater import reporting
+from autorepeater.index_config import select_index_config
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.strategy_data import InstrumentType
 
 
-INDEX_BOARDS = {'share': 'TQBR', 'etf': 'TQTF'}
+INDEX_BOARDS = {InstrumentType.SHARE: 'TQBR', InstrumentType.ETF: 'TQTF'}
+
+
+def prepare_index_source(src):
+    """Prepare the exact JSON name using an isolated, one-pass selection."""
+    return select_index_config(src)
 
 
 @dataclass
@@ -22,9 +27,8 @@ class IndexQuote:
     time: datetime | None = None
 
 
-def _resolve_index_instrument(client, ticker, resolved):
-    response = client.instruments.find_instrument(query=ticker)
-    matches = [item for item in response.instruments
+def _resolve_index_instrument(data, ticker, resolved):
+    matches = [item for item in data.find_instruments(ticker)
                if item.ticker == ticker and item.instrument_type in INDEX_BOARDS
                and item.class_code == INDEX_BOARDS[item.instrument_type]]
     if len(matches) != 1:
@@ -36,9 +40,8 @@ def _resolve_index_instrument(client, ticker, resolved):
     uid = matches[0].uid
     if not isinstance(uid, str) or not uid or uid in resolved:
         raise ValueError(f'invalid or duplicate index UID: {ticker} ({class_code})')
-    instrument = client.instruments.get_instrument_by(
-        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid).instrument
-    if (instrument is None or instrument.uid != uid or instrument.ticker != ticker
+    instrument = data.get_instrument(uid)
+    if (instrument.uid != uid or instrument.ticker != ticker
             or instrument.instrument_type != instrument_type
             or instrument.class_code != class_code):
         raise ValueError(f'invalid index instrument metadata: {ticker} ({uid}, {class_code})')
@@ -48,13 +51,9 @@ def _resolve_index_instrument(client, ticker, resolved):
     return instrument
 
 
-def _index_price(quotation, ticker):
-    if quotation is None:
-        raise ValueError(f'missing index price: {ticker}')
-    try:
-        price = Decimal(quotation.units) + Decimal(quotation.nano) / Decimal('1000000000')
-    except (TypeError, ValueError, InvalidOperation) as error:
-        raise ValueError(f'invalid index price: {ticker}') from error
+def _index_price(price, ticker):
+    if not isinstance(price, Decimal):
+        raise ValueError(f'invalid index price: {ticker}')
     if not price.is_finite() or price <= 0:
         raise ValueError(f'invalid index price: {ticker}')
     return price
@@ -71,16 +70,16 @@ class IndexStrategy:
         """Use the config's reserve unless the caller explicitly overrides it."""
         return self.config.reserve
 
-    def load_snapshot(self, client):
+    def load_snapshot(self, data):
         """Resolve the entire base anew; unavailable data aborts the calculation."""
         instruments = {}
         for item in self.config.instruments:
-            instrument = _resolve_index_instrument(client, item.ticker, instruments)
+            instrument = _resolve_index_instrument(data, item.ticker, instruments)
             instruments[instrument.uid] = instrument
-        response = client.market_data.get_last_prices(instrument_id=list(instruments))
+        response = data.get_last_prices(list(instruments))
         prices = {}
-        for quote in response.last_prices:
-            uid = quote.instrument_uid
+        for quote in response:
+            uid = quote.uid
             if uid not in instruments or uid in prices:
                 raise ValueError(f'unexpected or duplicate index quote UID: {uid}')
             prices[uid] = quote
@@ -99,18 +98,16 @@ class IndexStrategy:
         """Use the shared pure calculator without further SDK calls."""
         return build_index_target(self.config, snapshot, budget)
 
-    def events(self, client, dst_account_id):
+    def events(self, data, dst_account_id):
         """Recalculate populated, fully unblocked destinations; propagate stream errors."""
-        for response in client.operations_stream.positions_stream(accounts=[dst_account_id]):
-            position = response.position
+        for event in data.position_events([dst_account_id]):
             triggered = (
-                position is not None and position.account_id == dst_account_id
-                and bool(position.securities or position.money)
-                and all(item.blocked == 0 for item in position.securities)
-                and all(item.blocked_value.units == 0 and item.blocked_value.nano == 0
-                        for item in position.money))
+                event.has_position and event.account_id == dst_account_id
+                and bool(event.securities or event.money)
+                and all(item.blocked == 0 for item in event.securities)
+                and all(item.blocked_value == 0 for item in event.money))
             if not triggered:
-                reporting.print_skipped_event(response)
+                reporting.print_skipped_strategy_event(event)
             yield triggered
 
 

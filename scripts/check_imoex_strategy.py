@@ -12,8 +12,9 @@ from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 
 from autorepeater import reporting
 from autorepeater.constants import IMPORTANT
-from autorepeater.index_config import load_index_configs
+from autorepeater.index_config import select_index_config
 from autorepeater.index_strategy import IndexStrategy, calculate_index_target
+from autorepeater.tinvest_strategy_data import TInvestStrategyData
 
 
 def _decimal(value):
@@ -103,17 +104,15 @@ def main(argv=None):
     token = os.environ.get('READ_ONLY_INVEST_TOKEN')
     if not token:
         parser.error('READ_ONLY_INVEST_TOKEN is required')
-    configs = load_index_configs()
-    name = args.src
-    if name is None and len(configs) == 1:
-        name = next(iter(configs))
-    if name not in configs:
-        parser.error('--src must name a configured index strategy')
-    strategy = IndexStrategy(configs[name])
+    try:
+        config = select_index_config(args.src)
+    except ValueError as error:
+        parser.error(f'--src must name a configured index strategy: {error}')
+    strategy = IndexStrategy(config)
     started = datetime.now(timezone.utc)
     with Client(token, target=(
             INVEST_GRPC_API_SANDBOX if args.sandbox else INVEST_GRPC_API)) as client:
-        snapshot = strategy.load_snapshot(client)
+        snapshot = strategy.load_snapshot(TInvestStrategyData(client))
     received = datetime.now(timezone.utc)
     reserve = strategy.default_reserve if args.reserve is None else args.reserve
     scenarios = [

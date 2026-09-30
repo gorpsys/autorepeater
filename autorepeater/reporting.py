@@ -11,10 +11,19 @@ from autorepeater.money import format_decimal
 from autorepeater.money import get_quantity_position
 from autorepeater.money import no_money_to_string
 from autorepeater.portfolio import get_portfolio
+from autorepeater.strategy_data import InstrumentType
+
+
+NANO_QUANT = Decimal('0.000000001')
 
 
 class GetInstrumentException(Exception):
     """Instrument not found uniquely by instrument_id."""
+
+
+def print_index_config_warning(message):
+    """Report an unusable foreign index document without blocking selection."""
+    logger.warning('%s', message)
 
 
 def get_instrument(client, instrument_id):
@@ -45,6 +54,31 @@ def print_account_header(side):
 def print_position(client, position):
     """Report an already loaded position."""
     logger.log(IMPORTANT, postiton_to_string(client, position))
+
+
+def _strategy_currency_to_string(position):
+    value = (position.current_price * position.quantity).quantize(NANO_QUANT)
+    return f'{position.currency} - {format_decimal(value)}'
+
+
+def strategy_position_to_string(data, position):
+    """Format a strategy-side position without relying on an SDK DTO."""
+    if position.instrument_type == InstrumentType.CURRENCY:
+        return _strategy_currency_to_string(position)
+    if position.instrument_type in (InstrumentType.SHARE, InstrumentType.ETF):
+        instruments = data.find_instruments(position.uid)
+        if len(instruments) != 1:
+            raise GetInstrumentException('error get instrument')
+        instrument = instruments[0]
+        quantity = format_decimal(position.quantity)
+        return (no_money_to_string(instrument) + ' - ' + quantity + ' - ' +
+                _strategy_currency_to_string(position))
+    return position.diagnostic_text
+
+
+def print_strategy_position(data, position):
+    """Report a position from the SDK-independent strategy data model."""
+    logger.log(IMPORTANT, strategy_position_to_string(data, position))
 
 
 def print_total(total):
@@ -92,9 +126,9 @@ def print_order_result(order_id):
     logger.log(IMPORTANT, order_id)
 
 
-def print_skipped_event(response):
-    """Report a stream event that did not request synchronization."""
-    logger.log(IMPORTANT, response)
+def print_skipped_strategy_event(event):
+    """Report the adapter-provided diagnostic representation of an event."""
+    logger.log(IMPORTANT, event.diagnostic_text)
 
 
 def print_empty_target(dst_account_id):
