@@ -6,8 +6,8 @@ from autorepeater.runner import Runner
 from autorepeater.strategies import prepare_strategy
 
 DEFAULT_DST_ACCOUNT = '2141399550'
-DEFAULT_ALGORITM = 'INDEX'
-DEFAULT_SRC = 'TMON'
+DEFAULT_ALGORITM = 'COMPOSITE'
+DEFAULT_SRC = 'BALANCED'
 
 
 def get_query_params(event):

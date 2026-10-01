@@ -152,6 +152,7 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
     ('repeater', 'from .strategy_data import DataAccessError'),
     ('runner', 'from .tinvest_strategy_data import TInvestStrategyData'),
     ('strategies', 'from .account_strategy import AccountStrategy'),
+    ('strategies', 'from .composite_strategy import CompositeStrategy, prepare_composite_source'),
     ('tinvest_strategy_data', 'import t_tech.invest'),
     ('account_strategy', 'import t_technology'),
     ('account_strategy', 'import grpc_tools'),

@@ -399,6 +399,7 @@ from autorepeater.portfolio import validate_target
 from autorepeater.strategy_data import DataAccessError
 from decimal import Decimal
 from autorepeater import strategies
+assert set(strategies.ALGORITHMS) == {'ACCOUNT', 'INDEX', 'COMPOSITE'}
 from autorepeater.strategy_contract import AlgorithmDefinition, create_strategy
 from test.test_strategy_contract import IndependentStrategy
 from test.test_strategy_preparation import TreePreparation, create_tree

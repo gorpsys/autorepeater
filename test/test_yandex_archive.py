@@ -18,6 +18,7 @@ def fixture_project(tmp_path):
         'autorepeater/__init__.py': b'', 'autorepeater/new_strategy.py': b'new module',
         'autorepeater/configs/index.json': b'{"reserve":"0.01"}',
         'autorepeater/configs/account/account.json': b'{"reserve":"0.01"}',
+        'autorepeater/configs/composite/balanced.json': b'{"name":"BALANCED"}',
         'autorepeater/configs/composite/nested/demo.json': b'{"name":"demo"}',
         'autorepeater/configs/.hidden.json': b'hidden',
         'autorepeater/configs/.hidden/nested.json': b'hidden directory',
@@ -43,6 +44,7 @@ EXPECTED = {
     'main.py', 'handler.py', 'requirements.txt', 'autorepeater/__init__.py',
     'autorepeater/new_strategy.py', 'autorepeater/configs/index.json',
     'autorepeater/configs/account/account.json',
+    'autorepeater/configs/composite/balanced.json',
     'autorepeater/configs/composite/nested/demo.json',
 }
 

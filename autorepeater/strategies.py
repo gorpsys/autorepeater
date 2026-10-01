@@ -1,5 +1,6 @@
 """Explicit algorithm registration and one-launch source preparation."""
 from autorepeater.account_strategy import AccountStrategy, prepare_account_source
+from autorepeater.composite_strategy import CompositeStrategy, prepare_composite_source
 from autorepeater.index_strategy import IndexStrategy, prepare_index_source
 from autorepeater.strategy_contract import AlgorithmDefinition, PreparedStrategy
 from autorepeater.strategy_contract import UnsupportedSourceError
@@ -60,3 +61,4 @@ def create_strategy(prepared):
 
 register_algorithm('ACCOUNT', AlgorithmDefinition(prepare_account_source, AccountStrategy))
 register_algorithm('INDEX', AlgorithmDefinition(prepare_index_source, IndexStrategy))
+register_algorithm('COMPOSITE', AlgorithmDefinition(prepare_composite_source, CompositeStrategy))

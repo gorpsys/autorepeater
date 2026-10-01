@@ -1,4 +1,4 @@
-"""Generic recursive preparation without a production composite algorithm."""
+"""Generic recursive preparation independent of concrete algorithms."""
 import inspect
 import json
 from unittest.mock import Mock, call, create_autospec, patch
@@ -8,6 +8,7 @@ import pytest
 from autorepeater import strategies, strategy_contract
 from autorepeater import index_config
 from autorepeater.account_strategy import prepare_account_source
+from autorepeater.composite_strategy import CompositeStrategy, prepare_composite_source
 from autorepeater.index_strategy import prepare_index_source
 from autorepeater.strategy_contract import (
     AlgorithmDefinition, PreparedStrategy, Strategy, UnsupportedSourceError,
@@ -57,9 +58,10 @@ def test_preparation_signatures_are_neutral_and_explicit():
     assert list(inspect.signature(strategy_contract.PreparationContext.prepare).parameters) == [
         'self', 'algoritm', 'src']
     assert list(inspect.signature(strategies.prepare_strategy).parameters) == ['algoritm', 'src']
-    for prepare in (prepare_account_source, prepare_index_source):
+    for prepare in (prepare_account_source, prepare_index_source, prepare_composite_source):
         assert list(inspect.signature(prepare).parameters) == ['src', 'context']
-    assert 'COMPOSITE' not in strategies.ALGORITHMS
+    assert strategies.ALGORITHMS['COMPOSITE'] == AlgorithmDefinition(
+        prepare_composite_source, CompositeStrategy)
 
 
 def test_nested_sibling_reuse_retains_every_factory(tree, monkeypatch):

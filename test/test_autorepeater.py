@@ -2851,7 +2851,8 @@ def test_runner_sync_error_closes_client(method, failure, client):
 def invest_environment_fixture(monkeypatch):
     """All entrypoint tests use controlled credentials and account parameters."""
     for name in ('INVEST_TOKEN', 't_token', 'SRC_ACCOUNT', 'DST_ACCOUNT',
-                 'IMOEX_CONFIG_PATH', 'INDEX_CONFIG_DIR', 'ALGORITM'):
+                 'IMOEX_CONFIG_PATH', 'INDEX_CONFIG_DIR', 'ACCOUNT_CONFIG_PATH',
+                 'COMPOSITE_CONFIG_DIR', 'ALGORITM'):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
@@ -3125,6 +3126,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
     from autorepeater import index_config, reporting, runner
     from autorepeater.index_config import load_index_config
     from autorepeater.index_strategy import IndexQuote, IndexStrategy, build_index_target
+    from autorepeater.composite_strategy import CompositeSnapshot, CompositeStrategy
     from autorepeater.strategy_data import InstrumentType, PortfolioEntry
     from autorepeater.repeater import AutoRepeater
     from autorepeater.strategy_data import StrategyData
@@ -3162,6 +3164,25 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
         data = create_autospec(StrategyData, instance=True, spec_set=True)
         execution = Mock(spec_set=[])
         engine = application._create_repeater(execution, data)
+        if isinstance(application.strategy, CompositeStrategy):
+            strategy = application.strategy
+            assert strategy.source.name == 'BALANCED'
+            assert [(item.algoritm, item.src, item.weight) for item in strategy.source.components] == [
+                ('INDEX', 'IMOEX', Decimal('0.684210526')),
+                ('INDEX', 'BOND', Decimal('0.210526316')),
+                ('INDEX', 'GOLD', Decimal('0.105263158'))]
+            assert sum(item.weight for item in strategy.source.components) == Decimal('1')
+            snapshot = CompositeSnapshot(tuple(
+                {item.ticker: IndexQuote('uid-' + item.ticker, Decimal('10'), 1)
+                 for item in child.config.instruments} for child in strategy.children))
+            target = strategy.build_target(snapshot, Decimal('100000'))
+            assert target.quantities
+            assert 'uid-BOND' in target.quantities and 'uid-GOLD' in target.quantities
+            launches.append(('BALANCED', None, engine.debug))
+            assert engine.strategy is strategy and engine.data is data
+            assert application.dst == 'destination'
+            assert data.mock_calls == execution.mock_calls == []
+            return
         config = application.strategy.config
         snapshot = {item.ticker: IndexQuote('uid-' + item.ticker, Decimal('10'), 1)
                     for item in config.instruments}
@@ -3248,16 +3269,30 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
             else:
                 raise AssertionError('invalid cloud selection accepted')
         os.environ.clear()
-        for environment in [{}, {'ALGORITM': 'INDEX'}, {'SRC_ACCOUNT': 'TMON'}]:
+        for environment in [{}, {'ALGORITM': 'COMPOSITE'}, {'SRC_ACCOUNT': 'BALANCED'}]:
             os.environ.clear()
             os.environ.update(INVEST_TOKEN='test-token', DST_ACCOUNT='destination', **environment)
             with patch.object(index_config, 'read_index_document',
                               wraps=index_config.read_index_document) as reads, \\
                     patch.object(reporting, 'print_index_config_warning') as warnings:
                 result = handler.handler({}, None)
-                assert_one_preparation(reads, warnings)
-            assert result['body'] == 'Success sync, TMON destination!'
-            assert launches[-1] == ('TMON', Decimal('0.0005'), False)
+                assert Counter(Path(item.args[0]) for item in reads.call_args_list) == Counter(
+                    {path: 3 for path in configs.glob('*.json')})
+                assert warnings.call_count == 3
+                assert all('unrelated-broken.json' in item.args[0]
+                           for item in warnings.call_args_list)
+            assert result['body'] == 'Success sync, BALANCED destination!'
+            assert launches[-1] == ('BALANCED', None, False)
+        for environment in [{'ALGORITM': 'INDEX'}, {'SRC_ACCOUNT': 'TMON'}]:
+            os.environ.clear()
+            os.environ.update(environment)
+            try:
+                handler.handler({}, None)
+            except ValueError as error:
+                assert ('src is required' if 'ALGORITM' in environment
+                        else 'unsupported src: TMON') in str(error)
+            else:
+                raise AssertionError('implicit INDEX selection accepted')
         assert local.call_count == 2
         assert cloud.call_count == 7
         assert len(launches) == 9

@@ -1,4 +1,5 @@
 # pylint: disable=too-many-arguments, too-many-positional-arguments
+# pylint: disable=duplicate-code
 """Explicit algorithm selection and isolated, one-pass index preparation."""
 import json
 import subprocess
@@ -11,6 +12,7 @@ import pytest
 
 from autorepeater import strategies
 from autorepeater import index_config
+from autorepeater import composite_config
 from autorepeater import runner as runner_module
 from autorepeater import serverless
 from autorepeater.index_config import load_index_configs, select_index_config
@@ -28,6 +30,7 @@ def selection_environment(monkeypatch):
     monkeypatch.delenv('INDEX_CONFIG_DIR', raising=False)
     monkeypatch.delenv('IMOEX_CONFIG_PATH', raising=False)
     monkeypatch.delenv('ACCOUNT_CONFIG_PATH', raising=False)
+    monkeypatch.delenv('COMPOSITE_CONFIG_DIR', raising=False)
     for name in ('ALGORITM', 'SRC_ACCOUNT', 'DST_ACCOUNT', 'INVEST_TOKEN', 't_token'):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(strategies, 'ALGORITHMS', dict(strategies.ALGORITHMS))
@@ -363,10 +366,11 @@ def test_cloud_query_algorithm_priority(monkeypatch):
     assert result['body'] == f'Success sync, 00123 {serverless.DEFAULT_DST_ACCOUNT}!'
 
 
+@pytest.mark.parametrize('algoritm', ['ACCOUNT', 'INDEX'])
 @pytest.mark.parametrize('query', [{}, {'src': None}, {'src': ''}, {'src': ' '}])
-def test_cloud_requires_explicit_source(monkeypatch, query):
-    """ACCOUNT has no default source; a present empty source never falls back."""
-    monkeypatch.setenv('ALGORITM', 'ACCOUNT')
+def test_cloud_requires_explicit_source(monkeypatch, query, algoritm):
+    """Nondefault algorithms require a source; empty values never fall back."""
+    monkeypatch.setenv('ALGORITM', algoritm)
     if query:
         monkeypatch.setenv('SRC_ACCOUNT', '123')
     with patch.object(serverless, 'Runner') as runner, \
@@ -380,31 +384,39 @@ def test_cloud_requires_explicit_source(monkeypatch, query):
 @pytest.mark.parametrize('event', [
     None, {}, {'queryStringParameters': None}, {'queryStringParameters': {}},
 ])
-def test_cloud_defaults_to_tmon(monkeypatch, event):
-    """A timer invocation selects the bundled single-instrument config once."""
+def test_cloud_defaults_to_balanced(monkeypatch, event):
+    """A timer invocation prepares the exact ordered composition once."""
     monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
     with patch.object(serverless, 'Runner', autospec=True) as runner, \
             patch.object(serverless, 'configure_yc_logging'), \
             patch.object(index_config, 'read_index_document',
-                         wraps=index_config.read_index_document) as read:
+                         wraps=index_config.read_index_document) as read, \
+            patch.object(composite_config, 'read_composite_document',
+                         wraps=composite_config.read_composite_document) as composite_read:
         result = serverless.handler(event, None)
     prepared = runner.call_args.kwargs['prepared_strategy']
     strategy = strategies.create_strategy(prepared)
-    assert strategy.config.name == 'TMON'
-    assert [item.ticker for item in strategy.config.instruments] == ['TMON']
-    assert strategy.config.reserve == Decimal('0.0005')
-    paths = Path(index_config.__file__).with_name('configs').glob('*.json')
-    assert sorted(str(item.args[0]) for item in read.call_args_list) == sorted(map(str, paths))
+    assert strategy.source.name == 'BALANCED'
+    assert [(item.algoritm, item.src, item.weight) for item in strategy.source.components] == [
+        ('INDEX', 'IMOEX', Decimal('0.684210526')),
+        ('INDEX', 'BOND', Decimal('0.210526316')),
+        ('INDEX', 'GOLD', Decimal('0.105263158'))]
+    assert sum(item.weight for item in strategy.source.components) == Decimal('1')
+    assert [child.config.name for child in strategy.children] == ['IMOEX', 'BOND', 'GOLD']
+    paths = list(Path(index_config.__file__).with_name('configs').glob('*.json'))
+    assert sorted(str(item.args[0]) for item in read.call_args_list) == sorted(map(str, paths * 3))
+    composite_read.assert_called_once_with(
+        Path(composite_config.__file__).parent / 'configs/composite/balanced.json')
     runner.assert_called_once_with(token='synthetic-token', prepared_strategy=prepared,
                                    dst=serverless.DEFAULT_DST_ACCOUNT)
     assert runner.return_value.method_calls == [call.run_sync()]
-    assert result['body'] == f'Success sync, TMON {serverless.DEFAULT_DST_ACCOUNT}!'
+    assert result['body'] == f'Success sync, BALANCED {serverless.DEFAULT_DST_ACCOUNT}!'
 
 
 @pytest.mark.parametrize('location', ['query', 'environment'])
-@pytest.mark.parametrize('source', [None, 'GOLD'])
+@pytest.mark.parametrize('source', [None, 'GOLD', 'BALANCED'])
 def test_cloud_partial_index_selection(monkeypatch, location, source):
-    """Missing INDEX source or algorithm uses the cloud defaults, not inference."""
+    """Explicit INDEX needs src; src alone names a COMPOSITE config."""
     monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
     query = {}
     name, value = ('algoritm', 'INDEX') if source is None else ('src', source)
@@ -414,9 +426,31 @@ def test_cloud_partial_index_selection(monkeypatch, location, source):
         monkeypatch.setenv('ALGORITM' if name == 'algoritm' else 'SRC_ACCOUNT', value)
     with patch.object(serverless, 'Runner', autospec=True) as runner, \
             patch.object(serverless, 'configure_yc_logging'):
+        if source != 'BALANCED':
+            with pytest.raises(ValueError, match=(
+                    'src is required' if source is None else 'unsupported src: GOLD')):
+                serverless.handler({'queryStringParameters': query}, None)
+            runner.assert_not_called()
+            return
         serverless.handler({'queryStringParameters': query}, None)
-    assert runner.call_args.kwargs['prepared_strategy'].prepared_source.name == (source or 'TMON')
+    assert runner.call_args.kwargs['prepared_strategy'].prepared_source.name == 'BALANCED'
     runner.return_value.run_sync.assert_called_once_with()
+
+
+@pytest.mark.parametrize('location', ['query', 'environment'])
+def test_cloud_explicit_previous_default(monkeypatch, location):
+    """INDEX/TMON remains selectable explicitly with the same reserve."""
+    monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
+    query = {'algoritm': 'INDEX', 'src': 'TMON'} if location == 'query' else {}
+    if location == 'environment':
+        monkeypatch.setenv('ALGORITM', 'INDEX')
+        monkeypatch.setenv('SRC_ACCOUNT', 'TMON')
+    with patch.object(serverless, 'Runner') as runner, \
+            patch.object(serverless, 'configure_yc_logging'):
+        serverless.handler({'queryStringParameters': query}, None)
+    strategy = strategies.create_strategy(runner.call_args.kwargs['prepared_strategy'])
+    assert strategy.config.name == 'TMON'
+    assert strategy.config.reserve == Decimal('0.0005')
 
 
 @pytest.mark.parametrize('payload', ['{}', '[]', '{"name":"BAD","reserve":"NaN"}'])
@@ -489,7 +523,7 @@ builtins.open = blocked_io
 pathlib.Path.open = blocked_io
 socket.socket = blocked_io
 from autorepeater.strategies import ALGORITHMS, prepare_strategy
-assert set(ALGORITHMS) == {'ACCOUNT', 'INDEX'}
+assert set(ALGORITHMS) == {'ACCOUNT', 'INDEX', 'COMPOSITE'}
 try:
     prepare_strategy('ACCOUNT', '00123')
 except AssertionError as error:
