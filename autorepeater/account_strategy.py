@@ -1,8 +1,9 @@
 """Account source snapshots, target quantities, and synchronization events."""
+from dataclasses import dataclass
 from decimal import Decimal
 
 from autorepeater import reporting
-from autorepeater.constants import DST_MONEY_RESERVED
+from autorepeater.account_config import AccountConfig, load_account_config
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_data import InstrumentType
 from autorepeater.strategy_contract import UnsupportedSourceError
@@ -12,11 +13,18 @@ from autorepeater.triggers import check_triggers
 NANO_QUANT = Decimal('0.000000001')
 
 
+@dataclass(frozen=True)
+class PreparedAccountSource:
+    """Account ID and settings fixed during preparation of one launch."""
+    src: str
+    config: AccountConfig
+
+
 def prepare_account_source(src):
-    """Validate an ASCII account ID without changing leading zeros."""
+    """Validate an ASCII account ID, then load only its own settings."""
     if not isinstance(src, str) or not src.isascii() or not src.isdecimal():
         raise UnsupportedSourceError(f'unsupported src: {src}')
-    return src
+    return PreparedAccountSource(src, load_account_config())
 
 
 def _position_value(position):
@@ -27,13 +35,14 @@ def _position_value(position):
 class AccountStrategy:
     """Repeat one account using fresh snapshots and one subscription per events call."""
 
-    def __init__(self, src):
-        self.src = src
+    def __init__(self, prepared):
+        self.src = prepared.src
+        self.config = prepared.config
 
     @property
     def default_reserve(self):
         """Return the account strategy reserve as a destination-value fraction."""
-        return Decimal(DST_MONEY_RESERVED)
+        return self.config.reserve
 
     def load_snapshot(self, data):
         """Read and report the source; cash does not contribute to its target or value."""

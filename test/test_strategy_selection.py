@@ -15,6 +15,8 @@ from autorepeater import runner as runner_module
 from autorepeater import serverless
 from autorepeater.index_config import load_index_configs, select_index_config
 from autorepeater.index_strategy import IndexQuote
+from autorepeater.account_strategy import PreparedAccountSource
+from autorepeater.account_config import AccountConfig
 from autorepeater.strategy_contract import AlgorithmDefinition
 from scripts import check_imoex_strategy as calibration
 import main as cli
@@ -25,6 +27,7 @@ def selection_environment(monkeypatch):
     """Every selection has controlled paths and a private registry."""
     monkeypatch.delenv('INDEX_CONFIG_DIR', raising=False)
     monkeypatch.delenv('IMOEX_CONFIG_PATH', raising=False)
+    monkeypatch.delenv('ACCOUNT_CONFIG_PATH', raising=False)
     for name in ('ALGORITM', 'SRC_ACCOUNT', 'DST_ACCOUNT', 'INVEST_TOKEN', 't_token'):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(strategies, 'ALGORITHMS', dict(strategies.ALGORITHMS))
@@ -187,10 +190,15 @@ def test_independent_algorithm_never_reads_index_settings(algoritm, src):
     """The meaning of src belongs to its registration, with no index environment access."""
     if algoritm == 'CUSTOM':
         strategies.register_algorithm('CUSTOM', AlgorithmDefinition(lambda value: value, Mock()))
-    with patch.object(index_config.os, 'environ', Mock(spec_set=dict)) as environment:
+    with patch.object(index_config, '_index_paths',
+                      side_effect=AssertionError('index settings read')) as paths:
         prepared = strategies.prepare_strategy(algoritm, src)
-    assert prepared.prepared_source == src
-    assert environment.mock_calls == []
+    if algoritm == 'ACCOUNT':
+        assert prepared.prepared_source == PreparedAccountSource(
+            src, AccountConfig(Decimal('0.01')))
+    else:
+        assert prepared.prepared_source == src
+    paths.assert_not_called()
 
 
 @pytest.mark.parametrize('chosen', ['GOOD', 'BAD'])
@@ -349,7 +357,7 @@ def test_cloud_query_algorithm_priority(monkeypatch):
         result = serverless.handler({'queryStringParameters': {
             'algoritm': 'ACCOUNT', 'src': '00123'}}, None)
     prepared = runner.call_args.kwargs['prepared_strategy']
-    assert prepared.prepared_source == '00123'
+    assert prepared.prepared_source.src == '00123'
     assert runner.call_args.kwargs['token'] == 'legacy-token'
     assert result['body'] == f'Success sync, 00123 {serverless.DEFAULT_DST_ACCOUNT}!'
 
@@ -481,7 +489,12 @@ pathlib.Path.open = blocked_io
 socket.socket = blocked_io
 from autorepeater.strategies import ALGORITHMS, prepare_strategy
 assert set(ALGORITHMS) == {'ACCOUNT', 'INDEX'}
-assert prepare_strategy('ACCOUNT', '00123').prepared_source == '00123'
+try:
+    prepare_strategy('ACCOUNT', '00123')
+except AssertionError as error:
+    assert str(error) == 'I/O forbidden'
+else:
+    raise AssertionError('ACCOUNT preparation must read its own settings')
 '''
     result = subprocess.run([sys.executable, '-c', script],
                             cwd=Path(__file__).resolve().parents[1],

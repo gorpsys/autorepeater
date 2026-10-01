@@ -53,6 +53,8 @@ from t_tech.invest.services import MarketDataService
 from autorepeater.constants import DST_MONEY_RESERVED
 from autorepeater.constants import THRESHOLD
 from autorepeater.account_strategy import AccountStrategy
+from autorepeater.account_strategy import PreparedAccountSource
+from autorepeater.account_config import AccountConfig
 from autorepeater.index_config import IndexConfig, IndexInstrument
 from autorepeater.index_config import load_index_config, load_index_configs
 from autorepeater.index_strategy import IndexQuote, IndexStrategy
@@ -96,6 +98,11 @@ from autorepeater.runner import RunnerParams
 import handler as cloud_entrypoint
 import main as cli
 from scripts import check_imoex_strategy as calibration
+
+
+def account_strategy(src):
+    """Construct a strategy from explicit settings without filesystem I/O."""
+    return AccountStrategy(PreparedAccountSource(src, AccountConfig(Decimal('0.01'))))
 
 
 class TestException(Exception):
@@ -363,8 +370,8 @@ def test_account_strategy_uses_own_data_port_and_models(caplog):
         'share', 'SHR', 'share1', InstrumentType.SHARE, 'TQBR')]
 
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
-        snapshot = AccountStrategy('4').load_snapshot(data)
-    target = AccountStrategy('4').build_target(snapshot, Decimal('21'))
+        snapshot = account_strategy('4').load_snapshot(data)
+    target = account_strategy('4').build_target(snapshot, Decimal('21'))
 
     assert target == TargetPortfolio(
         {'share': Decimal('5.25')}, {'share': Decimal('4')})
@@ -432,7 +439,7 @@ def test_account_strategy_quantizes_each_position_before_sum(client):
             instrument_uid=uid, instrument_type='share',
             current_price=MoneyValue('RUB', 0, 1), quantity=Quotation(0, 600000000))
         for uid in ('1', '2')])]
-    strategy = AccountStrategy('4')
+    strategy = account_strategy('4')
 
     snapshot = strategy.load_snapshot(TInvestStrategyData(client))
 
@@ -648,7 +655,7 @@ def client_tinvest():
 @pytest.fixture(name='auto_repeater')
 def auto_repeater_fixture(client):
     """auto_repeater_fixture - фикстура создаёт и возвращает основной класс передав ему клиента"""
-    return AutoRepeater(client, AccountStrategy('4'), TInvestStrategyData(client))
+    return AutoRepeater(client, account_strategy('4'), TInvestStrategyData(client))
 
 
 @pytest.mark.parametrize(
@@ -889,7 +896,7 @@ def test_get_instrument_fail(client, instruments):
 
 def test_account_strategy_basic_target(client):
     """The account strategy preserves source data and scales it by the budget ratio."""
-    strategy = AccountStrategy('4')
+    strategy = account_strategy('4')
     positions, total = strategy.load_snapshot(TInvestStrategyData(client))
     assert len(positions) == 1
     position = positions['1']
@@ -1487,7 +1494,9 @@ def test_strategy_account_selection_without_sdk(src, client, monkeypatch):
         strategy = strategies.create_strategy(prepared)
     assert isinstance(strategy, AccountStrategy)
     assert strategy.src == src
-    factory.assert_called_once_with(src)
+    factory.assert_called_once_with(prepared.prepared_source)
+    assert prepared.prepared_source == PreparedAccountSource(src, AccountConfig(Decimal('0.01')))
+    assert strategy.config == AccountConfig(Decimal('0.01'))
     sdk_client.assert_not_called()
     assert client.mock_calls == []
 
@@ -1557,7 +1566,7 @@ def test_registered_factory_result_is_validated_before_client(
 
 def test_strategy_numeric_source_uses_selected_algorithm(monkeypatch):
     """A numeric source has no routing priority over the selected algorithm."""
-    factory = Mock(return_value=AccountStrategy('different'))
+    factory = Mock(return_value=account_strategy('different'))
     monkeypatch.setitem(strategies.ALGORITHMS, '0004',
                         AlgorithmDefinition(lambda src: src, factory))
     prepared = strategies.prepare_strategy('0004', '0004')
@@ -1568,7 +1577,7 @@ def test_strategy_numeric_source_uses_selected_algorithm(monkeypatch):
 @pytest.mark.usefixtures('fractional_portfolios')
 def test_account_strategy_fractional_target(client, caplog):
     """Source cash is reported but excluded; quantities and prices share one snapshot."""
-    strategy = AccountStrategy('4')
+    strategy = account_strategy('4')
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
         snapshot = strategy.load_snapshot(TInvestStrategyData(client))
 
@@ -1613,7 +1622,7 @@ def test_account_strategy_target_preserves_division_before_multiplication(client
                             Decimal('0.000000001'), 'three'),
     }, Decimal('3'))
 
-    target = AccountStrategy('4').build_target(snapshot, Decimal('1'))
+    target = account_strategy('4').build_target(snapshot, Decimal('1'))
 
     assert target == TargetPortfolio({
         '1': Decimal('0.9999999999999999999999999999'), '2': Decimal('0'),
@@ -1633,7 +1642,7 @@ def test_account_strategy_loads_fresh_snapshot(client):
             instrument_uid='2', instrument_type='etf',
             quantity=Quotation(3, 0), current_price=MoneyValue('RUB', 5, 0))]),
     ]
-    strategy = AccountStrategy('0004')
+    strategy = account_strategy('0004')
     first = strategy.load_snapshot(TInvestStrategyData(client))
     second = strategy.load_snapshot(TInvestStrategyData(client))
 
@@ -1655,7 +1664,7 @@ def test_account_strategy_load_error(client, caplog):
 
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME), \
             pytest.raises(DataAccessError) as exc_info:
-        AccountStrategy('4').load_snapshot(TInvestStrategyData(client))
+        account_strategy('4').load_snapshot(TInvestStrategyData(client))
 
     assert exc_info.value.__cause__ is error
     assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
@@ -1672,7 +1681,7 @@ def test_account_strategy_load_error(client, caplog):
 def test_account_strategy_zero_source_value(client, positions):
     """Zero source value retains its division error and never yields an empty target."""
     client.operations.get_portfolio.side_effect = [PortfolioResponse(positions=positions)]
-    strategy = AccountStrategy('4')
+    strategy = account_strategy('4')
     snapshot = strategy.load_snapshot(TInvestStrategyData(client))
     client.reset_mock()
 
@@ -1701,7 +1710,7 @@ def test_account_strategy_events(client, position, expected, caplog):
     client.operations_stream.positions_stream.side_effect = [iter([event])]
 
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
-        assert list(AccountStrategy('4').events(TInvestStrategyData(client), '5')) == [expected]
+        assert list(account_strategy('4').events(TInvestStrategyData(client), '5')) == [expected]
 
     assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['4', '5'])]
     assert [(record.levelno, record.getMessage()) for record in caplog.records] == (
@@ -1712,7 +1721,7 @@ def test_account_strategy_empty_events(client):
     """An exhausted stream returns control to the engine without resubscribing itself."""
     client.operations_stream.positions_stream.side_effect = [iter(())]
 
-    assert not list(AccountStrategy('0004').events(TInvestStrategyData(client), '5'))
+    assert not list(account_strategy('0004').events(TInvestStrategyData(client), '5'))
     assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['0004', '5'])]
 
 
@@ -1729,7 +1738,7 @@ def test_account_strategy_event_errors(client, during_iteration):
 
     client.operations_stream.positions_stream.side_effect = [
         interrupted_stream() if during_iteration else error]
-    events = AccountStrategy('4').events(TInvestStrategyData(client), '5')
+    events = account_strategy('4').events(TInvestStrategyData(client), '5')
     if during_iteration:
         assert next(events) is True
     with pytest.raises(DataAccessError) as exc_info:
@@ -2785,10 +2794,15 @@ def test_cloud_archive(tmp_path):
     config_dir.mkdir(parents=True)
     for name in ['Makefile', 'main.py', 'handler.py', 'requirements.txt']:
         shutil.copyfile(repository / name, project / name)
+    (project / 'scripts').mkdir()
+    shutil.copyfile(repository / 'scripts/build_yandex_archive.py',
+                    project / 'scripts/build_yandex_archive.py')
     for source in (repository / 'autorepeater').glob('*.py'):
         shutil.copyfile(source, project / 'autorepeater' / source.name)
-    for source in (repository / 'autorepeater/configs').glob('*.json'):
-        shutil.copyfile(source, config_dir / source.name)
+    for source in (repository / 'autorepeater/configs').rglob('*.json'):
+        relative = source.relative_to(repository / 'autorepeater/configs')
+        (config_dir / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, config_dir / relative)
     extra = json.loads((config_dir / 'imoex.json').read_text(encoding='utf-8'))
     extra.update(name='SECOND_INDEX', min_position_value='2000', reserve='0.02')
     (config_dir / 'different-filename.json').write_text(json.dumps(extra), encoding='utf-8')
@@ -2799,13 +2813,14 @@ def test_cloud_archive(tmp_path):
     assert build.returncode == 0, build.stdout + build.stderr
     extracted = tmp_path / 'extracted'
     expected = {'main.py', 'handler.py', 'requirements.txt'}
-    expected.update(f'autorepeater/configs/{path.name}' for path in config_dir.glob('*.json'))
+    expected.update(path.relative_to(project).as_posix() for path in config_dir.rglob('*.json'))
     expected.update(f'autorepeater/{path.name}'
                     for path in (repository / 'autorepeater').glob('*.py'))
     with ZipFile(project / 'build/yandex-function.zip') as archive:
         assert {item.filename for item in archive.infolist() if not item.is_dir()} == expected
-        for path in config_dir.glob('*.json'):
-            assert archive.read(f'autorepeater/configs/{path.name}') == path.read_bytes()
+        for path in config_dir.rglob('*.json'):
+            assert archive.read(path.relative_to(project).as_posix()) == path.read_bytes()
+        assert 'scripts/build_yandex_archive.py' not in archive.namelist()
         archive.extractall(extracted)
 
     working_directory = tmp_path / 'working'
@@ -2841,6 +2856,10 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
     assert Path(handler.__file__).resolve() == extracted / 'handler.py'
     assert Path(main.__file__).resolve() == extracted / 'main.py'
     assert callable(handler.handler)
+    account = create_strategy(prepare_strategy('ACCOUNT', '00123'))
+    assert account.src == '00123'
+    assert account.config.reserve == Decimal('0.01')
+    assert account.default_reserve == Decimal('0.01')
     strategy = create_strategy(prepare_strategy('INDEX', 'IMOEX'))
     assert isinstance(strategy, IndexStrategy)
     assert strategy.config == load_index_config(extracted / 'autorepeater/configs/imoex.json')
@@ -3147,6 +3166,7 @@ def fixture_index_config_data():
     return {
         'name': 'IMOEX',
         'max_lot_weight_error': '0.05',
+        'reserve': '0.01',
         'instruments': [{
             'ticker': 'AFKS',
             'effective_quantity': '1958950000',
@@ -3584,7 +3604,7 @@ def test_index_config_success(tmp_path, index_config_data):
     """Preserve every reference field as Decimal without reapplying coefficients."""
     config = load_index_config(write_index_config(tmp_path, index_config_data))
     assert config == IndexConfig(
-        name='IMOEX', max_lot_weight_error=Decimal('0.05'),
+        name='IMOEX', max_lot_weight_error=Decimal('0.05'), reserve=Decimal('0.01'),
         instruments=[IndexInstrument(
             ticker='AFKS',
             effective_quantity=Decimal('1958950000'),
@@ -3681,9 +3701,9 @@ def test_index_config_invalid_root(tmp_path, payload):
         load_index_config(write_index_config(tmp_path, payload))
 
 
-@pytest.mark.parametrize('field', ['name', 'max_lot_weight_error', 'instruments'])
+@pytest.mark.parametrize('field', ['name', 'max_lot_weight_error', 'instruments', 'reserve'])
 def test_index_config_missing_root_field(tmp_path, index_config_data, field):
-    """The original top-level fields remain mandatory."""
+    """All required top-level fields, including reserve, must be explicit."""
     del index_config_data[field]
     with pytest.raises(ValueError, match=field):
         load_index_config(write_index_config(tmp_path, index_config_data))
@@ -3816,7 +3836,7 @@ def index_calculation_case(rows, threshold='0.05'):
         for ticker, capitalization, price, _ in rows]
     snapshot = {ticker: IndexQuote(f'uid-{ticker}', Decimal(price), lot)
                 for ticker, _, price, lot in rows}
-    return IndexConfig('IMOEX', Decimal(threshold), instruments), snapshot
+    return IndexConfig('IMOEX', Decimal(threshold), instruments, reserve=Decimal('0.01')), snapshot
 
 
 def test_index_calculation_reference_weights():
@@ -4166,7 +4186,7 @@ def test_index_calculation_order_and_invariants(budget):
     budget = Decimal(budget)
     result = calculate_index_target(config, snapshot, budget)
     reversed_config = IndexConfig(
-        config.name, config.max_lot_weight_error, config.instruments[::-1])
+        config.name, config.max_lot_weight_error, config.instruments[::-1], reserve=config.reserve)
     reversed_snapshot = dict(reversed(list(snapshot.items())))
     assert calculate_index_target(reversed_config, reversed_snapshot, budget) == result
     assert len(result.passes) <= len(config.instruments)
@@ -4478,7 +4498,8 @@ def fixture_public_index_snapshot(tmp_path):
     """Replay the public sandbox capture with its own frozen base, entirely offline."""
     report = json.loads((Path(__file__).parent / 'data' / 'imoex_snapshot.json').read_text(
         encoding='utf-8'), parse_float=Decimal)
-    config = load_index_config(write_index_config(tmp_path, report['config']))
+    config = load_index_config(write_index_config(
+        tmp_path, {**report['config'], 'reserve': '0.01'}))
     snapshot = {ticker: IndexQuote(
         uid=row['uid'], price=Decimal(row['price']), lot=row['lot'], currency=row['currency'],
         time=datetime.fromisoformat(row['time'])) for ticker, row in report['snapshot'].items()}

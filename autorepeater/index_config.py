@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from autorepeater.constants import DST_MONEY_RESERVED
 from autorepeater import reporting
 from autorepeater.strategy_contract import UnsupportedSourceError
 
@@ -27,8 +26,8 @@ class IndexConfig:
     name: str
     max_lot_weight_error: Decimal
     instruments: list[IndexInstrument]
+    reserve: Decimal
     min_position_value: Decimal = Decimal(0)
-    reserve: Decimal = Decimal(DST_MONEY_RESERVED)
 
 
 _INSTRUMENT_RANGES = {
@@ -82,8 +81,7 @@ def validate_index_config(data):
         {'min_position_value': data.get('min_position_value', '0')},
         'min_position_value', 'index config', lambda value: value >= 0)
     reserve = _decimal_field(
-        {'reserve': data.get('reserve', DST_MONEY_RESERVED)},
-        'reserve', 'index config', lambda value: 0 <= value < 1)
+        data, 'reserve', 'index config', lambda value: 0 <= value < 1)
     records = data.get('instruments')
     if not isinstance(records, list) or not records:
         raise ValueError('instruments: expected a nonempty array')
@@ -95,7 +93,7 @@ def validate_index_config(data):
             raise ValueError(f'duplicate ticker: {instrument.ticker}')
         tickers.add(instrument.ticker)
         instruments.append(instrument)
-    return IndexConfig(data['name'], max_error, instruments, minimum, reserve)
+    return IndexConfig(data['name'], max_error, instruments, reserve, minimum)
 
 
 def read_index_document(path):

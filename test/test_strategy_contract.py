@@ -14,6 +14,8 @@ from unittest.mock import Mock, call, create_autospec, patch
 import pytest
 
 from autorepeater.account_strategy import AccountStrategy
+from autorepeater.account_strategy import PreparedAccountSource
+from autorepeater.account_config import AccountConfig
 from autorepeater.index_config import IndexConfig, IndexInstrument
 from autorepeater.index_strategy import IndexStrategy
 from autorepeater.portfolio import TargetPortfolio, validate_target
@@ -93,7 +95,7 @@ def contract_case(algoritm):
         PositionEvent(True, 'dst', (), (MoneyBlocking(Decimal('1')),), 'blocked'),
     ))
     if algoritm == 'ACCOUNT':
-        strategy = AccountStrategy('00123')
+        strategy = AccountStrategy(PreparedAccountSource('00123', AccountConfig(Decimal('0.01'))))
     elif algoritm == 'INDEX':
         config = IndexConfig('CONTRACT', Decimal('0.05'), [IndexInstrument(
             'ONE', Decimal('1'), Decimal('1'), Decimal('1'), Decimal('2'),

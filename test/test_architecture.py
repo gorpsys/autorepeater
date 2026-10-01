@@ -11,7 +11,7 @@ STRATEGIES = {'autorepeater.account_strategy', 'autorepeater.index_strategy'}
 ASSEMBLY = {'autorepeater.strategies', 'autorepeater.runner',
             'autorepeater.repeater', 'autorepeater.tinvest_strategy_data'}
 NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
-           'strategy_contract', 'strategy_data', 'triggers', 'index_config'}
+           'strategy_contract', 'strategy_data', 'triggers', 'index_config', 'account_config'}
 
 
 def forbidden_imports(source, module):
@@ -26,7 +26,8 @@ def forbidden_imports(source, module):
     elif name == 'repeater':
         forbidden = STRATEGIES | {'autorepeater.strategies', 'autorepeater.runner',
                                   'autorepeater.tinvest_strategy_data',
-                                  'autorepeater.index_config', 'autorepeater.triggers'}
+                                  'autorepeater.index_config', 'autorepeater.account_config',
+                                  'autorepeater.triggers'}
 
     violations = []
     for node in ast.walk(ast.parse(source)):
@@ -70,11 +71,16 @@ def forbidden_imports(source, module):
     ('portfolio', 'from . import runner', 'autorepeater.runner'),
     ('reporting', 'from t_tech.invest import Client', 't_tech.invest'),
     ('money', 'import grpc.aio', 'grpc.aio'),
+    ('account_config', 'from t_tech.invest import Client', 't_tech.invest'),
+    ('account_config', 'from .account_strategy import AccountStrategy',
+     'autorepeater.account_strategy'),
+    ('account_config', 'from .strategies import ALGORITHMS', 'autorepeater.strategies'),
     ('repeater', 'from .index_strategy import IndexStrategy', 'autorepeater.index_strategy'),
     ('repeater', 'from autorepeater import strategies', 'autorepeater.strategies'),
     ('repeater', 'from .tinvest_strategy_data import TInvestStrategyData',
      'autorepeater.tinvest_strategy_data'),
     ('repeater', 'from .index_config import IndexConfig', 'autorepeater.index_config'),
+    ('repeater', 'from .account_config import AccountConfig', 'autorepeater.account_config'),
     ('repeater', 'from .triggers import check_triggers', 'autorepeater.triggers'),
     ('index_strategy', 'def helper():\n    import grpc', 'grpc'),
 ])
@@ -92,6 +98,8 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
     ('account_strategy', 'from autorepeater.portfolio import TargetPortfolio'),
     ('account_strategy', 'from .triggers import check_triggers'),
     ('index_strategy', 'from .index_config import select_index_config'),
+    ('account_strategy', 'from .account_config import load_account_config'),
+    ('account_config', 'from decimal import Decimal'),
     ('strategy_contract', 'from .strategy_data import StrategyData'),
     ('reporting', 'from .portfolio import get_portfolio'),
     ('repeater', 'from t_tech.invest import RequestError'),
