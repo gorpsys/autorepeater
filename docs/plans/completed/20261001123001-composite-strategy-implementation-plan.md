@@ -620,3 +620,48 @@ pytest/flake8/покрытие на PR в master и push в master. Провер
 - Любая проверка с API требует нового явно предоставленного токена и отдельного
   согласования режима. Не использовать исторический токен из переписки,
   не выполнять реальные сделки для проверки плана или автоматических тестов.
+
+## Ревью после реализации 01.10.2026
+
+Замечания проверены по исходникам `c3e0617` с окружающим кодом и потребителями.
+Отметки девяти завершённых этапов сохранены; торговые расчёты не изменены.
+
+- CONFIRMED, smells: одинаковая проверка event_accounts в COMPOSITE и движке.
+  Общий [validate_event_accounts](../../../autorepeater/strategy_contract.py#L62)
+  сохраняет типы, порядок и три точных сообщения ValueError. Каждый ребёнок
+  проверяется до объединения; корень проверяется до открытия стрима.
+- CONFIRMED, simplification/create_strategy: обёртка не добавляла поведения.
+  [Публичное имя](../../../autorepeater/strategies.py#L11) теперь alias нейтрального
+  helper; сохранён также create_prepared_strategy. Потребители и патч Runner
+  используют прежние публичные имена, повторной подготовки нет.
+- FALSEPOSITIVE, simplification/print_index_config_warning: предложенный alias
+  нарушает существующее обращение к текущей print_config_warning при вызове.
+  [Обёртка](../../../autorepeater/reporting.py#L29) сохранена. Новый тест подмены
+  общего reporter проходит; проба предложенного alias в памяти ломает этот тест.
+- CONFIRMED, testing: два теста ошибочных событий могли зависнуть при регрессии.
+  Итераторы ограничены AssertionError при повторной подписке; метод дополнительно
+  ограничен при повторном вызове после ValueError до подписки. Пробы bool-coercion,
+  retry ValueError решения и объявления в памяти сразу ломают соответствующие
+  тесты; все подмены восстановлены, мутации в файлы не записывались.
+- Implementation и quality не содержали замечаний; полный набор проверен ниже.
+
+Фактические локальные результаты на окончательном коде, Python 3.12.3:
+
+- TDD: RED 18 failed / 23 passed до реализации; focused GREEN 52 passed.
+  Добавлено 19 тестовых случаев, включая точные ошибки и совместимость reporter.
+- Полный `/tmp/autorepeater-install-check/bin/python -m pytest -q --cov
+  --cov-report=term-missing --cov-report=xml`: 1634 passed, 18 warnings, 79.14 s.
+  Покрытие 99.92% (1298 строк, 1 прежний пропуск index_strategy.py:56);
+  coverage report --fail-under=90 проходит.
+- diff-cover coverage.xml --compare-branch=origin/master --fail-under=90:
+  100%, 348 исполняемых строк, 0 пропусков.
+- Pylint всех 44 Python-файлов: 10.00/10, exit 0; новых файлов Python нет.
+  Strict flake8: 0 ошибок, exit 0. git diff --check проходит.
+- make claude-yandex-archive проходит; все 32 файла побайтно равны исходникам.
+  Изолированные архивные тесты проходят в полном pytest. Облако использует
+  COMPOSITE/BALANCED с INDEX/IMOEX 0.684210526, INDEX/BOND 0.210526316,
+  INDEX/GOLD 0.105263158 в указанном порядке; CLI требует algoritm/src.
+
+API, реальные токены и сделки не использовались. Progress записан только через
+append-progress.sh и исключён из коммита. Push/PR выполняет родитель;
+результатов GitHub CI эта локальная проверка не утверждает.

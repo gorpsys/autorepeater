@@ -16,6 +16,7 @@ from autorepeater.orders import OrderParams
 from autorepeater.orders import get_max_sum_positions_price
 from autorepeater.portfolio import get_portfolio
 from autorepeater.portfolio import validate_target
+from autorepeater.strategy_contract import validate_event_accounts
 from autorepeater.strategy_contract import validate_strategy
 from autorepeater.strategy_data import DataAccessError
 from autorepeater import reporting
@@ -181,15 +182,7 @@ class AutoRepeater:
 
         while True:
             try:
-                accounts = self.strategy.event_accounts(dst)
-                if not isinstance(accounts, tuple) or not accounts:
-                    raise ValueError('strategy event_accounts must return a nonempty tuple')
-                for account in accounts:
-                    if (not isinstance(account, str) or not account
-                            or any(char.isspace() for char in account)):
-                        raise ValueError('strategy event_accounts must contain account strings')
-                if len(set(accounts)) != len(accounts):
-                    raise ValueError('strategy event_accounts must not contain duplicates')
+                accounts = validate_event_accounts(self.strategy.event_accounts(dst))
                 for event in self.data.position_events(accounts):
                     triggered = self.strategy.should_rebalance(event, dst)
                     if not isinstance(triggered, bool):

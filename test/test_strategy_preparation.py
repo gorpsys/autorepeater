@@ -64,6 +64,11 @@ def test_preparation_signatures_are_neutral_and_explicit():
         prepare_composite_source, CompositeStrategy)
 
 
+def test_public_create_strategy_reexports_neutral_helper():
+    """Public imports expose the same factory helper used by nested strategies."""
+    assert strategies.create_strategy is strategy_contract.create_strategy
+
+
 def test_nested_sibling_reuse_retains_every_factory(tree, monkeypatch):
     """Each occurrence is prepared and created separately, with stable factory selection."""
     # The shared source is opaque; its tuple shape is checked below at runtime.

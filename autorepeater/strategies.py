@@ -8,6 +8,7 @@ from autorepeater.strategy_contract import create_strategy as create_prepared_st
 
 
 ALGORITHMS = {}
+create_strategy = create_prepared_strategy
 
 
 def register_algorithm(name, definition):
@@ -52,11 +53,6 @@ class _PreparationContext:  # pylint: disable=too-few-public-methods
 def prepare_strategy(algoritm, src):
     """Prepare a fresh launch tree without constructing strategies or an SDK client."""
     return _PreparationContext().prepare(algoritm, src)
-
-
-def create_strategy(prepared):
-    """Use the saved factory and data, then validate before opening Client."""
-    return create_prepared_strategy(prepared)
 
 
 register_algorithm('ACCOUNT', AlgorithmDefinition(prepare_account_source, AccountStrategy))

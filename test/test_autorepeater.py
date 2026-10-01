@@ -1269,6 +1269,7 @@ def target_strategy_fixture():
 def test_mainflow_rejects_invalid_event_accounts_before_stream(client, target_strategy, accounts):
     """The common consumer rejects malformed declarations without opening a stream."""
     data = create_autospec(StrategyData, instance=True, spec_set=True)
+    data.position_events.side_effect = AssertionError('unexpected subscription')
     target_strategy.event_accounts.return_value = accounts
     engine = AutoRepeater(client, target_strategy, data)
     with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
@@ -1285,7 +1286,7 @@ def test_mainflow_rejects_non_bool_decision_without_retry(client, target_strateg
     """Truthy and falsy non-bools cannot silently change the rebalance decision."""
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     event = PositionEvent(False, '', (), (), 'ping')
-    data.position_events.return_value = iter((event,))
+    data.position_events.side_effect = [iter((event,)), AssertionError('unexpected resubscription')]
     target_strategy.should_rebalance.return_value = decision
     engine = AutoRepeater(client, target_strategy, data)
     with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
@@ -1341,10 +1342,11 @@ def test_mainflow_event_method_value_error_is_not_retried(client, target_strateg
     """Configuration or predicate errors leave the loop immediately."""
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     event = PositionEvent(False, '', (), (), 'ping')
-    data.position_events.return_value = iter((event,))
+    data.position_events.side_effect = [iter((event,)), AssertionError('unexpected resubscription')]
     method = (target_strategy.event_accounts if failure == 'accounts'
               else target_strategy.should_rebalance)
-    method.side_effect = ValueError('invalid event method')
+    method.side_effect = [ValueError('invalid event method'),
+                          AssertionError('unexpected event method retry')]
     engine = AutoRepeater(client, target_strategy, data)
     with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
             pytest.raises(ValueError, match='invalid event method'):

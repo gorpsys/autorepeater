@@ -6,9 +6,16 @@ from unittest.mock import Mock, call, patch
 
 import pytest
 
-from autorepeater import composite_config, index_config
+from autorepeater import composite_config, index_config, reporting
 from autorepeater.config_catalog import Candidate, discover_candidates
 from autorepeater.strategy_contract import UnsupportedSourceError
+
+
+def test_index_warning_delegates_to_current_common_reporter():
+    """Patching the common reporter also intercepts the index compatibility entry."""
+    with patch.object(reporting, 'print_config_warning', autospec=True) as warn:
+        reporting.print_index_config_warning('invalid index document')
+    warn.assert_called_once_with('invalid index document')
 
 
 def test_discovery_reads_once_preserves_names_and_error_text():

@@ -59,6 +59,19 @@ def validate_strategy(strategy):
     return strategy
 
 
+def validate_event_accounts(accounts):
+    """Validate one declaration before opening a stream or merging child accounts."""
+    if not isinstance(accounts, tuple) or not accounts:
+        raise ValueError('strategy event_accounts must return a nonempty tuple')
+    for account in accounts:
+        if (not isinstance(account, str) or not account
+                or any(char.isspace() for char in account)):
+            raise ValueError('strategy event_accounts must contain account strings')
+    if len(set(accounts)) != len(accounts):
+        raise ValueError('strategy event_accounts must not contain duplicates')
+    return accounts
+
+
 def create_strategy(prepared):
     """Use the saved factory and data, then validate without registry or file access."""
     if not isinstance(prepared, PreparedStrategy):

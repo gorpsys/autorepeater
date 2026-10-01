@@ -5,6 +5,7 @@ from decimal import Decimal
 from autorepeater.composite_config import select_composite_config
 from autorepeater.portfolio import TargetPortfolio, validate_target
 from autorepeater.strategy_contract import PreparedStrategy, create_strategy
+from autorepeater.strategy_contract import validate_event_accounts
 
 
 @dataclass(frozen=True)
@@ -78,15 +79,7 @@ class CompositeStrategy:
         """Validate each child's declaration before forming one ordered account union."""
         accounts = {}
         for child in self.children:
-            declared = child.event_accounts(dst_account_id)
-            if not isinstance(declared, tuple) or not declared:
-                raise ValueError('strategy event_accounts must return a nonempty tuple')
-            for account in declared:
-                if (not isinstance(account, str) or not account
-                        or any(char.isspace() for char in account)):
-                    raise ValueError('strategy event_accounts must contain account strings')
-            if len(set(declared)) != len(declared):
-                raise ValueError('strategy event_accounts must not contain duplicates')
+            declared = validate_event_accounts(child.event_accounts(dst_account_id))
             accounts.update(dict.fromkeys(declared))
         return tuple(accounts)
 

@@ -12,6 +12,7 @@ from unittest.mock import ANY, Mock, call, create_autospec, patch
 
 import pytest
 
+from autorepeater import strategy_contract
 from autorepeater.account_strategy import AccountStrategy
 from autorepeater.account_strategy import PreparedAccountSource
 from autorepeater.account_config import AccountConfig
@@ -31,6 +32,36 @@ from autorepeater.strategy_data import (
     DataAccessError, InstrumentInfo, InstrumentMatch, InstrumentType, MoneyBlocking,
     PortfolioEntry, PortfolioSnapshot, PositionEvent, PriceQuote, StrategyData,
 )
+
+
+@pytest.mark.parametrize('accounts, message', [
+    (None, 'must return a nonempty tuple'),
+    ('dst', 'must return a nonempty tuple'),
+    (['dst'], 'must return a nonempty tuple'),
+    ((), 'must return a nonempty tuple'),
+    (('',), 'must contain account strings'),
+    ((' ',), 'must contain account strings'),
+    (('dst ',), 'must contain account strings'),
+    (('a\tb',), 'must contain account strings'),
+    (('a\nb',), 'must contain account strings'),
+    (('a\u00a0b',), 'must contain account strings'),
+    ((None,), 'must contain account strings'),
+    ((5,), 'must contain account strings'),
+    ((True,), 'must contain account strings'),
+    (('dst', []), 'must contain account strings'),
+    (('dst', 'dst'), 'must not contain duplicates'),
+])
+def test_validate_event_accounts_preserves_exact_errors(accounts, message):
+    """The neutral validator retains declaration, ID and duplicate diagnostics."""
+    with pytest.raises(ValueError) as error:
+        strategy_contract.validate_event_accounts(accounts)
+    assert str(error.value) == 'strategy event_accounts ' + message
+
+
+@pytest.mark.parametrize('accounts', [('dst',), ('00123', 'dst', 'other')])
+def test_validate_event_accounts_preserves_order_and_identity(accounts):
+    """Validation keeps opaque IDs and returns the original ordered declaration."""
+    assert strategy_contract.validate_event_accounts(accounts) is accounts
 
 
 @dataclass(frozen=True)
