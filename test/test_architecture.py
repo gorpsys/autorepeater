@@ -1,5 +1,6 @@
 """Static import boundaries; these checks are not a Python execution sandbox."""
 import ast
+import sys
 from importlib.util import resolve_name
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import pytest
 
 
 PACKAGE = Path(__file__).resolve().parents[1] / 'autorepeater'
-STRATEGIES = {'autorepeater.account_strategy', 'autorepeater.index_strategy'}
+STRATEGIES = {f'autorepeater.{path.stem}' for path in PACKAGE.glob('*_strategy.py')}
 ASSEMBLY = {'autorepeater.strategies', 'autorepeater.runner',
             'autorepeater.repeater', 'autorepeater.tinvest_strategy_data'}
 NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
@@ -18,16 +19,17 @@ NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
 def forbidden_imports(source, module):
     """Return forbidden static imports as (line, absolute module) pairs."""
     name = module.rsplit('.', 1)[-1]
+    strategies = {f'autorepeater.{path.stem}' for path in PACKAGE.glob('*_strategy.py')}
     forbidden = set()
-    if module in STRATEGIES or name.endswith('_strategy'):
-        forbidden = (STRATEGIES - {module}) | ASSEMBLY | {'autorepeater.orders'}
+    if module in strategies or name.endswith('_strategy'):
+        forbidden = (strategies - {module}) | ASSEMBLY | {'autorepeater.orders'}
         forbidden |= {'t_tech', 'grpc'}
     elif name in NEUTRAL:
-        forbidden = STRATEGIES | ASSEMBLY | {'autorepeater.orders', 't_tech', 'grpc'}
+        forbidden = strategies | ASSEMBLY | {'autorepeater.orders', 't_tech', 'grpc'}
         if name == 'composite_config':
             forbidden |= {'autorepeater.index_config', 'autorepeater.account_config'}
     elif name == 'repeater':
-        forbidden = STRATEGIES | {'autorepeater.strategies', 'autorepeater.runner',
+        forbidden = strategies | {'autorepeater.strategies', 'autorepeater.runner',
                                   'autorepeater.tinvest_strategy_data',
                                   'autorepeater.index_config', 'autorepeater.account_config',
                                   'autorepeater.composite_config',
@@ -104,6 +106,18 @@ def forbidden_imports(source, module):
      'autorepeater.composite_config'),
     ('repeater', 'from .triggers import check_triggers', 'autorepeater.triggers'),
     ('index_strategy', 'def helper():\n    import grpc', 'grpc'),
+    ('account_strategy', 'from .composite_strategy import CompositeStrategy',
+     'autorepeater.composite_strategy'),
+    ('future_strategy', 'from . import composite_strategy', 'autorepeater.composite_strategy'),
+    ('composite_strategy', 'from .index_strategy import IndexStrategy',
+     'autorepeater.index_strategy'),
+    ('composite_strategy', 'from .strategies import create_strategy', 'autorepeater.strategies'),
+    ('composite_strategy', 'import t_tech.invest', 't_tech.invest'),
+    ('repeater', 'from .composite_strategy import CompositeStrategy',
+     'autorepeater.composite_strategy'),
+    ('strategy_budget', 'from . import composite_strategy', 'autorepeater.composite_strategy'),
+    ('account_config', 'from . import composite_strategy', 'autorepeater.composite_strategy'),
+    ('composite_config', 'from . import composite_strategy', 'autorepeater.composite_strategy'),
 ])
 def test_checker_rejects_forbidden_imports(module, source, dependency):
     """Every import spelling resolves to the forbidden module, including aliases."""
@@ -165,6 +179,14 @@ def test_production_import_boundaries():
         if errors:
             violations[path.name] = errors
     assert not violations
+
+
+def test_checker_discovers_future_strategy_dependencies(tmp_path, monkeypatch):
+    """New strategy files also become forbidden dependencies of neutral modules."""
+    (tmp_path / 'future_strategy.py').write_text('', encoding='utf-8')
+    monkeypatch.setattr(sys.modules[__name__], 'PACKAGE', tmp_path)
+    assert forbidden_imports('from .future_strategy import FutureStrategy',
+                             'autorepeater.portfolio') == [(1, 'autorepeater.future_strategy')]
 
 
 @pytest.mark.parametrize('module', sorted(STRATEGIES))

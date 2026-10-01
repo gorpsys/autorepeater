@@ -8,6 +8,7 @@ class TargetPortfolio:
     """Full target in units, with per-unit estimates used for the threshold."""
     quantities: dict[str, Decimal]
     prices: dict[str, Decimal]
+    empty_reason: str | None = None
 
 
 def validate_target(target):
@@ -16,6 +17,11 @@ def validate_target(target):
         raise ValueError('target quantities must be a dict')
     if not isinstance(target.prices, dict):
         raise ValueError('target prices must be a dict')
+    if target.empty_reason is not None:
+        if not isinstance(target.empty_reason, str):
+            raise ValueError('target empty_reason must be str or None')
+        if target.quantities:
+            raise ValueError('target empty_reason must be absent for nonempty quantities')
     for uid, quantity in target.quantities.items():
         if not isinstance(uid, str) or not uid:
             raise ValueError(f'invalid target quantity UID: {uid}')

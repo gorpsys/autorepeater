@@ -153,7 +153,7 @@ class AutoRepeater:
         target = self.strategy.build_target(snapshot, total_dst)
         validate_target(target)
         if not target.quantities:
-            reporting.print_empty_target(dst_account_id)
+            reporting.print_empty_target(dst_account_id, target.empty_reason)
             return
 
         orders_params_sell = self.calc_sell_positions(

@@ -12,6 +12,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from decimal import Decimal, DivisionByZero
 from pathlib import Path
+from test.test_composite_strategy import make_composite, mock_child
 from unittest.mock import Mock, call, create_autospec, patch
 from zipfile import ZipFile
 
@@ -1622,6 +1623,122 @@ def test_validate_target_rejects_invalid_maps_uids_and_quantities(
     """Target maps, UID keys, and quantities are validated without coercion."""
     with pytest.raises(ValueError, match=message):
         validate_target(TargetPortfolio(quantities, prices))
+
+
+@pytest.mark.parametrize('reason', [None, '', 'INDEX/leaf: empty target'])
+def test_validate_empty_reason_for_empty_target(reason):
+    """Only strings or None may diagnose an empty target."""
+    assert validate_target(TargetPortfolio({}, {}, reason)) is None
+
+
+@pytest.mark.parametrize('reason', [False, 0, [], {}, Decimal('1')])
+def test_validate_target_rejects_nonstring_reason(reason):
+    """Diagnostics do not silently accept arbitrary objects."""
+    with pytest.raises(ValueError, match='empty_reason'):
+        validate_target(TargetPortfolio({}, {}, reason))
+
+
+@pytest.mark.parametrize('reason', ['', 'not empty'])
+@pytest.mark.parametrize('debug', [False, True])
+def test_nonempty_target_reason_blocks_trading(client, target_strategy, reason, debug):
+    """A diagnostic attached to any nonempty target is a contract error before orders."""
+    target_strategy.build_target.return_value = TargetPortfolio(
+        {'1': Decimal('0')}, {'1': Decimal('1')}, reason)
+    engine = AutoRepeater(client, target_strategy, TInvestStrategyData(client))
+    engine.set_debug(debug)
+    with patch.object(engine, 'calc_sell_positions') as sell, \
+            patch.object(engine, 'calc_buy_positions') as buy:
+        with pytest.raises(ValueError, match='empty_reason'):
+            engine.sync_accounts('4')
+        sell.assert_not_called()
+        buy.assert_not_called()
+    client.orders.post_order.assert_not_called()
+
+
+@pytest.mark.parametrize('debug', [False, True])
+@pytest.mark.parametrize('outcome', ['success', 'empty', 'invalid', 'build_error', 'load_error'])
+def test_composite_sync_trades_only_complete_valid_target(
+        client, rotation_portfolios, caplog, debug, outcome):
+    """The real engine trades a single combined target, or aborts before any order work."""
+    _, dst_positions = rotation_portfolios
+    client.operations.get_portfolio.side_effect = [
+        PortfolioResponse(positions=list(dst_positions.values()))]
+    children = [mock_child(TargetPortfolio({'2': Decimal(quantity)}, {'2': Decimal('2')}))
+                for quantity in ('20', '30')]
+    for child in children:
+        child.load_snapshot.side_effect = None
+        child.load_snapshot.return_value = object()
+    if outcome != 'success':
+        children[0].build_target.return_value = TargetPortfolio({}, {})
+    if outcome == 'invalid':
+        children[1].build_target.return_value = TargetPortfolio({'2': Decimal('1')}, {})
+    if outcome in ('build_error', 'load_error'):
+        method = 'build_target' if outcome == 'build_error' else 'load_snapshot'
+        getattr(children[1], method).side_effect = DataAccessError('child unavailable')
+    strategy = make_composite(children, ['0.5', '0.5'])
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
+    engine = AutoRepeater(client, strategy, data)
+    engine.set_debug(debug)
+    with patch.object(engine, 'calc_sell_positions', wraps=engine.calc_sell_positions) as sell, \
+            patch.object(engine, 'calc_buy_positions', wraps=engine.calc_buy_positions) as buy, \
+            patch('autorepeater.repeater.get_max_sum_positions_price',
+                  wraps=get_max_sum_positions_price) as volume, \
+            caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+        if outcome in ('invalid', 'build_error', 'load_error'):
+            with pytest.raises(ValueError if outcome == 'invalid' else DataAccessError):
+                engine.sync_accounts('5')
+        else:
+            engine.sync_accounts('5')
+        if outcome == 'success':
+            sell.assert_called_once_with(dst_positions, {'2': Decimal('50')})
+            buy.assert_called_once_with(dst_positions, {'2': Decimal('50')})
+            assert volume.call_count == (0 if debug else 1)
+        else:
+            sell.assert_not_called()
+            buy.assert_not_called()
+            volume.assert_not_called()
+    assert client.orders.post_order.call_args_list == ([
+        call(instrument_id='1', quantity=100, direction=OrderDirection.ORDER_DIRECTION_SELL,
+             account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE),
+        call(instrument_id='2', quantity=50, direction=OrderDirection.ORDER_DIRECTION_BUY,
+             account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE),
+    ] if outcome == 'success' and not debug else [])
+    if outcome == 'empty':
+        assert caplog.messages[-1] == (
+            'Skipping synchronization for destination 5: COMPOSITE/root -> LEAF/0: empty target')
+    for child in children:
+        child.load_snapshot.assert_called_once_with(data)
+        if outcome != 'load_error':
+            child.build_target.assert_called_once_with(
+                child.load_snapshot.return_value, Decimal('50'))
+        child.event_accounts.assert_not_called()
+        child.should_rebalance.assert_not_called()
+    assert data.mock_calls == []
+
+
+def test_composite_mainflow_opens_one_union_stream_and_evaluates_every_child(client):
+    """The common consumer owns subscriptions and reports each skipped event once."""
+    first, second = mock_child(), mock_child()
+    first.event_accounts.return_value = ('src', '5')
+    second.event_accounts.return_value = ('other', '5')
+    first.should_rebalance.side_effect = [False, True]
+    second.should_rebalance.side_effect = [False, False]
+    events = (PositionEvent(False, '', (), (), 'ping'),
+              PositionEvent(True, '5', (), (MoneyBlocking(Decimal('0')),), 'ready'))
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
+    data.position_events.side_effect = [iter(events), TestException()]
+    engine = AutoRepeater(client, make_composite([first, second]), data)
+    with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
+            patch('autorepeater.reporting.print_skipped_strategy_event') as skip:
+        with pytest.raises(TestException):
+            engine.mainflow('5')
+    assert sync.call_args_list == [call('5'), call('5')]
+    skip.assert_called_once_with(events[0])
+    assert data.mock_calls == [call.position_events(('src', '5', 'other'))] * 2
+    for child in (first, second):
+        assert child.event_accounts.call_args_list == [call('5')] * 2
+        assert child.should_rebalance.call_args_list == [call(event, '5') for event in events]
+    client.orders.post_order.assert_not_called()
 
 
 @pytest.mark.parametrize('src', ['4', '0004', '0', '123456789012345678901234567890'])

@@ -15,6 +15,9 @@ import pytest
 from autorepeater.account_strategy import AccountStrategy
 from autorepeater.account_strategy import PreparedAccountSource
 from autorepeater.account_config import AccountConfig
+from autorepeater.composite_strategy import (
+    CompositeStrategy, PreparedCompositeComponent, PreparedCompositeSource,
+)
 from autorepeater.index_config import IndexConfig, IndexInstrument
 from autorepeater.index_strategy import IndexStrategy
 from autorepeater.logging_config import LOGGER_NAME
@@ -105,6 +108,13 @@ def contract_case(algoritm):
             'ONE', Decimal('1'), Decimal('1'), Decimal('1'), Decimal('2'),
             Decimal('100'), Decimal('12'))], reserve=Decimal('0.03'))
         strategy = IndexStrategy(config)
+    elif algoritm == 'COMPOSITE':
+        source = PreparedCompositeSource('CONTRACT', tuple(
+            PreparedCompositeComponent('INDEPENDENT', 'quote:uid', Decimal('0.5'),
+                                       PreparedStrategy(IndependentStrategy,
+                                                        IndependentSource('uid'), 'quote:uid'))
+            for _ in range(2)))
+        strategy = CompositeStrategy(source)
     else:
         context = create_autospec(PreparationContext, instance=True, spec_set=True)
         source = IndependentStrategy.prepare_source('quote:uid', context)
@@ -113,9 +123,9 @@ def contract_case(algoritm):
     return strategy, data
 
 
-@pytest.fixture(name='case', params=['ACCOUNT', 'INDEX', 'INDEPENDENT'])
+@pytest.fixture(name='case', params=['ACCOUNT', 'INDEX', 'INDEPENDENT', 'COMPOSITE'])
 def fixture_case(request):
-    """Every contract test runs unchanged against all three implementations."""
+    """Every contract test runs unchanged against all implementations."""
     return request.param, *contract_case(request.param)
 
 
@@ -185,6 +195,7 @@ def test_snapshots_and_pure_targets_use_only_own_data(case):
         'INDEX': [call.find_instruments('ONE'), call.get_instrument('uid'),
                   call.get_last_prices(['uid'])],
         'INDEPENDENT': [call.get_last_prices(['uid'])],
+        'COMPOSITE': [call.get_last_prices(['uid'])] * 2,
     }
     assert data.mock_calls == expected_reads[algoritm] * 2
     data.reset_mock()
@@ -194,6 +205,7 @@ def test_snapshots_and_pure_targets_use_only_own_data(case):
     assert target.quantities == {'uid': {
         'ACCOUNT': Decimal('29.70'), 'INDEX': Decimal('27'),
         'INDEPENDENT': Decimal('29.40'),
+        'COMPOSITE': Decimal('29.40'),
     }[algoritm]}
     assert target.prices == {'uid': Decimal('2')}
     assert_own_values(target)
@@ -413,7 +425,7 @@ with patch('builtins.open', side_effect=AssertionError('tree I/O')), \
     else:
         raise AssertionError('missing cycle failure')
 
-for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT'):
+for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT', 'COMPOSITE'):
     strategy, data = contract_case(algorithm)
     validate_strategy(strategy)
     assert data.mock_calls == []
@@ -425,6 +437,7 @@ for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT'):
     assert target.quantities == {'uid': {
         'ACCOUNT': Decimal('29.70'), 'INDEX': Decimal('27'),
         'INDEPENDENT': Decimal('29.40'),
+        'COMPOSITE': Decimal('29.40'),
     }[algorithm]}
     assert target.prices == {'uid': Decimal('2')}
     assert data.mock_calls == []

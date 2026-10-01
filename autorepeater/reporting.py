@@ -136,10 +136,10 @@ def print_skipped_strategy_event(event):
     logger.log(IMPORTANT, event.diagnostic_text)
 
 
-def print_empty_target(dst_account_id):
+def print_empty_target(dst_account_id, reason=None):
     """Explain why a synchronization leaves destination holdings untouched."""
-    logger.log(IMPORTANT, 'Skipping synchronization for destination %s: empty target',
-               dst_account_id)
+    logger.log(IMPORTANT, 'Skipping synchronization for destination %s: %s',
+               dst_account_id, reason or 'empty target')
 
 
 def _calibration_json_value(value):
