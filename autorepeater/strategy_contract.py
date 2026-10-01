@@ -13,18 +13,25 @@ class UnsupportedSourceError(ValueError):
 
 
 @dataclass(frozen=True)
-class AlgorithmDefinition:
-    """Separate source preparation from strategy construction."""
-    prepare_source: Callable[[str], object]
-    create: Callable[[object], 'Strategy']
-
-
-@dataclass(frozen=True)
 class PreparedStrategy:
     """One launch's factory and opaque prepared source, with a display label."""
     create: Callable[[object], 'Strategy']
     prepared_source: object
     source_display: str
+
+
+class PreparationContext(Protocol):  # pylint: disable=too-few-public-methods
+    """Prepare nested sources without depending on a registry or concrete strategies."""
+
+    def prepare(self, algoritm: str, src: str) -> PreparedStrategy:
+        """Prepare one child in the current launch's active path."""
+
+
+@dataclass(frozen=True)
+class AlgorithmDefinition:
+    """Separate source preparation from strategy construction."""
+    prepare_source: Callable[[str, PreparationContext], object]
+    create: Callable[[object], 'Strategy']
 
 
 class Strategy(Protocol):
@@ -50,3 +57,10 @@ def validate_strategy(strategy):
             raise TypeError(f'strategy {method_name} must be callable')
 
     return strategy
+
+
+def create_strategy(prepared):
+    """Use the saved factory and data, then validate without registry or file access."""
+    if not isinstance(prepared, PreparedStrategy):
+        raise TypeError('create_strategy requires PreparedStrategy')
+    return validate_strategy(prepared.create(prepared.prepared_source))

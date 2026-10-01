@@ -2,12 +2,13 @@
 import json
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import create_autospec, patch
 
 import pytest
 
 from autorepeater import account_config, strategies, runner, serverless
 from autorepeater.account_strategy import AccountStrategy, prepare_account_source
+from autorepeater.strategy_contract import PreparationContext
 import main as cli
 
 
@@ -50,7 +51,9 @@ def test_missing_account_reserve():
 def test_bundled_account_config_from_other_cwd(tmp_path, monkeypatch):
     """The default file belongs to the module, independent of cwd."""
     monkeypatch.chdir(tmp_path)
-    prepared = prepare_account_source('00123')
+    context = create_autospec(PreparationContext, instance=True, spec_set=True)
+    prepared = prepare_account_source('00123', context)
+    context.prepare.assert_not_called()
     assert prepared.src == '00123'
     assert prepared.config.reserve == Decimal('0.01')
     with patch('builtins.open', side_effect=AssertionError('constructor I/O')), \
@@ -99,7 +102,8 @@ def test_invalid_account_path(tmp_path, monkeypatch, path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv('ACCOUNT_CONFIG_PATH', path)
     with pytest.raises(ValueError, match='account config'):
-        prepare_account_source('00123')
+        prepare_account_source('00123', create_autospec(
+            PreparationContext, instance=True, spec_set=True))
 
 
 @pytest.mark.parametrize('payload', ['{', '', '{}', '[]', '{"reserve":true}',
@@ -136,7 +140,8 @@ def test_unreadable_account_config(tmp_path, monkeypatch):
     monkeypatch.setenv('ACCOUNT_CONFIG_PATH', str(path))
     with patch('builtins.open', side_effect=PermissionError('cannot read')):
         with pytest.raises(ValueError, match='cannot read') as error:
-            prepare_account_source('00123')
+            prepare_account_source('00123', create_autospec(
+                PreparationContext, instance=True, spec_set=True))
     assert str(path) in str(error.value)
     assert isinstance(error.value.__cause__, PermissionError)
 
@@ -145,7 +150,8 @@ def test_invalid_account_source_does_not_read_settings():
     """Validate the source before loading even the algorithm's own config."""
     with patch('builtins.open', side_effect=AssertionError('config read')):
         with pytest.raises(ValueError, match='unsupported src'):
-            prepare_account_source('IMOEX')
+            prepare_account_source('IMOEX', create_autospec(
+                PreparationContext, instance=True, spec_set=True))
 
 
 def test_absolute_account_path(tmp_path, monkeypatch):

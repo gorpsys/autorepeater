@@ -2,7 +2,8 @@
 from autorepeater.account_strategy import AccountStrategy, prepare_account_source
 from autorepeater.index_strategy import IndexStrategy, prepare_index_source
 from autorepeater.strategy_contract import AlgorithmDefinition, PreparedStrategy
-from autorepeater.strategy_contract import UnsupportedSourceError, validate_strategy
+from autorepeater.strategy_contract import UnsupportedSourceError
+from autorepeater.strategy_contract import create_strategy as create_prepared_strategy
 
 
 ALGORITHMS = {}
@@ -20,23 +21,41 @@ def register_algorithm(name, definition):
     ALGORITHMS[name] = definition
 
 
+class _PreparationContext:  # pylint: disable=too-few-public-methods
+    """Track active source pairs for one launch; completed siblings can be reused."""
+
+    def __init__(self):
+        self.path = []
+
+    def prepare(self, algoritm, src):
+        """Save one definition's prepared data, rejecting cycles in the active path."""
+        if not isinstance(algoritm, str) or not algoritm or algoritm.isspace():
+            raise ValueError('algoritm is required')
+        if algoritm not in ALGORITHMS:
+            raise ValueError(f'unsupported algoritm: {algoritm}')
+        if src is None or (isinstance(src, str) and not src.strip()):
+            raise UnsupportedSourceError('src is required')
+        pair = (algoritm, src)
+        if pair in self.path:
+            chain = ' -> '.join(f'{algorithm}/{source}' for algorithm, source in self.path + [pair])
+            raise ValueError(f'strategy preparation cycle: {chain}')
+        definition = ALGORITHMS[algoritm]
+        self.path.append(pair)
+        try:
+            return PreparedStrategy(
+                definition.create, definition.prepare_source(src, self), str(src))
+        finally:
+            self.path.pop()
+
+
 def prepare_strategy(algoritm, src):
-    """Delegate preparation once; do not construct a strategy or SDK client."""
-    if not isinstance(algoritm, str) or not algoritm or algoritm.isspace():
-        raise ValueError('algoritm is required')
-    if algoritm not in ALGORITHMS:
-        raise ValueError(f'unsupported algoritm: {algoritm}')
-    if src is None or (isinstance(src, str) and not src.strip()):
-        raise UnsupportedSourceError('src is required')
-    definition = ALGORITHMS[algoritm]
-    return PreparedStrategy(definition.create, definition.prepare_source(src), str(src))
+    """Prepare a fresh launch tree without constructing strategies or an SDK client."""
+    return _PreparationContext().prepare(algoritm, src)
 
 
 def create_strategy(prepared):
     """Use the saved factory and data, then validate before opening Client."""
-    if not isinstance(prepared, PreparedStrategy):
-        raise TypeError('create_strategy requires PreparedStrategy')
-    return validate_strategy(prepared.create(prepared.prepared_source))
+    return create_prepared_strategy(prepared)
 
 
 register_algorithm('ACCOUNT', AlgorithmDefinition(prepare_account_source, AccountStrategy))

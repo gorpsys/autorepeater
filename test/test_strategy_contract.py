@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from unittest.mock import Mock, call, create_autospec, patch
+from unittest.mock import ANY, Mock, call, create_autospec, patch
 
 import pytest
 
@@ -20,7 +20,10 @@ from autorepeater.index_strategy import IndexStrategy
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.portfolio import TargetPortfolio, validate_target
 from autorepeater.strategy_budget import available_budget
-from autorepeater.strategy_contract import AlgorithmDefinition, Strategy, validate_strategy
+from autorepeater.strategy_contract import (
+    AlgorithmDefinition, PreparationContext, PreparedStrategy, Strategy, create_strategy,
+    validate_strategy,
+)
 from autorepeater.strategy_data import (
     DataAccessError, InstrumentInfo, InstrumentMatch, InstrumentType, MoneyBlocking,
     PortfolioEntry, PortfolioSnapshot, PositionEvent, PriceQuote, StrategyData,
@@ -48,7 +51,7 @@ class IndependentStrategy:
         self.reserve = Decimal('0.02')
 
     @staticmethod
-    def prepare_source(src):
+    def prepare_source(src, context):  # pylint: disable=unused-argument
         """Only the algorithm defines the quote: source syntax."""
         if not isinstance(src, str) or not src.startswith('quote:') or not src[6:]:
             raise ValueError('expected quote:<uid>')
@@ -103,7 +106,10 @@ def contract_case(algoritm):
             Decimal('100'), Decimal('12'))], reserve=Decimal('0.03'))
         strategy = IndexStrategy(config)
     else:
-        strategy = IndependentStrategy(IndependentStrategy.prepare_source('quote:uid'))
+        context = create_autospec(PreparationContext, instance=True, spec_set=True)
+        source = IndependentStrategy.prepare_source('quote:uid', context)
+        context.prepare.assert_not_called()
+        strategy = create_strategy(PreparedStrategy(IndependentStrategy, source, 'quote:uid'))
     return strategy, data
 
 
@@ -340,7 +346,7 @@ def assert_launch_execution(launch, streaming):
     from t_tech import invest
 
     client, data, prepare, create, sdk_client, adapter = launch
-    prepare.assert_called_once_with('quote:uid')
+    prepare.assert_called_once_with('quote:uid', ANY)
     create.assert_called_once_with(IndependentSource('uid'))
     sdk_client.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
     sdk_client.return_value.__enter__.assert_called_once_with()
@@ -380,6 +386,32 @@ from autorepeater.strategy_contract import validate_strategy
 from autorepeater.portfolio import validate_target
 from autorepeater.strategy_data import DataAccessError
 from decimal import Decimal
+from autorepeater import strategies
+from autorepeater.strategy_contract import AlgorithmDefinition, create_strategy
+from test.test_strategy_contract import IndependentStrategy
+from test.test_strategy_preparation import TreePreparation, create_tree
+from unittest.mock import patch
+
+nodes = {'root': (('TREE', 'branch'), ('TREE', 'branch')),
+         'branch': (('INDEPENDENT', 'quote:uid'),)}
+strategies.register_algorithm('INDEPENDENT', AlgorithmDefinition(
+    IndependentStrategy.prepare_source, IndependentStrategy))
+strategies.register_algorithm('TREE', AlgorithmDefinition(TreePreparation(nodes).prepare, create_tree))
+with patch('builtins.open', side_effect=AssertionError('tree I/O')), \
+        patch('pathlib.Path.open', side_effect=AssertionError('tree I/O')):
+    prepared = strategies.prepare_strategy('TREE', 'root')
+    tree = create_strategy(prepared)
+    first, second = tree.children
+    assert first is not second
+    assert first.children[0] is not second.children[0]
+    assert first.children[0].source.uid == second.children[0].source.uid == 'uid'
+    nodes['branch'] = (('TREE', 'root'),)
+    try:
+        strategies.prepare_strategy('TREE', 'root')
+    except ValueError as error:
+        assert 'TREE/root -> TREE/branch -> TREE/root' in str(error)
+    else:
+        raise AssertionError('missing cycle failure')
 
 for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT'):
     strategy, data = contract_case(algorithm)
@@ -396,7 +428,6 @@ for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT'):
     }[algorithm]}
     assert target.prices == {'uid': Decimal('2')}
     assert data.mock_calls == []
-    from unittest.mock import patch
     events = tuple(data.position_events.return_value)
     with patch('builtins.open', side_effect=AssertionError('event I/O')), \
             patch('pathlib.Path.open', side_effect=AssertionError('event I/O')):

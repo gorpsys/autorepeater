@@ -21,7 +21,7 @@ class PreparedAccountSource:
     config: AccountConfig
 
 
-def prepare_account_source(src):
+def prepare_account_source(src, context):  # pylint: disable=unused-argument
     """Validate an ASCII account ID, then load only its own settings."""
     if not isinstance(src, str) or not src.isascii() or not src.isdecimal():
         raise UnsupportedSourceError(f'unsupported src: {src}')

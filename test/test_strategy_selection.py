@@ -5,7 +5,7 @@ import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import pytest
 
@@ -67,18 +67,18 @@ def test_registration_prepares_once_without_creating(monkeypatch):
     opaque = object()
     strategy = Mock(spec_set=[
         'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'])
-    prepare = Mock(return_value=opaque)
+    prepare = Mock(side_effect=lambda src, context: opaque)
     create = Mock(return_value=strategy)
     strategies.register_algorithm('CUSTOM', AlgorithmDefinition(prepare, create))
     monkeypatch.setenv('INDEX_CONFIG_DIR', '/missing-index')
     monkeypatch.setenv('IMOEX_CONFIG_PATH', '/also-missing')
     prepared = strategies.prepare_strategy('CUSTOM', 'own-source')
     create.assert_not_called()
-    prepare.assert_called_once_with('own-source')
+    prepare.assert_called_once_with('own-source', ANY)
     monkeypatch.delitem(strategies.ALGORITHMS, 'CUSTOM')
     assert strategies.create_strategy(prepared) is strategy
     create.assert_called_once_with(opaque)
-    prepare.assert_called_once_with('own-source')
+    prepare.assert_called_once_with('own-source', ANY)
 
 
 def test_selected_valid_config_survives_foreign_errors(documents, tmp_path, caplog):
@@ -189,7 +189,8 @@ def test_selected_schema_error_stops_before_factory_and_client(documents, monkey
 def test_independent_algorithm_never_reads_index_settings(algoritm, src):
     """The meaning of src belongs to its registration, with no index environment access."""
     if algoritm == 'CUSTOM':
-        strategies.register_algorithm('CUSTOM', AlgorithmDefinition(lambda value: value, Mock()))
+        strategies.register_algorithm('CUSTOM', AlgorithmDefinition(
+            lambda value, context: value, Mock()))
     with patch.object(index_config, '_index_paths',
                       side_effect=AssertionError('index settings read')) as paths:
         prepared = strategies.prepare_strategy(algoritm, src)
@@ -291,7 +292,7 @@ def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog
             prepared = strategies.prepare_strategy('INDEX', 'GOOD')
             client.assert_not_called()
             runner_module.Runner('synthetic-token', prepared, 'dst').run_sync()
-        prepare.assert_called_once_with('GOOD')
+        prepare.assert_called_once_with('GOOD', ANY)
         create.assert_called_once()
         assert sorted(str(item.args[0]) for item in read.call_args_list) == sorted(
             str(path) for path in tmp_path.glob('*.json'))

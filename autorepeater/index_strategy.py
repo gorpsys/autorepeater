@@ -12,7 +12,7 @@ from autorepeater.strategy_data import InstrumentType
 INDEX_BOARDS = {InstrumentType.SHARE: 'TQBR', InstrumentType.ETF: 'TQTF'}
 
 
-def prepare_index_source(src):
+def prepare_index_source(src, context):  # pylint: disable=unused-argument
     """Prepare the exact JSON name using an isolated, one-pass selection."""
     return select_index_config(src)
 

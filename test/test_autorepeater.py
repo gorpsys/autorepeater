@@ -1672,7 +1672,7 @@ def test_strategy_named_registration_is_exact_and_validation_is_pure(monkeypatch
         'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'])
     factory = Mock(return_value=strategy)
     monkeypatch.setitem(strategies.ALGORITHMS, 'TEST',
-                        AlgorithmDefinition(lambda src: src, factory))
+                        AlgorithmDefinition(lambda src, context: src, factory))
     with patch('t_tech.invest.Client', autospec=True) as sdk_client:
         prepared = strategies.prepare_strategy('TEST', 'TEST')
         factory.assert_not_called()
@@ -1696,7 +1696,7 @@ def test_registered_factory_result_is_validated_before_client(
     """A registered factory cannot defer an invalid strategy failure until SDK startup."""
     factory = Mock(return_value=invalid_strategy)
     monkeypatch.setitem(strategies.ALGORITHMS, 'BROKEN',
-                        AlgorithmDefinition(lambda src: src, factory))
+                        AlgorithmDefinition(lambda src, context: src, factory))
 
     with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
             patch.object(runner_module, 'configure_local_logging', autospec=True), \
@@ -1711,7 +1711,7 @@ def test_strategy_numeric_source_uses_selected_algorithm(monkeypatch):
     """A numeric source has no routing priority over the selected algorithm."""
     factory = Mock(return_value=account_strategy('different'))
     monkeypatch.setitem(strategies.ALGORITHMS, '0004',
-                        AlgorithmDefinition(lambda src: src, factory))
+                        AlgorithmDefinition(lambda src, context: src, factory))
     prepared = strategies.prepare_strategy('0004', '0004')
     assert strategies.create_strategy(prepared).src == 'different'
     factory.assert_called_once_with('0004')
@@ -2748,7 +2748,7 @@ def named_strategy_factory_fixture(client, target_strategy, monkeypatch):
     target_strategy.should_rebalance.side_effect = [False, True, False]
     factory = Mock(return_value=target_strategy)
     monkeypatch.setitem(strategies.ALGORITHMS, 'TEST',
-                        AlgorithmDefinition(lambda src: src, factory))
+                        AlgorithmDefinition(lambda src, context: src, factory))
     portfolios = {'5': PortfolioResponse(positions=[
         PortfolioPosition(
             instrument_type='share', instrument_uid='1',
@@ -3447,7 +3447,7 @@ def test_index_duplicate_names_fail(configured_indexes, index_config_data, monke
             load_index_configs()
     else:
         monkeypatch.setitem(strategies.ALGORITHMS, 'ALPHA',
-                            AlgorithmDefinition(lambda src: src, factory))
+                            AlgorithmDefinition(lambda src, context: src, factory))
     assert isinstance(strategies.prepare_strategy('INDEX', 'BETA').prepared_source, IndexConfig)
     factory.assert_not_called()
 
