@@ -1,5 +1,4 @@
 # pylint: disable=too-many-arguments, too-many-positional-arguments
-# pylint: disable=duplicate-code
 """Explicit algorithm selection and isolated, one-pass index preparation."""
 import json
 import subprocess
@@ -397,10 +396,10 @@ def test_cloud_defaults_to_balanced(monkeypatch, event):
     prepared = runner.call_args.kwargs['prepared_strategy']
     strategy = strategies.create_strategy(prepared)
     assert strategy.source.name == 'BALANCED'
-    assert [(item.algoritm, item.src, item.weight) for item in strategy.source.components] == [
-        ('INDEX', 'IMOEX', Decimal('0.684210526')),
-        ('INDEX', 'BOND', Decimal('0.210526316')),
-        ('INDEX', 'GOLD', Decimal('0.105263158'))]
+    assert [(item.algoritm, item.src, str(item.weight)) for item in strategy.source.components] == [
+        ('INDEX', 'IMOEX', '0.684210526'),
+        ('INDEX', 'BOND', '0.210526316'),
+        ('INDEX', 'GOLD', '0.105263158')]
     assert sum(item.weight for item in strategy.source.components) == Decimal('1')
     assert [child.config.name for child in strategy.children] == ['IMOEX', 'BOND', 'GOLD']
     paths = list(Path(index_config.__file__).with_name('configs').glob('*.json'))

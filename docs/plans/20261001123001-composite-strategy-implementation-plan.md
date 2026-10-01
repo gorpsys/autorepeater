@@ -495,13 +495,17 @@ strict flake8 и git diff --check без ошибок. Контрактный su
 прогоне старое ожидание отсутствия COMPOSITE в test_strategy_preparation
 обновлено на проверку регистрации и нейтральной сигнатуры.
 Финальный `/tmp/autorepeater-install-check/bin/python -m pytest -q`:
-1591 passed (62.20s); прогон с покрытием: 1591 passed (49.16s), 99.93%.
+1591 passed (37.52s); прогон с покрытием: 1591 passed (49.16s), 99.93%.
 `coverage report --fail-under=90` и `diff-cover --compare-branch=origin/master
 --fail-under=90` прошли, diff-покрытие 100% (354 строки).
 Pylint изменённых Python-файлов: 10.00/10; strict flake8 и
 `git diff --check` прошли. Дополнительный pylint всего репозитория сообщил
-3 R0801 между composite_config и index_config; изменение селекторов
-не входит в этап 7. Актуальные облачные defaults обновлены в README/AGENTS;
+3 R0801 между composite_config и index_config; точные места записаны
+в progress-composite-strategy.txt. По указанию пользователя эти дубликаты
+обязательно устранить до финального CI на этапе 9/fixer, сохранив независимые
+импорты схем. Подавления duplicate-code в тестах этапа 7 удалены;
+повторный полный pytest и touched lint прошли без ослабления настроек.
+Актуальные облачные defaults обновлены в README/AGENTS;
 вложенные JSON проверены текущим архивным probe без Client/сети/торговли.
 Этапы 8 и 9 не отмечены; публикацию выполняет родитель.
 

@@ -1,8 +1,9 @@
 # pylint: disable=redefined-outer-name,too-many-arguments,too-many-positional-arguments
-# pylint: disable=duplicate-code,too-many-locals
+# pylint: disable=too-many-locals
 """Real entrypoints and engine with saved composite trees and mocked execution."""
 import json
 import sys
+from contextlib import nullcontext
 from decimal import Decimal
 from test.test_strategy_contract import EndOfTestStream
 from test.test_strategy_contract import fixture_launch  # pylint: disable=unused-import
@@ -115,13 +116,10 @@ def test_nested_tree_launches_through_actual_engine(execution, monkeypatch, entr
             monkeypatch.setenv('SRC_ACCOUNT', 'MISSING')
         return cloud.handler({'queryStringParameters': query}, None)
 
-    if streaming:
-        with pytest.raises(EndOfTestStream):
-            invoke()
-    else:
+    with pytest.raises(EndOfTestStream) if streaming else nullcontext():
         result = invoke()
-        if entrypoint in ('query', 'environment'):
-            assert result['body'] == 'Success sync, ROOT dst!'
+    if entrypoint in ('query', 'environment'):
+        assert result['body'] == 'Success sync, ROOT dst!'
     count = 2 if streaming else 1
     assert client.orders.post_order.call_args_list == expected_orders() * count
     assert client.operations.get_portfolio.call_args_list == [call(account_id='dst')] * count
