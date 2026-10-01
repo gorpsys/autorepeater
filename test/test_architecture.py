@@ -13,7 +13,7 @@ ASSEMBLY = {'autorepeater.strategies', 'autorepeater.runner',
             'autorepeater.repeater', 'autorepeater.tinvest_strategy_data'}
 NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
            'strategy_contract', 'strategy_data', 'triggers', 'index_config', 'account_config',
-           'strategy_budget', 'composite_config'}
+           'strategy_budget', 'composite_config', 'config_catalog'}
 
 
 def forbidden_imports(source, module):
@@ -28,6 +28,9 @@ def forbidden_imports(source, module):
         forbidden = strategies | ASSEMBLY | {'autorepeater.orders', 't_tech', 'grpc'}
         if name == 'composite_config':
             forbidden |= {'autorepeater.index_config', 'autorepeater.account_config'}
+        if name == 'config_catalog':
+            forbidden |= {'autorepeater.index_config', 'autorepeater.composite_config',
+                          'autorepeater.account_config'}
     elif name == 'repeater':
         forbidden = strategies | {'autorepeater.strategies', 'autorepeater.runner',
                                   'autorepeater.tinvest_strategy_data',
@@ -55,6 +58,14 @@ def forbidden_imports(source, module):
 
 
 @pytest.mark.parametrize('module, source, dependency', [
+    ('config_catalog', 'import t_tech.invest', 't_tech.invest'),
+    ('config_catalog', 'from .strategies import ALGORITHMS', 'autorepeater.strategies'),
+    ('config_catalog', 'from .index_config import IndexConfig', 'autorepeater.index_config'),
+    ('config_catalog', 'from .composite_config import CompositeConfig',
+     'autorepeater.composite_config'),
+    ('config_catalog', 'from .account_config import AccountConfig', 'autorepeater.account_config'),
+    ('config_catalog', 'from .composite_strategy import CompositeStrategy',
+     'autorepeater.composite_strategy'),
     ('account_strategy', 'import t_tech.invest as sdk', 't_tech.invest'),
     ('index_strategy', 'from grpc import RpcError', 'grpc'),
     ('index_strategy', 'from t_tech.invest import InstrumentIdType', 't_tech.invest'),
@@ -126,6 +137,9 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
 
 
 @pytest.mark.parametrize('module, source', [
+    ('config_catalog', 'from .strategy_contract import UnsupportedSourceError'),
+    ('index_config', 'from .config_catalog import discover_candidates, select_candidate'),
+    ('composite_config', 'from .config_catalog import discover_candidates, select_candidate'),
     ('account_strategy', 'import decimal'),
     ('index_strategy', 'from .strategy_data import InstrumentType'),
     ('index_strategy', 'from . import reporting'),

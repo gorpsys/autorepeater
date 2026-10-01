@@ -375,32 +375,17 @@ def test_nonfinite_json_numbers_fail_schema(literal):
         composite_config.validate_composite_config(payload)
 
 
-def test_import_has_no_io_sdk_strategy_registry_or_foreign_config_dependencies():
+def test_import_has_no_io_sdk_strategy_registry_or_foreign_config_dependencies(
+        guarded_import_script):
     """A fresh interpreter imports the schema while forbidden edges are blocked."""
-    script = '''
-import builtins
-import pathlib
-import socket
-
-original_import = builtins.__import__
-def guarded_import(name, *args, **kwargs):
-    if name.startswith(('t_tech', 'grpc', 'autorepeater.strategies',
-                        'autorepeater.account_strategy', 'autorepeater.index_strategy',
-                        'autorepeater.index_config', 'autorepeater.account_config')):
-        raise AssertionError('forbidden schema dependency: ' + name)
-    return original_import(name, *args, **kwargs)
-def blocked_io(*args, **kwargs):
-    raise AssertionError('I/O forbidden')
-builtins.__import__ = guarded_import
-builtins.open = blocked_io
-pathlib.Path.open = blocked_io
-pathlib.Path.glob = blocked_io
-pathlib.Path.is_dir = blocked_io
-socket.socket = blocked_io
+    script = guarded_import_script(
+        ('t_tech', 'grpc', 'autorepeater.strategies', 'autorepeater.account_strategy',
+         'autorepeater.index_strategy', 'autorepeater.index_config',
+         'autorepeater.account_config'), '''
 from autorepeater.composite_config import validate_composite_config
 assert validate_composite_config({'name': '00123', 'components': [
     {'algoritm': 'CUSTOM', 'src': 'opaque', 'weight': '1'}]}).name == '00123'
-'''
+''')
     result = subprocess.run([sys.executable, '-c', script],
                             cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, check=False, timeout=30)

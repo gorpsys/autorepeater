@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 
 from autorepeater import reporting
-from autorepeater.strategy_contract import UnsupportedSourceError
+from autorepeater.config_catalog import discover_candidates, select_candidate
 
 
 @dataclass(frozen=True)
@@ -103,56 +103,11 @@ def _composite_paths():
     return paths
 
 
-@dataclass
-class _Candidate:
-    path: Path
-    name: str | None
-    config: CompositeConfig | None
-    error: ValueError | None
-
-
 def _discover_candidates():
-    candidates = []
-    for path in _composite_paths():
-        name = None
-        config = None
-        error = None
-        try:
-            document = read_composite_document(path)
-            if isinstance(document, dict) and isinstance(document.get('name'), str):
-                name = document['name']
-            config = validate_composite_config(document)
-        except (OSError, ValueError) as cause:
-            label = f'{path} ({name})' if name is not None else str(path)
-            error = ValueError(f'{label}: {cause}')
-        candidates.append(_Candidate(path, name, config, error))
-    return candidates
-
-
-def _duplicate_message(name, candidates):
-    paths = ', '.join(str(candidate.path) for candidate in candidates)
-    return f'duplicate strategy name: {name} ({paths})'
+    return discover_candidates(
+        _composite_paths(), read_composite_document, validate_composite_config)
 
 
 def select_composite_config(name):
     """Select an exact name, warning about foreign errors without substituting them."""
-    candidates = _discover_candidates()
-    catalog = {}
-    for candidate in candidates:
-        if candidate.name is not None:
-            catalog.setdefault(candidate.name, []).append(candidate)
-        if candidate.error is not None and candidate.name != name:
-            reporting.print_config_warning(str(candidate.error))
-    for candidate_name, matches in catalog.items():
-        if candidate_name != name and len(matches) > 1:
-            reporting.print_config_warning(_duplicate_message(candidate_name, matches))
-    matches = catalog.get(name, []) if isinstance(name, str) else []
-    if not matches:
-        problems = ', '.join(str(item.path) for item in candidates if item.error is not None)
-        detail = f'; problematic files: {problems}' if problems else ''
-        raise UnsupportedSourceError(f'unsupported src: {name}{detail}')
-    if len(matches) != 1:
-        raise ValueError(_duplicate_message(name, matches))
-    if matches[0].error is not None:
-        raise matches[0].error
-    return matches[0].config
+    return select_candidate(_discover_candidates(), name, reporting.print_config_warning)

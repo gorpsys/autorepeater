@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from autorepeater import reporting
+from autorepeater.config_catalog import discover_candidates, select_candidate
 from autorepeater.strategy_contract import UnsupportedSourceError
 
 @dataclass
@@ -126,73 +127,18 @@ def _index_paths():
     return paths
 
 
-@dataclass
-class _Candidate:
-    path: Path
-    name: str | None
-    config: IndexConfig | None
-    error: ValueError | None
-
-
 def _discover_candidates():
-    candidates = []
-    for path in _index_paths():
-        name = None
-        config = None
-        error = None
-        try:
-            document = read_index_document(path)
-            if isinstance(document, dict) and isinstance(document.get('name'), str):
-                name = document['name']
-            config = validate_index_config(document)
-        except (OSError, ValueError) as cause:
-            label = f'{path} ({name})' if name is not None else str(path)
-            error = ValueError(f'{label}: {cause}')
-        candidates.append(_Candidate(path, name, config, error))
-    return candidates
-
-
-def _catalog(candidates):
-    catalog = {}
-    for candidate in candidates:
-        if candidate.name is not None:
-            catalog.setdefault(candidate.name, []).append(candidate)
-    return catalog
-
-
-def _duplicate_message(name, candidates):
-    paths = ', '.join(str(candidate.path) for candidate in candidates)
-    return f'duplicate strategy name: {name} ({paths})'
-
-
-def _warn_foreign_candidates(candidates, catalog, selected):
-    for candidate in candidates:
-        if candidate.error is not None and candidate.name != selected:
-            reporting.print_index_config_warning(str(candidate.error))
-    for name, matches in catalog.items():
-        if name != selected and len(matches) > 1:
-            reporting.print_index_config_warning(_duplicate_message(name, matches))
+    return discover_candidates(_index_paths(), read_index_document, validate_index_config)
 
 
 def select_index_config(name=None):
     """Select one exact JSON name; isolate foreign errors and read each file once."""
     candidates = _discover_candidates()
-    catalog = _catalog(candidates)
     if name is None:
         if len(candidates) != 1 or candidates[0].error is not None:
             raise UnsupportedSourceError('--src must name a configured index strategy')
         return candidates[0].config
-    _warn_foreign_candidates(candidates, catalog, name)
-    matches = catalog.get(name, []) if isinstance(name, str) else []
-    if not matches:
-        problems = ', '.join(str(item.path) for item in candidates if item.error is not None)
-        detail = f'; problematic files: {problems}' if problems else ''
-        raise UnsupportedSourceError(f'unsupported src: {name}{detail}')
-    if len(matches) != 1:
-        raise ValueError(_duplicate_message(name, matches))
-    if matches[0].error is not None:
-        raise matches[0].error
-    return matches[0].config
+    return select_candidate(candidates, name, reporting.print_index_config_warning)
 
 
 def load_index_configs():

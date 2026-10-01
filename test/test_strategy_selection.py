@@ -503,24 +503,9 @@ def test_calibrator_uses_same_single_pass_selection(documents, monkeypatch, capl
         client.assert_called_once()
 
 
-def test_registry_import_does_not_read_files_or_sdk():
+def test_registry_import_does_not_read_files_or_sdk(guarded_import_script):
     """A fresh process imports built-in registrations without filesystem or network I/O."""
-    script = '''
-import builtins
-import pathlib
-import socket
-
-original_import = builtins.__import__
-def guarded_import(name, *args, **kwargs):
-    if name.startswith(('t_tech', 'grpc')):
-        raise AssertionError('SDK import forbidden')
-    return original_import(name, *args, **kwargs)
-def blocked_io(*args, **kwargs):
-    raise AssertionError('I/O forbidden')
-builtins.__import__ = guarded_import
-builtins.open = blocked_io
-pathlib.Path.open = blocked_io
-socket.socket = blocked_io
+    script = guarded_import_script(('t_tech', 'grpc'), '''
 from autorepeater.strategies import ALGORITHMS, prepare_strategy
 assert set(ALGORITHMS) == {'ACCOUNT', 'INDEX', 'COMPOSITE'}
 try:
@@ -529,7 +514,7 @@ except AssertionError as error:
     assert str(error) == 'I/O forbidden'
 else:
     raise AssertionError('ACCOUNT preparation must read its own settings')
-'''
+''')
     result = subprocess.run([sys.executable, '-c', script],
                             cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, check=False, timeout=30)
