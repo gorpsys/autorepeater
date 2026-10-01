@@ -181,8 +181,22 @@ class AutoRepeater:
 
         while True:
             try:
-                for triggered in self.strategy.events(self.data, dst):
+                accounts = self.strategy.event_accounts(dst)
+                if not isinstance(accounts, tuple) or not accounts:
+                    raise ValueError('strategy event_accounts must return a nonempty tuple')
+                for account in accounts:
+                    if (not isinstance(account, str) or not account
+                            or any(char.isspace() for char in account)):
+                        raise ValueError('strategy event_accounts must contain account strings')
+                if len(set(accounts)) != len(accounts):
+                    raise ValueError('strategy event_accounts must not contain duplicates')
+                for event in self.data.position_events(accounts):
+                    triggered = self.strategy.should_rebalance(event, dst)
+                    if not isinstance(triggered, bool):
+                        raise ValueError('strategy should_rebalance must return bool')
                     if triggered:
                         self.sync_accounts(dst)
+                    else:
+                        reporting.print_skipped_strategy_event(event)
             except (DataAccessError, RequestError) as err:
                 logger.error(err)

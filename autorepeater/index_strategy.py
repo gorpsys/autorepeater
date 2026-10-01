@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_FLOOR
 
-from autorepeater import reporting
 from autorepeater.index_config import select_index_config
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_budget import available_budget
@@ -97,17 +96,17 @@ class IndexStrategy:
         return build_index_target(
             self.config, snapshot, available_budget(budget, self.config.reserve))
 
-    def events(self, data, dst_account_id):
-        """Recalculate populated, fully unblocked destinations; propagate stream errors."""
-        for event in data.position_events([dst_account_id]):
-            triggered = (
-                event.has_position and event.account_id == dst_account_id
-                and bool(event.securities or event.money)
-                and all(item.blocked == 0 for item in event.securities)
-                and all(item.blocked_value == 0 for item in event.money))
-            if not triggered:
-                reporting.print_skipped_strategy_event(event)
-            yield triggered
+    def event_accounts(self, dst_account_id):
+        """Watch only destination positions; prices do not trigger synchronization."""
+        return (dst_account_id,)
+
+    def should_rebalance(self, event, dst_account_id):
+        """Recalculate populated destinations only when every blocking is zero."""
+        return (
+            event.has_position and event.account_id == dst_account_id
+            and bool(event.securities or event.money)
+            and all(item.blocked == 0 for item in event.securities)
+            and all(item.blocked_value == 0 for item in event.money))
 
 
 @dataclass

@@ -483,7 +483,8 @@ def test_repeater_passes_only_data_port_to_strategy(client, target_strategy):
     repeater.sync_accounts('5')
 
     target_strategy.load_snapshot.assert_called_once_with(data)
-    target_strategy.events.assert_not_called()
+    target_strategy.event_accounts.assert_not_called()
+    target_strategy.should_rebalance.assert_not_called()
 
 
 def test_mainflow_recovers_from_data_access_error(client, target_strategy):
@@ -491,14 +492,17 @@ def test_mainflow_recovers_from_data_access_error(client, target_strategy):
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     target_strategy.load_snapshot.side_effect = [DataAccessError('source unavailable'), object()]
     target_strategy.build_target.return_value = TargetPortfolio({}, {})
-    target_strategy.events.side_effect = [iter([True]), TestException()]
+    event = PositionEvent(True, '5', (), (), 'ready')
+    data.position_events.side_effect = [iter((event,)), TestException()]
     repeater = AutoRepeater(client, target_strategy, data)
 
     with pytest.raises(TestException):
         repeater.mainflow('5')
 
     assert target_strategy.load_snapshot.call_args_list == [call(data), call(data)]
-    assert target_strategy.events.call_args_list == [call(data, '5'), call(data, '5')]
+    assert target_strategy.event_accounts.call_args_list == [call('5'), call('5')]
+    target_strategy.should_rebalance.assert_called_once_with(event, '5')
+    assert data.position_events.call_args_list == [call(('5',)), call(('5',))]
 
 
 @pytest.mark.parametrize(
@@ -1127,7 +1131,8 @@ def test_engine_never_reads_leaf_reserve(client):
         """Fail immediately if the engine inspects either old or internal reserve."""
         load_snapshot = Mock(return_value=object())
         build_target = Mock(return_value=TargetPortfolio({}, {}))
-        events = Mock(return_value=iter(()))
+        event_accounts = Mock(return_value=('5',))
+        should_rebalance = Mock(return_value=False)
 
         @property
         def reserve(self):
@@ -1249,26 +1254,159 @@ def fractional_portfolios_fixture(client):
 @pytest.fixture(name='target_strategy')
 def target_strategy_fixture():
     """Only the strategy contract exists; the snapshot cannot be unpacked."""
-    strategy = Mock(spec_set=['load_snapshot', 'build_target', 'events'])
+    strategy = create_autospec(Strategy, instance=True, spec_set=True)
     strategy.load_snapshot.return_value = object()
+    strategy.event_accounts.return_value = ('5',)
+    strategy.should_rebalance.return_value = True
     return strategy
+
+
+@pytest.mark.parametrize('accounts', [
+    None, '5', ['5'], (), ('',), (' ',), ('5 ',), ('a\tb',), (None,), (5,),
+    (True,), ('5', '5'), ('5', []),
+])
+def test_mainflow_rejects_invalid_event_accounts_before_stream(client, target_strategy, accounts):
+    """The common consumer rejects malformed declarations without opening a stream."""
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
+    target_strategy.event_accounts.return_value = accounts
+    engine = AutoRepeater(client, target_strategy, data)
+    with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
+            pytest.raises(ValueError, match='event_accounts'):
+        engine.mainflow('5')
+    sync.assert_called_once_with('5')
+    target_strategy.event_accounts.assert_called_once_with('5')
+    target_strategy.should_rebalance.assert_not_called()
+    assert data.mock_calls == []
+
+
+@pytest.mark.parametrize('decision', [None, 0, 1, '', 'yes', [], object()])
+def test_mainflow_rejects_non_bool_decision_without_retry(client, target_strategy, decision):
+    """Truthy and falsy non-bools cannot silently change the rebalance decision."""
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
+    event = PositionEvent(False, '', (), (), 'ping')
+    data.position_events.return_value = iter((event,))
+    target_strategy.should_rebalance.return_value = decision
+    engine = AutoRepeater(client, target_strategy, data)
+    with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
+            pytest.raises(ValueError, match='should_rebalance.*bool'):
+        engine.mainflow('5')
+    sync.assert_called_once_with('5')
+    target_strategy.event_accounts.assert_called_once_with('5')
+    target_strategy.should_rebalance.assert_called_once_with(event, '5')
+    data.position_events.assert_called_once_with(('5',))
+
+
+def test_mainflow_consumes_events_lazily_and_reports_each_skip_once(client, target_strategy):
+    """One shared stream is advanced only after handling the previous event."""
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
+    target_strategy.event_accounts.return_value = ('00123', '5')
+    events = [PositionEvent(False, '', (), (), 'ping'),
+              PositionEvent(True, '5', (), (), 'ready')]
+    consumed = []
+    timeline = Mock()
+    timeline.attach_mock(target_strategy, 'strategy')
+    timeline.attach_mock(data, 'data')
+
+    def stream():
+        for event in events:
+            consumed.append(event)
+            yield event
+
+    def decide(event, dst_account_id):
+        assert consumed == events[:events.index(event) + 1]
+        assert dst_account_id == '5'
+        return event.has_position
+
+    data.position_events.side_effect = [stream(), TestException()]
+    target_strategy.should_rebalance.side_effect = decide
+    engine = AutoRepeater(client, target_strategy, data)
+    with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
+            patch.object(reporting, 'print_skipped_strategy_event', autospec=True) as skipped:
+        timeline.attach_mock(sync, 'sync')
+        with pytest.raises(TestException):
+            engine.mainflow('5')
+    assert timeline.mock_calls == [
+        call.sync('5'), call.strategy.event_accounts('5'),
+        call.data.position_events(('00123', '5')),
+        call.strategy.should_rebalance(events[0], '5'),
+        call.strategy.should_rebalance(events[1], '5'), call.sync('5'),
+        call.strategy.event_accounts('5'), call.data.position_events(('00123', '5')),
+    ]
+    skipped.assert_called_once_with(events[0])
+
+
+@pytest.mark.parametrize('failure', ['accounts', 'decision'])
+def test_mainflow_event_method_value_error_is_not_retried(client, target_strategy, failure):
+    """Configuration or predicate errors leave the loop immediately."""
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
+    event = PositionEvent(False, '', (), (), 'ping')
+    data.position_events.return_value = iter((event,))
+    method = (target_strategy.event_accounts if failure == 'accounts'
+              else target_strategy.should_rebalance)
+    method.side_effect = ValueError('invalid event method')
+    engine = AutoRepeater(client, target_strategy, data)
+    with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
+            pytest.raises(ValueError, match='invalid event method'):
+        engine.mainflow('5')
+    sync.assert_called_once_with('5')
+    target_strategy.event_accounts.assert_called_once_with('5')
+    assert data.position_events.call_args_list == ([call(('5',))] if failure == 'decision' else [])
+
+
+@pytest.mark.parametrize('failure', ['open', 'read', 'initial_sync', 'event_sync', 'end'])
+@pytest.mark.parametrize('error_type', [DataAccessError, RequestError])
+def test_common_event_stream_recovers_transport_failures(
+        client, target_strategy, failure, error_type, caplog):
+    """The consumer recovers both transport error types at each stream/sync boundary."""
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
+    event = PositionEvent(True, '5', (), (), 'ready')
+    error = (RequestError(StatusCode.UNAVAILABLE, 'common stream failed', ())
+             if error_type is RequestError else DataAccessError('common stream failed'))
+
+    def failing_stream():
+        yield PositionEvent(False, '', (), (), 'ping')
+        raise error
+
+    first_stream = {'open': error, 'read': failing_stream(), 'initial_sync': iter(()),
+                    'event_sync': iter((event, event)), 'end': iter(())}[failure]
+    data.position_events.side_effect = [first_stream, iter((event,)), TestException()]
+    target_strategy.should_rebalance.side_effect = lambda incoming, _dst: incoming.has_position
+    results = ([error, None] if failure == 'initial_sync' else
+               [None, error, None] if failure == 'event_sync' else [None, None])
+    engine = AutoRepeater(client, target_strategy, data)
+    with patch.object(engine, 'sync_accounts', autospec=True, side_effect=results) as sync, \
+            caplog.at_level(logging.ERROR, logger=logging_config.LOGGER_NAME), \
+            pytest.raises(TestException):
+        engine.mainflow('5')
+    assert sync.call_args_list == [call('5')] * len(results)
+    assert data.position_events.call_args_list == [call(('5',))] * 3
+    assert target_strategy.event_accounts.call_args_list == [call('5')] * 3
+    expected_events = ([PositionEvent(False, '', (), (), 'ping'), event] if failure == 'read'
+                       else [event, event] if failure == 'event_sync' else [event])
+    assert target_strategy.should_rebalance.call_args_list == [
+        call(incoming, '5') for incoming in expected_events]
+    if failure == 'event_sync':
+        assert next(first_stream) is event
+    assert caplog.messages == ([] if failure == 'end' else [str(error)])
+    client.orders.post_order.assert_not_called()
 
 
 def test_strategy_protocol_declares_complete_runtime_surface():
     """The shared protocol documents the complete surface consumed by the engine."""
     assert Strategy._is_protocol is True  # pylint: disable=protected-access
     assert 'default_reserve' not in Strategy.__dict__
+    assert 'events' not in Strategy.__dict__
     assert {
-        'load_snapshot', 'build_target', 'events'
+        'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'
     } <= set(Strategy.__dict__)
 
 
 @pytest.mark.parametrize('missing_member', [
-    'load_snapshot', 'build_target', 'events',
+    'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance',
 ])
 def test_direct_repeater_rejects_incomplete_strategy_before_use(client, missing_member):
     """Direct construction enforces the same strategy boundary as registered factories."""
-    members = ['load_snapshot', 'build_target', 'events']
+    members = ['load_snapshot', 'build_target', 'event_accounts', 'should_rebalance']
     members.remove(missing_member)
     strategy = Mock(spec_set=members)
 
@@ -1313,7 +1451,8 @@ def test_sync_strategy_snapshot_order(client, target_strategy, debug):
                 instrument_id='1', quantity=quantity, direction=OrderDirection.ORDER_DIRECTION_BUY,
                 account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE))
     assert timeline.mock_calls == expected
-    target_strategy.events.assert_not_called()
+    target_strategy.event_accounts.assert_not_called()
+    target_strategy.should_rebalance.assert_not_called()
     client.operations_stream.positions_stream.assert_not_called()
 
 
@@ -1381,7 +1520,8 @@ def test_sync_liquidation_uses_destination_price(
     assert client.orders.post_order.call_args_list == ([call(
         instrument_id='1', quantity=100, direction=OrderDirection.ORDER_DIRECTION_SELL,
         account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE)] if submit else [])
-    target_strategy.events.assert_not_called()
+    target_strategy.event_accounts.assert_not_called()
+    target_strategy.should_rebalance.assert_not_called()
 
 
 @pytest.mark.parametrize('debug', [False, True])
@@ -1528,7 +1668,8 @@ def test_strategy_rejects_unsupported_source_without_construction(src, message):
 
 def test_strategy_named_registration_is_exact_and_validation_is_pure(monkeypatch):
     """Only the selected registration interprets src and constructs a strategy."""
-    strategy = Mock(spec_set=['load_snapshot', 'build_target', 'events'])
+    strategy = Mock(spec_set=[
+        'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'])
     factory = Mock(return_value=strategy)
     monkeypatch.setitem(strategies.ALGORITHMS, 'TEST',
                         AlgorithmDefinition(lambda src: src, factory))
@@ -1545,9 +1686,10 @@ def test_strategy_named_registration_is_exact_and_validation_is_pure(monkeypatch
 
 @pytest.mark.parametrize('invalid_strategy, member', [
     (object(), 'load_snapshot'),
-    (Mock(spec_set=['build_target', 'events']), 'load_snapshot'),
-    (Mock(spec_set=['load_snapshot', 'events']), 'build_target'),
-    (Mock(spec_set=['load_snapshot', 'build_target']), 'events'),
+    (Mock(spec_set=['build_target', 'event_accounts', 'should_rebalance']), 'load_snapshot'),
+    (Mock(spec_set=['load_snapshot', 'event_accounts', 'should_rebalance']), 'build_target'),
+    (Mock(spec_set=['load_snapshot', 'build_target', 'should_rebalance']), 'event_accounts'),
+    (Mock(spec_set=['load_snapshot', 'build_target', 'event_accounts']), 'should_rebalance'),
 ])
 def test_registered_factory_result_is_validated_before_client(
         monkeypatch, invalid_strategy, member):
@@ -1705,30 +1847,36 @@ def test_account_strategy_zero_source_value(client, positions):
     (PositionData(account_id='other', money=[], securities=[
         PositionsSecurities(instrument_uid='1', blocked=0)]), False),
 ])
-def test_account_strategy_events(client, position, expected, caplog):
-    """One call consumes one subscription and reports only skipped SDK responses."""
-    event = PositionsStreamResponse(position=position)
-    client.operations_stream.positions_stream.side_effect = [iter([event])]
-
+def test_account_strategy_event_predicate(client, position, expected, caplog):
+    """ACCOUNT makes a pure decision from the adapter's own event."""
+    client.operations_stream.positions_stream.side_effect = [iter([
+        PositionsStreamResponse(position=position)])]
+    strategy = account_strategy('4')
+    accounts = strategy.event_accounts('5')
+    assert accounts == ('4', '5')
+    event = next(TInvestStrategyData(client).position_events(accounts))
+    client.reset_mock()
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
-        assert list(account_strategy('4').events(TInvestStrategyData(client), '5')) == [expected]
-
-    assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['4', '5'])]
-    assert [(record.levelno, record.getMessage()) for record in caplog.records] == (
-        [] if expected else [(logging_config.IMPORTANT, str(event))])
+        assert strategy.should_rebalance(event, '5') is expected
+    assert client.mock_calls == []
+    assert caplog.records == []
 
 
 def test_account_strategy_empty_events(client):
-    """An exhausted stream returns control to the engine without resubscribing itself."""
-    client.operations_stream.positions_stream.side_effect = [iter(())]
-
-    assert not list(account_strategy('0004').events(TInvestStrategyData(client), '5'))
-    assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['0004', '5'])]
+    """The common engine reopens an exhausted ACCOUNT stream, keeping leading zeros."""
+    client.operations_stream.positions_stream.side_effect = [iter(()), TestException()]
+    engine = AutoRepeater(client, account_strategy('0004'), TInvestStrategyData(client))
+    with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
+            pytest.raises(TestException):
+        engine.mainflow('5')
+    sync.assert_called_once_with('5')
+    assert client.mock_calls == [
+        call.operations_stream.positions_stream(accounts=['0004', '5'])] * 2
 
 
 @pytest.mark.parametrize('during_iteration', [False, True])
 def test_account_strategy_event_errors(client, during_iteration):
-    """Errors opening or reading a stream reach the engine after at most one subscription."""
+    """The common engine reopens after adapter errors when opening or reading a stream."""
     error = RequestError(code=StatusCode.UNAVAILABLE, details='stream unavailable', metadata=())
 
     def interrupted_stream():
@@ -1738,15 +1886,13 @@ def test_account_strategy_event_errors(client, during_iteration):
         raise error
 
     client.operations_stream.positions_stream.side_effect = [
-        interrupted_stream() if during_iteration else error]
-    events = account_strategy('4').events(TInvestStrategyData(client), '5')
-    if during_iteration:
-        assert next(events) is True
-    with pytest.raises(DataAccessError) as exc_info:
-        next(events)
-
-    assert exc_info.value.__cause__ is error
-    assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['4', '5'])]
+        interrupted_stream() if during_iteration else error, TestException()]
+    engine = AutoRepeater(client, account_strategy('4'), TInvestStrategyData(client))
+    with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
+            pytest.raises(TestException):
+        engine.mainflow('5')
+    assert sync.call_args_list == [call('5')] * (2 if during_iteration else 1)
+    assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['4', '5'])] * 2
 
 
 def test_sync_target_fractional_portfolios(auto_repeater, client, fractional_portfolios):
@@ -2228,15 +2374,18 @@ def test_mainflow_value_error_keeps_previous_successful_orders(client, target_st
         TargetPortfolio({'1': Decimal('2')}, {'1': Decimal('1.2')}),
         ValueError('invalid next target'),
     ]
-    target_strategy.events.return_value = iter([True])
     data = create_autospec(StrategyData, instance=True, spec_set=True)
+    event = PositionEvent(True, '5', (), (), 'ready')
+    data.position_events.return_value = iter((event,))
     repeater = AutoRepeater(client, target_strategy, data)
 
     with pytest.raises(ValueError, match='invalid next target'):
         repeater.mainflow('5')
 
     assert target_strategy.load_snapshot.call_args_list == [call(data), call(data)]
-    target_strategy.events.assert_called_once_with(data, '5')
+    target_strategy.event_accounts.assert_called_once_with('5')
+    target_strategy.should_rebalance.assert_called_once_with(event, '5')
+    data.position_events.assert_called_once_with(('5',))
     client.orders.post_order.assert_called_once_with(
         instrument_id='1', quantity=2,
         direction=OrderDirection.ORDER_DIRECTION_BUY,
@@ -2596,7 +2745,7 @@ def named_strategy_factory_fixture(client, target_strategy, monkeypatch):
     target_strategy.build_target.return_value = TargetPortfolio(
         {'1': Decimal('2'), '2': Decimal('3')},
         {'1': Decimal('5'), '2': Decimal('10')})
-    target_strategy.events.side_effect = [iter([False, True, False]), TestException()]
+    target_strategy.should_rebalance.side_effect = [False, True, False]
     factory = Mock(return_value=target_strategy)
     monkeypatch.setitem(strategies.ALGORITHMS, 'TEST',
                         AlgorithmDefinition(lambda src: src, factory))
@@ -2612,8 +2761,11 @@ def named_strategy_factory_fixture(client, target_strategy, monkeypatch):
     ])}
     client.operations.get_portfolio.side_effect = lambda **kwargs: portfolios[kwargs['account_id']]
     client.users.get_accounts.return_value = GetAccountsResponse(accounts=[])
-    client.operations_stream.positions_stream.side_effect = AssertionError(
-        'Named strategies must not subscribe to account positions')
+    client.operations_stream.positions_stream.side_effect = [
+        iter([PositionsStreamResponse(position=None), PositionsStreamResponse(position=PositionData(
+            account_id='5', securities=[], money=[])), PositionsStreamResponse(position=None)]),
+        TestException(),
+    ]
     return factory
 
 
@@ -2663,15 +2815,22 @@ def test_named_strategy_launches(
         call.load_snapshot(strategy_data),
         call.build_target(target_strategy.load_snapshot.return_value, Decimal('100')),
     ]
-    assert target_strategy.mock_calls == (sync_calls + [call.events(strategy_data, '5')] +
-                                         sync_calls + [call.events(strategy_data, '5')]
-                                         if streaming else sync_calls)
+    ping = PositionEvent(False, '', (), (), str(PositionsStreamResponse(position=None)))
+    ready = PositionEvent(True, '5', (), (), str(PositionsStreamResponse(position=PositionData(
+        account_id='5', securities=[], money=[]))))
+    assert target_strategy.mock_calls == (
+        sync_calls + [call.event_accounts('5'), call.should_rebalance(ping, '5'),
+                      call.should_rebalance(ready, '5')] + sync_calls
+        + [call.should_rebalance(ping, '5'), call.event_accounts('5')]
+        if streaming else sync_calls)
     if not streaming:
-        target_strategy.events.assert_not_called()
+        target_strategy.event_accounts.assert_not_called()
+        target_strategy.should_rebalance.assert_not_called()
     sync_count = 2 if streaming else 1
     assert client.operations.get_portfolio.call_args_list == [call(account_id='5')] * sync_count
     assert client.users.get_accounts.call_args_list == ([call()] if streaming else [])
-    client.operations_stream.positions_stream.assert_not_called()
+    assert client.operations_stream.positions_stream.call_args_list == (
+        [call(accounts=['5'])] * 2 if streaming else [])
     assert client.orders.post_order.call_args_list == [
         call(instrument_id='1', quantity=3, direction=OrderDirection.ORDER_DIRECTION_SELL,
              account_id='5', order_type=OrderType.ORDER_TYPE_BESTPRICE),
@@ -3419,17 +3578,19 @@ def test_index_config_error_before_client(
         PositionsMoney(blocked_value=MoneyValue('RUB', 0, 1)),
         PositionsMoney(blocked_value=MoneyValue('USD', 0, 0))]), False),
 ])
-def test_index_events(client, index_sdk_config, position, expected, caplog):
+def test_index_event_predicate(client, index_sdk_config, position, expected, caplog):
     """Every security and currency must be unblocked, with at least one position."""
-    event = PositionsStreamResponse(position=position)
-    client.operations_stream.positions_stream.side_effect = [iter([event])]
+    client.operations_stream.positions_stream.side_effect = [iter([
+        PositionsStreamResponse(position=position)])]
+    strategy = IndexStrategy(index_sdk_config)
+    accounts = strategy.event_accounts('5')
+    assert accounts == ('5',)
+    event = next(TInvestStrategyData(client).position_events(accounts))
+    client.reset_mock()
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
-        decisions = list(IndexStrategy(index_sdk_config).events(TInvestStrategyData(client), '5'))
-    assert len(decisions) == 1
-    assert decisions[0] is expected
-    assert client.mock_calls == [call.operations_stream.positions_stream(accounts=['5'])]
-    assert [(record.levelno, record.getMessage()) for record in caplog.records] == (
-        [] if expected else [(logging_config.IMPORTANT, str(event))])
+        assert strategy.should_rebalance(event, '5') is expected
+    assert client.mock_calls == []
+    assert caplog.records == []
 
 
 @pytest.mark.parametrize('failure', ['open', 'read', 'sync', 'end'])

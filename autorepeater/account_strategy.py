@@ -34,7 +34,7 @@ def _position_value(position):
 
 
 class AccountStrategy:
-    """Repeat one account using fresh snapshots and one subscription per events call."""
+    """Repeat one account using fresh snapshots and pure event predicates."""
 
     def __init__(self, prepared):
         self.src = prepared.src
@@ -66,10 +66,10 @@ class AccountStrategy:
             prices[uid] = position.current_price
         return TargetPortfolio(quantities, prices)
 
-    def events(self, data, dst_account_id):
-        """Yield sync decisions for one stream; let the engine handle errors and retries."""
-        for event in data.position_events([self.src, dst_account_id]):
-            triggered = check_triggers(event, self.src, dst_account_id)
-            if not triggered:
-                reporting.print_skipped_strategy_event(event)
-            yield triggered
+    def event_accounts(self, dst_account_id):
+        """Watch source then destination, keeping a shared account only once."""
+        return tuple(dict.fromkeys((self.src, dst_account_id)))
+
+    def should_rebalance(self, event, dst_account_id):
+        """Preserve the source-securities and first destination-money conditions."""
+        return check_triggers(event, self.src, dst_account_id)

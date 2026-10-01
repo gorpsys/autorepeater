@@ -3,7 +3,6 @@
 import inspect
 import subprocess
 import sys
-from collections.abc import Iterable
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -18,6 +17,7 @@ from autorepeater.account_strategy import PreparedAccountSource
 from autorepeater.account_config import AccountConfig
 from autorepeater.index_config import IndexConfig, IndexInstrument
 from autorepeater.index_strategy import IndexStrategy
+from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.portfolio import TargetPortfolio, validate_target
 from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_contract import AlgorithmDefinition, Strategy, validate_strategy
@@ -65,12 +65,15 @@ class IndependentStrategy:
         return TargetPortfolio({snapshot.uid: budget / snapshot.unit_price},
                                {snapshot.uid: snapshot.unit_price})
 
-    def events(self, data, dst_account_id):
-        """Yield decisions from one lazy destination subscription."""
-        for event in data.position_events([dst_account_id]):
-            yield (event.has_position and event.account_id == dst_account_id
-                   and bool(event.money)
-                   and all(item.blocked_value == 0 for item in event.money))
+    def event_accounts(self, dst_account_id):
+        """Declare the destination without reading data."""
+        return (dst_account_id,)
+
+    def should_rebalance(self, event, dst_account_id):
+        """Decide only from the supplied event."""
+        return (event.has_position and event.account_id == dst_account_id
+                and bool(event.money)
+                and all(item.blocked_value == 0 for item in event.money))
 
 
 def contract_case(algoritm):
@@ -132,12 +135,13 @@ def assert_own_values(value):
 def test_signatures_and_runtime_surface(case):
     """All implementations match Protocol parameter names, kinds and defaults."""
     _, strategy, _ = case
-    for method in ('load_snapshot', 'build_target', 'events'):
+    for method in ('load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'):
         actual = inspect.signature(getattr(type(strategy), method)).parameters.values()
         expected = inspect.signature(getattr(Strategy, method)).parameters.values()
         assert [(item.name, item.kind, item.default) for item in actual] == [
             (item.name, item.kind, item.default) for item in expected]
     assert not hasattr(strategy, 'default_reserve')
+    assert not hasattr(strategy, 'events')
     assert validate_strategy(strategy) is strategy
 
 
@@ -146,11 +150,13 @@ def test_validation_never_invokes_strategy_methods(case):
     _, strategy, data = case
     with patch.object(strategy, 'load_snapshot', wraps=strategy.load_snapshot) as load, \
             patch.object(strategy, 'build_target', wraps=strategy.build_target) as build, \
-            patch.object(strategy, 'events', wraps=strategy.events) as events:
+            patch.object(strategy, 'event_accounts', wraps=strategy.event_accounts) as accounts, \
+            patch.object(strategy, 'should_rebalance', wraps=strategy.should_rebalance) as decision:
         assert validate_strategy(strategy) is strategy
         load.assert_not_called()
         build.assert_not_called()
-        events.assert_not_called()
+        accounts.assert_not_called()
+        decision.assert_not_called()
     assert data.mock_calls == []
 
 
@@ -188,57 +194,45 @@ def test_snapshots_and_pure_targets_use_only_own_data(case):
     assert data.mock_calls == []
 
 
-def test_events_are_lazy_and_read_one_event_at_a_time(case):
-    """Only advancing the returned iterable opens and advances its subscription."""
+def test_event_methods_are_pure_and_return_exact_accounts_and_bools(case, caplog):
+    """Declarations and predicates never read data, open streams or log skips."""
     algoritm, strategy, data = case
+    caplog.set_level(20, logger=LOGGER_NAME)
     source_events = tuple(data.position_events.return_value)
-    consumed = []
-
-    def stream():
-        for index, event in enumerate(source_events):
-            consumed.append(index)
-            yield event
-
-    data.position_events.return_value = stream()
-    decisions = strategy.events(data, 'dst')
-    assert isinstance(decisions, Iterable)
-    data.position_events.assert_not_called()
-    assert not consumed
-    validate_strategy(strategy)
-    data.position_events.assert_not_called()
-    assert not consumed
-    iterator = iter(decisions)
-    for index, expected in enumerate((False, True, False)):
-        decision = next(iterator)
-        assert isinstance(decision, bool)
-        assert decision is expected
-        assert consumed == list(range(index + 1))
-    with pytest.raises(StopIteration):
-        next(iterator)
-    assert data.mock_calls == [call.position_events(
-        ['00123', 'dst'] if algoritm == 'ACCOUNT' else ['dst'])]
+    with patch('builtins.open', side_effect=AssertionError('event I/O')), \
+            patch('pathlib.Path.open', side_effect=AssertionError('event I/O')):
+        assert strategy.event_accounts('dst') == (
+            ('00123', 'dst') if algoritm == 'ACCOUNT' else ('dst',))
+        assert strategy.event_accounts('00123') == ('00123',)
+        for event, expected in zip(source_events, (False, True, False)):
+            assert strategy.should_rebalance(event, 'dst') is expected
+    assert data.mock_calls == []
+    assert caplog.records == []
 
 
-@pytest.mark.parametrize('operation', ['snapshot', 'events'])
-def test_port_failures_remain_own_errors(case, operation):
-    """No SDK exception is required for snapshot or mid-stream transport failures."""
+@pytest.mark.parametrize('money, account_decision, index_decision', [
+    ((MoneyBlocking(Decimal('0')), MoneyBlocking(Decimal('1'))), True, False),
+    ((MoneyBlocking(Decimal('1')), MoneyBlocking(Decimal('0'))), False, False),
+    ((MoneyBlocking(Decimal('0')), MoneyBlocking(Decimal('0'))), True, True),
+])
+def test_destination_money_predicates_remain_distinct(money, account_decision, index_decision):
+    """ACCOUNT uses the first money blocking; INDEX requires every money to be clear."""
+    account, account_data = contract_case('ACCOUNT')
+    index, index_data = contract_case('INDEX')
+    event = PositionEvent(True, 'dst', (), money, 'money')
+    assert account.should_rebalance(event, 'dst') is account_decision
+    assert index.should_rebalance(event, 'dst') is index_decision
+    assert account_data.mock_calls == index_data.mock_calls == []
+
+
+def test_port_failures_remain_own_errors(case):
+    """No SDK exception is required for snapshot transport failures."""
     algoritm, strategy, data = case
     error = DataAccessError('port unavailable')
-    if operation == 'snapshot':
-        read = data.get_portfolio if algoritm == 'ACCOUNT' else data.get_last_prices
-        read.side_effect = error
-        with pytest.raises(DataAccessError) as caught:
-            strategy.load_snapshot(data)
-    else:
-        def stream():
-            yield PositionEvent(False, '', (), (), 'ping')
-            raise error
-
-        data.position_events.return_value = stream()
-        decisions = iter(strategy.events(data, 'dst'))
-        assert next(decisions) is False
-        with pytest.raises(DataAccessError) as caught:
-            next(decisions)
+    read = data.get_portfolio if algoritm == 'ACCOUNT' else data.get_last_prices
+    read.side_effect = error
+    with pytest.raises(DataAccessError) as caught:
+        strategy.load_snapshot(data)
     assert caught.value is error
     assert type(caught.value).__module__ == 'autorepeater.strategy_data'
     assert caught.value.args == ('port unavailable',)
@@ -353,8 +347,8 @@ def assert_launch_execution(launch, streaming):
     sdk_client.return_value.__exit__.assert_called_once()
     adapter.assert_called_once_with(client)
     reads = [call.get_last_prices(['uid'])]
-    assert data.mock_calls == (reads + [call.position_events(['dst'])] + reads
-                               + [call.position_events(['dst'])] if streaming else reads)
+    assert data.mock_calls == (reads + [call.position_events(('dst',))] + reads
+                               + [call.position_events(('dst',))] if streaming else reads)
     count = 2 if streaming else 1
     assert client.operations.get_portfolio.call_args_list == [call(account_id='dst')] * count
     assert client.users.get_accounts.call_args_list == ([call()] if streaming else [])
@@ -402,9 +396,14 @@ for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT'):
     }[algorithm]}
     assert target.prices == {'uid': Decimal('2')}
     assert data.mock_calls == []
-    decisions = strategy.events(data, 'dst')
-    data.position_events.assert_not_called()
-    assert list(decisions) == [False, True, False]
+    from unittest.mock import patch
+    events = tuple(data.position_events.return_value)
+    with patch('builtins.open', side_effect=AssertionError('event I/O')), \
+            patch('pathlib.Path.open', side_effect=AssertionError('event I/O')):
+        assert strategy.event_accounts('dst') == (
+            ('00123', 'dst') if algorithm == 'ACCOUNT' else ('dst',))
+        assert [strategy.should_rebalance(event, 'dst') for event in events] == [False, True, False]
+    assert data.mock_calls == []
     data.get_portfolio.side_effect = DataAccessError('read failed')
     data.get_last_prices.side_effect = DataAccessError('read failed')
     try:

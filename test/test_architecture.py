@@ -109,6 +109,7 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
     ('account_strategy', 'from .strategy_budget import available_budget'),
     ('index_strategy', 'from .strategy_budget import available_budget'),
     ('strategy_contract', 'from .strategy_data import StrategyData'),
+    ('strategy_contract', 'from .strategy_data import PositionEvent'),
     ('reporting', 'from .portfolio import get_portfolio'),
     ('repeater', 'from t_tech.invest import RequestError'),
     ('repeater', 'from .strategy_contract import validate_strategy'),
@@ -142,3 +143,18 @@ def test_production_import_boundaries():
         if errors:
             violations[path.name] = errors
     assert not violations
+
+
+@pytest.mark.parametrize('module', sorted(STRATEGIES))
+def test_event_methods_do_not_own_subscriptions_or_skip_reporting(module):
+    """Event decisions stay usable by one shared consumer without opening child streams."""
+    tree = ast.parse((PACKAGE / f'{module.rsplit(".", 1)[-1]}.py').read_text(encoding='utf-8'))
+    methods = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    assert 'events' not in methods
+    for name in ('event_accounts', 'should_rebalance'):
+        for node in ast.walk(methods[name]):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in {
+                    'get_portfolio', 'find_instruments', 'get_instrument', 'get_last_prices',
+                    'position_events', 'print_skipped_strategy_event',
+                }

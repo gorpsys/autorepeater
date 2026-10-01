@@ -65,7 +65,8 @@ def test_algorithm_required_and_exact(algoritm):
 def test_registration_prepares_once_without_creating(monkeypatch):
     """The saved factory and opaque input survive later registry changes."""
     opaque = object()
-    strategy = Mock(spec_set=['load_snapshot', 'build_target', 'events'])
+    strategy = Mock(spec_set=[
+        'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'])
     prepare = Mock(return_value=opaque)
     create = Mock(return_value=strategy)
     strategies.register_algorithm('CUSTOM', AlgorithmDefinition(prepare, create))

@@ -1,11 +1,11 @@
 """Shared structural contract and runtime validation for strategies."""
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
 from autorepeater.portfolio import TargetPortfolio
-from autorepeater.strategy_data import StrategyData
+from autorepeater.strategy_data import PositionEvent, StrategyData
 
 
 class UnsupportedSourceError(ValueError):
@@ -36,13 +36,16 @@ class Strategy(Protocol):
     def build_target(self, snapshot: object, budget: Decimal) -> TargetPortfolio:
         """Build a complete target from a snapshot and the full allocated budget."""
 
-    def events(self, data: StrategyData, dst_account_id: str) -> Iterable[bool]:
-        """Yield synchronization decisions from one event subscription."""
+    def event_accounts(self, dst_account_id: str) -> tuple[str, ...]:
+        """Declare nonempty, ordered, unique account IDs without reading data."""
+
+    def should_rebalance(self, event: PositionEvent, dst_account_id: str) -> bool:
+        """Decide strictly bool from one event without data reads or logging."""
 
 
 def validate_strategy(strategy):
     """Validate the runtime surface without invoking methods or reading settings."""
-    for method_name in ('load_snapshot', 'build_target', 'events'):
+    for method_name in ('load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'):
         if not callable(getattr(strategy, method_name, None)):
             raise TypeError(f'strategy {method_name} must be callable')
 
