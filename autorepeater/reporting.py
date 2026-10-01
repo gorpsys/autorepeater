@@ -21,9 +21,14 @@ class GetInstrumentException(Exception):
     """Instrument not found uniquely by instrument_id."""
 
 
+def print_config_warning(message):
+    """Report an unusable foreign config without blocking exact-name selection."""
+    logger.warning('%s', message)
+
+
 def print_index_config_warning(message):
     """Report an unusable foreign index document without blocking selection."""
-    logger.warning('%s', message)
+    print_config_warning(message)
 
 
 def get_instrument(client, instrument_id):
