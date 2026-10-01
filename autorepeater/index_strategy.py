@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_FLOOR
 from autorepeater import reporting
 from autorepeater.index_config import select_index_config
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_data import InstrumentType
 
 
@@ -65,11 +66,6 @@ class IndexStrategy:
     def __init__(self, config):
         self.config = config
 
-    @property
-    def default_reserve(self):
-        """Use the config's reserve unless the caller explicitly overrides it."""
-        return self.config.reserve
-
     def load_snapshot(self, data):
         """Resolve the entire base anew; unavailable data aborts the calculation."""
         instruments = {}
@@ -95,8 +91,11 @@ class IndexStrategy:
         return snapshot
 
     def build_target(self, snapshot, budget):
-        """Use the shared pure calculator without further SDK calls."""
-        return build_index_target(self.config, snapshot, budget)
+        """Reserve the configured fraction of gross value before the pure calculation."""
+        if not isinstance(budget, Decimal) or not budget.is_finite():
+            raise ValueError('index budget must be a positive finite Decimal')
+        return build_index_target(
+            self.config, snapshot, available_budget(budget, self.config.reserve))
 
     def events(self, data, dst_account_id):
         """Recalculate populated, fully unblocked destinations; propagate stream errors."""

@@ -19,6 +19,7 @@ from autorepeater.account_config import AccountConfig
 from autorepeater.index_config import IndexConfig, IndexInstrument
 from autorepeater.index_strategy import IndexStrategy
 from autorepeater.portfolio import TargetPortfolio, validate_target
+from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_contract import AlgorithmDefinition, Strategy, validate_strategy
 from autorepeater.strategy_data import (
     DataAccessError, InstrumentInfo, InstrumentMatch, InstrumentType, MoneyBlocking,
@@ -44,6 +45,7 @@ class IndependentStrategy:
 
     def __init__(self, source):
         self.source = source
+        self.reserve = Decimal('0.02')
 
     @staticmethod
     def prepare_source(src):
@@ -52,11 +54,6 @@ class IndependentStrategy:
             raise ValueError('expected quote:<uid>')
         return IndependentSource(src[6:])
 
-    @property
-    def default_reserve(self):
-        """Use a reserve distinct from both real strategy fixtures."""
-        return Decimal('0.02')
-
     def load_snapshot(self, data):
         """Read only the requested quote through the common port."""
         quote, = data.get_last_prices([self.source.uid])
@@ -64,6 +61,7 @@ class IndependentStrategy:
 
     def build_target(self, snapshot, budget):
         """Keep fractional units without any external data lookup."""
+        budget = available_budget(budget, self.reserve)
         return TargetPortfolio({snapshot.uid: budget / snapshot.unit_price},
                                {snapshot.uid: snapshot.unit_price})
 
@@ -131,20 +129,15 @@ def assert_own_values(value):
         assert type(value) in (str, int, bool, Decimal, datetime, type(None))
 
 
-def test_signatures_and_required_reserve(case):
+def test_signatures_and_runtime_surface(case):
     """All implementations match Protocol parameter names, kinds and defaults."""
-    algoritm, strategy, _ = case
+    _, strategy, _ = case
     for method in ('load_snapshot', 'build_target', 'events'):
         actual = inspect.signature(getattr(type(strategy), method)).parameters.values()
         expected = inspect.signature(getattr(Strategy, method)).parameters.values()
         assert [(item.name, item.kind, item.default) for item in actual] == [
             (item.name, item.kind, item.default) for item in expected]
-    assert isinstance(inspect.getattr_static(type(strategy), 'default_reserve'), property)
-    assert strategy.default_reserve == {
-        'ACCOUNT': Decimal('0.01'), 'INDEX': Decimal('0.03'),
-        'INDEPENDENT': Decimal('0.02'),
-    }[algoritm]
-    assert isinstance(strategy.default_reserve, Decimal)
+    assert not hasattr(strategy, 'default_reserve')
     assert validate_strategy(strategy) is strategy
 
 
@@ -161,15 +154,10 @@ def test_validation_never_invokes_strategy_methods(case):
     assert data.mock_calls == []
 
 
-def test_reserve_cannot_be_omitted(case, monkeypatch):
-    """Each implementation must expose its own reserve; no fallback is allowed."""
+def test_reserve_is_private_to_strategy(case):
+    """The structural contract does not require a public financial setting."""
     _, strategy, data = case
-    monkeypatch.delattr(type(strategy), 'default_reserve')
-    with pytest.raises(TypeError, match='default_reserve') as caught:
-        validate_strategy(strategy)
-    assert isinstance(caught.value, TypeError)
-    assert type(caught.value).__module__ == 'builtins'
-    assert caught.value.__cause__ is None
+    assert validate_strategy(strategy) is strategy
     assert data.mock_calls == []
 
 
@@ -191,7 +179,10 @@ def test_snapshots_and_pure_targets_use_only_own_data(case):
     target = strategy.build_target(snapshot, Decimal('60'))
     assert isinstance(target, TargetPortfolio)
     validate_target(target)
-    assert target.quantities == {'uid': Decimal('30')}
+    assert target.quantities == {'uid': {
+        'ACCOUNT': Decimal('29.70'), 'INDEX': Decimal('27'),
+        'INDEPENDENT': Decimal('29.40'),
+    }[algoritm]}
     assert target.prices == {'uid': Decimal('2')}
     assert_own_values(target)
     assert data.mock_calls == []
@@ -405,7 +396,10 @@ for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT'):
     data.reset_mock()
     target = strategy.build_target(snapshot, Decimal('60'))
     validate_target(target)
-    assert target.quantities == {'uid': Decimal('30')}
+    assert target.quantities == {'uid': {
+        'ACCOUNT': Decimal('29.70'), 'INDEX': Decimal('27'),
+        'INDEPENDENT': Decimal('29.40'),
+    }[algorithm]}
     assert target.prices == {'uid': Decimal('2')}
     assert data.mock_calls == []
     decisions = strategy.events(data, 'dst')

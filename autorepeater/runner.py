@@ -16,7 +16,6 @@ class RunnerParams:
     """params for init Runner class"""
     debug: bool
     threshold: float
-    reserve: float
 
 
 class Runner:
@@ -27,8 +26,7 @@ class Runner:
                  prepared_strategy,
                  dst,
                  params=RunnerParams(debug=False,
-                                     threshold=None,
-                                     reserve=None)):
+                                     threshold=None)):
         self.token = token
         self.params = params
         self.strategy = create_strategy(prepared_strategy)
@@ -55,5 +53,4 @@ class Runner:
         autorepeater = AutoRepeater(client, self.strategy, data)
         autorepeater.set_debug(self.params.debug)
         autorepeater.set_threshold(self.params.threshold)
-        autorepeater.set_reserve(self.params.reserve)
         return autorepeater

@@ -11,7 +11,8 @@ STRATEGIES = {'autorepeater.account_strategy', 'autorepeater.index_strategy'}
 ASSEMBLY = {'autorepeater.strategies', 'autorepeater.runner',
             'autorepeater.repeater', 'autorepeater.tinvest_strategy_data'}
 NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
-           'strategy_contract', 'strategy_data', 'triggers', 'index_config', 'account_config'}
+           'strategy_contract', 'strategy_data', 'triggers', 'index_config', 'account_config',
+           'strategy_budget'}
 
 
 def forbidden_imports(source, module):
@@ -71,6 +72,10 @@ def forbidden_imports(source, module):
     ('portfolio', 'from . import runner', 'autorepeater.runner'),
     ('reporting', 'from t_tech.invest import Client', 't_tech.invest'),
     ('money', 'import grpc.aio', 'grpc.aio'),
+    ('strategy_budget', 'from .account_strategy import AccountStrategy',
+     'autorepeater.account_strategy'),
+    ('strategy_budget', 'from .repeater import AutoRepeater', 'autorepeater.repeater'),
+    ('strategy_budget', 'import t_tech.invest', 't_tech.invest'),
     ('account_config', 'from t_tech.invest import Client', 't_tech.invest'),
     ('account_config', 'from .account_strategy import AccountStrategy',
      'autorepeater.account_strategy'),
@@ -100,6 +105,9 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
     ('index_strategy', 'from .index_config import select_index_config'),
     ('account_strategy', 'from .account_config import load_account_config'),
     ('account_config', 'from decimal import Decimal'),
+    ('strategy_budget', 'from decimal import Decimal'),
+    ('account_strategy', 'from .strategy_budget import available_budget'),
+    ('index_strategy', 'from .strategy_budget import available_budget'),
     ('strategy_contract', 'from .strategy_data import StrategyData'),
     ('reporting', 'from .portfolio import get_portfolio'),
     ('repeater', 'from t_tech.invest import RequestError'),

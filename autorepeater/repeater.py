@@ -30,7 +30,6 @@ class AutoRepeater:
         self.data = data
         self.debug = False
         self.threshold = Decimal(THRESHOLD)
-        self.reserve = strategy.default_reserve
 
     def set_debug(self, debug):
         """set debug flag"""
@@ -45,16 +44,6 @@ class AutoRepeater:
                 raise ValueError("Threshold must be between 0 and 1")
             # Оставляем преобразование здесь, так как входной параметр float
             self.threshold = Decimal(str(threshold))
-
-    def set_reserve(self, reserve):
-        """set reserve"""
-        if reserve is not None:
-            if isinstance(reserve, bool) or not isinstance(reserve, (int, float, Decimal)):
-                raise TypeError("Reserve must be between 0 and 1")
-            value = Decimal(str(reserve))
-            if not value.is_finite() or value < 0 or value > 1:
-                raise ValueError("Reserve must be between 0 and 1")
-            self.reserve = value
 
     def calc_sell_positions(self, dst_positions, target_positions):
         """calc extra positions from dst accounts for sell"""
@@ -159,7 +148,6 @@ class AutoRepeater:
             if position.instrument_type != 'currency':
                 dst_positions[position.instrument_uid] = position
             total_dst += currency_to_decimal(position)
-        total_dst = total_dst * (Decimal('1') - self.reserve)
         reporting.print_total(total_dst)
 
         target = self.strategy.build_target(snapshot, total_dst)

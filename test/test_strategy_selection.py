@@ -65,8 +65,7 @@ def test_algorithm_required_and_exact(algoritm):
 def test_registration_prepares_once_without_creating(monkeypatch):
     """The saved factory and opaque input survive later registry changes."""
     opaque = object()
-    strategy = Mock(spec_set=['default_reserve', 'load_snapshot', 'build_target', 'events'])
-    strategy.default_reserve = Decimal('0.01')
+    strategy = Mock(spec_set=['load_snapshot', 'build_target', 'events'])
     prepare = Mock(return_value=opaque)
     create = Mock(return_value=strategy)
     strategies.register_algorithm('CUSTOM', AlgorithmDefinition(prepare, create))
@@ -391,7 +390,7 @@ def test_cloud_defaults_to_tmon(monkeypatch, event):
     strategy = strategies.create_strategy(prepared)
     assert strategy.config.name == 'TMON'
     assert [item.ticker for item in strategy.config.instruments] == ['TMON']
-    assert strategy.default_reserve == Decimal('0.0005')
+    assert strategy.config.reserve == Decimal('0.0005')
     paths = Path(index_config.__file__).with_name('configs').glob('*.json')
     assert sorted(str(item.args[0]) for item in read.call_args_list) == sorted(map(str, paths))
     runner.assert_called_once_with(token='synthetic-token', prepared_strategy=prepared,

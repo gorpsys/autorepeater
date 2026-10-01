@@ -58,7 +58,7 @@ def test_bundled_account_config_from_other_cwd(tmp_path, monkeypatch):
         strategy = AccountStrategy(prepared)
     assert strategy.src == '00123'
     assert strategy.config is prepared.config
-    assert strategy.default_reserve == Decimal('0.01')
+    assert strategy.config.reserve == Decimal('0.01')
 
 
 def test_relative_account_path_is_frozen(tmp_path, monkeypatch):
@@ -74,9 +74,9 @@ def test_relative_account_path_is_frozen(tmp_path, monkeypatch):
     with patch('builtins.open', side_effect=AssertionError('creation I/O')), \
             patch.object(Path, 'open', side_effect=AssertionError('creation I/O')):
         strategy = strategies.create_strategy(prepared)
-    assert strategy.default_reserve == Decimal(0)
+    assert strategy.config.reserve == Decimal(0)
     assert strategies.create_strategy(
-        strategies.prepare_strategy('ACCOUNT', '00123')).default_reserve == Decimal('0.03')
+        strategies.prepare_strategy('ACCOUNT', '00123')).config.reserve == Decimal('0.03')
 
 
 def test_account_does_not_read_foreign_configs(tmp_path, monkeypatch):
@@ -90,7 +90,7 @@ def test_account_does_not_read_foreign_configs(tmp_path, monkeypatch):
                side_effect=AssertionError('foreign config read')):
         strategy = strategies.create_strategy(strategies.prepare_strategy('ACCOUNT', '00123'))
     assert strategy.src == '00123'
-    assert strategy.default_reserve == Decimal('0.01')
+    assert strategy.config.reserve == Decimal('0.01')
 
 
 @pytest.mark.parametrize('path', ['', ' ', 'missing.json', '.'])

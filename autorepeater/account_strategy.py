@@ -5,6 +5,7 @@ from decimal import Decimal
 from autorepeater import reporting
 from autorepeater.account_config import AccountConfig, load_account_config
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_data import InstrumentType
 from autorepeater.strategy_contract import UnsupportedSourceError
 from autorepeater.triggers import check_triggers
@@ -39,11 +40,6 @@ class AccountStrategy:
         self.src = prepared.src
         self.config = prepared.config
 
-    @property
-    def default_reserve(self):
-        """Return the account strategy reserve as a destination-value fraction."""
-        return self.config.reserve
-
     def load_snapshot(self, data):
         """Read and report the source; cash does not contribute to its target or value."""
         reporting.print_account_header('src')
@@ -61,6 +57,7 @@ class AccountStrategy:
     def build_target(self, snapshot, budget):
         """Scale source quantities without SDK calls; keep the original Decimal order."""
         positions, total = snapshot
+        budget = available_budget(budget, self.config.reserve)
         ratio = budget / total
         quantities = {}
         prices = {}

@@ -30,29 +30,20 @@ class PreparedStrategy:
 class Strategy(Protocol):
     """Behavior required by the rebalancing engine."""
 
-    @property
-    def default_reserve(self) -> Decimal:
-        """Return the strategy-owned reserve as a fraction of destination value."""
-
     def load_snapshot(self, data: StrategyData) -> object:
         """Load one source snapshot."""
 
     def build_target(self, snapshot: object, budget: Decimal) -> TargetPortfolio:
-        """Build a complete target from one snapshot and the available budget."""
+        """Build a complete target from a snapshot and the full allocated budget."""
 
     def events(self, data: StrategyData, dst_account_id: str) -> Iterable[bool]:
         """Yield synchronization decisions from one event subscription."""
 
 
 def validate_strategy(strategy):
-    """Validate the runtime surface and strategy-owned reserve without invoking methods."""
+    """Validate the runtime surface without invoking methods or reading settings."""
     for method_name in ('load_snapshot', 'build_target', 'events'):
         if not callable(getattr(strategy, method_name, None)):
             raise TypeError(f'strategy {method_name} must be callable')
 
-    reserve = getattr(strategy, 'default_reserve', None)
-    if not isinstance(reserve, Decimal):
-        raise TypeError('strategy default_reserve must be a Decimal')
-    if not reserve.is_finite() or reserve < 0 or reserve >= 1:
-        raise ValueError('strategy default_reserve must be finite and between 0 and 1')
     return strategy
