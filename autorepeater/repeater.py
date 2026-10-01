@@ -16,6 +16,7 @@ from autorepeater.orders import OrderParams
 from autorepeater.orders import get_max_sum_positions_price
 from autorepeater.portfolio import get_portfolio
 from autorepeater.portfolio import validate_target
+from autorepeater.strategy_contract import validate_event_accounts
 from autorepeater.strategy_contract import validate_strategy
 from autorepeater.strategy_data import DataAccessError
 from autorepeater import reporting
@@ -30,7 +31,6 @@ class AutoRepeater:
         self.data = data
         self.debug = False
         self.threshold = Decimal(THRESHOLD)
-        self.reserve = strategy.default_reserve
 
     def set_debug(self, debug):
         """set debug flag"""
@@ -45,16 +45,6 @@ class AutoRepeater:
                 raise ValueError("Threshold must be between 0 and 1")
             # Оставляем преобразование здесь, так как входной параметр float
             self.threshold = Decimal(str(threshold))
-
-    def set_reserve(self, reserve):
-        """set reserve"""
-        if reserve is not None:
-            if isinstance(reserve, bool) or not isinstance(reserve, (int, float, Decimal)):
-                raise TypeError("Reserve must be between 0 and 1")
-            value = Decimal(str(reserve))
-            if not value.is_finite() or value < 0 or value > 1:
-                raise ValueError("Reserve must be between 0 and 1")
-            self.reserve = value
 
     def calc_sell_positions(self, dst_positions, target_positions):
         """calc extra positions from dst accounts for sell"""
@@ -159,13 +149,12 @@ class AutoRepeater:
             if position.instrument_type != 'currency':
                 dst_positions[position.instrument_uid] = position
             total_dst += currency_to_decimal(position)
-        total_dst = total_dst * (Decimal('1') - self.reserve)
         reporting.print_total(total_dst)
 
         target = self.strategy.build_target(snapshot, total_dst)
         validate_target(target)
         if not target.quantities:
-            reporting.print_empty_target(dst_account_id)
+            reporting.print_empty_target(dst_account_id, target.empty_reason)
             return
 
         orders_params_sell = self.calc_sell_positions(
@@ -193,8 +182,14 @@ class AutoRepeater:
 
         while True:
             try:
-                for triggered in self.strategy.events(self.data, dst):
+                accounts = validate_event_accounts(self.strategy.event_accounts(dst))
+                for event in self.data.position_events(accounts):
+                    triggered = self.strategy.should_rebalance(event, dst)
+                    if not isinstance(triggered, bool):
+                        raise ValueError('strategy should_rebalance must return bool')
                     if triggered:
                         self.sync_accounts(dst)
+                    else:
+                        reporting.print_skipped_strategy_event(event)
             except (DataAccessError, RequestError) as err:
                 logger.error(err)

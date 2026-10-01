@@ -3,16 +3,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_FLOOR
 
-from autorepeater import reporting
 from autorepeater.index_config import select_index_config
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_data import InstrumentType
 
 
 INDEX_BOARDS = {InstrumentType.SHARE: 'TQBR', InstrumentType.ETF: 'TQTF'}
 
 
-def prepare_index_source(src):
+def prepare_index_source(src, context):  # pylint: disable=unused-argument
     """Prepare the exact JSON name using an isolated, one-pass selection."""
     return select_index_config(src)
 
@@ -65,11 +65,6 @@ class IndexStrategy:
     def __init__(self, config):
         self.config = config
 
-    @property
-    def default_reserve(self):
-        """Use the config's reserve unless the caller explicitly overrides it."""
-        return self.config.reserve
-
     def load_snapshot(self, data):
         """Resolve the entire base anew; unavailable data aborts the calculation."""
         instruments = {}
@@ -95,20 +90,23 @@ class IndexStrategy:
         return snapshot
 
     def build_target(self, snapshot, budget):
-        """Use the shared pure calculator without further SDK calls."""
-        return build_index_target(self.config, snapshot, budget)
+        """Reserve the configured fraction of gross value before the pure calculation."""
+        if not isinstance(budget, Decimal) or not budget.is_finite():
+            raise ValueError('index budget must be a positive finite Decimal')
+        return build_index_target(
+            self.config, snapshot, available_budget(budget, self.config.reserve))
 
-    def events(self, data, dst_account_id):
-        """Recalculate populated, fully unblocked destinations; propagate stream errors."""
-        for event in data.position_events([dst_account_id]):
-            triggered = (
-                event.has_position and event.account_id == dst_account_id
-                and bool(event.securities or event.money)
-                and all(item.blocked == 0 for item in event.securities)
-                and all(item.blocked_value == 0 for item in event.money))
-            if not triggered:
-                reporting.print_skipped_strategy_event(event)
-            yield triggered
+    def event_accounts(self, dst_account_id):
+        """Watch only destination positions; prices do not trigger synchronization."""
+        return (dst_account_id,)
+
+    def should_rebalance(self, event, dst_account_id):
+        """Recalculate populated destinations only when every blocking is zero."""
+        return (
+            event.has_position and event.account_id == dst_account_id
+            and bool(event.securities or event.money)
+            and all(item.blocked == 0 for item in event.securities)
+            and all(item.blocked_value == 0 for item in event.money))
 
 
 @dataclass
