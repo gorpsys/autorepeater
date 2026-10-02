@@ -25,7 +25,9 @@ class YcLoggingFormatter(jsonlogger.JsonFormatter):
 def configure_local_logging():
     """Configure default logging for local CLI runs."""
     logging.addLevelName(IMPORTANT, 'IMPORTANT')
+    logging.basicConfig(level=IMPORTANT)
     logging.getLogger().setLevel(IMPORTANT)
+    logger.setLevel(logging.INFO)
 
 
 def configure_yc_logging():
@@ -37,4 +39,4 @@ def configure_yc_logging():
             YcLoggingFormatter('%(message)s %(level)s %(logger)s'))
         logger.addHandler(log_handler)
     logger.propagate = False
-    logger.setLevel(IMPORTANT)
+    logger.setLevel(logging.INFO)

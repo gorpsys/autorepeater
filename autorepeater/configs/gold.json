@@ -1,6 +1,6 @@
 {
   "name": "GOLD",
-  "reserve": "0.0005",
+  "reserve": "0.006",
   "max_lot_weight_error": "0.05",
   "min_position_value": "0",
   "instruments": [

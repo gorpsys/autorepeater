@@ -14,6 +14,7 @@ from autorepeater import reporting
 from autorepeater.constants import IMPORTANT
 from autorepeater.index_config import select_index_config
 from autorepeater.index_strategy import IndexStrategy, calculate_index_target
+from autorepeater.strategy_budget import available_budget
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
 
 
@@ -36,16 +37,14 @@ def parse_args(argv=None):
     parser.add_argument('--gross-values', nargs='+', type=_decimal,
                         default=list(map(Decimal, ['100000', '154000', '300000'])))
     parser.add_argument('--budgets', nargs='+', type=_decimal, default=[Decimal('154000')])
-    parser.add_argument('--reserve', type=_decimal, help='override the config reserve')
     parser.add_argument('--thresholds', nargs='+', type=_decimal,
                         default=list(map(Decimal, ['0.03', '0.05', '0.1'])))
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
     if any(value <= 0 for value in args.gross_values + args.budgets):
         parser.error('gross values and budgets must be positive')
-    if any(value is not None and not 0 <= value < 1
-           for value in [args.reserve] + args.thresholds):
-        parser.error('reserve and thresholds must be in [0, 1)')
+    if any(not 0 <= value < 1 for value in args.thresholds):
+        parser.error('thresholds must be in [0, 1)')
     return parser, args
 
 
@@ -114,9 +113,9 @@ def main(argv=None):
             INVEST_GRPC_API_SANDBOX if args.sandbox else INVEST_GRPC_API)) as client:
         snapshot = strategy.load_snapshot(TInvestStrategyData(client))
     received = datetime.now(timezone.utc)
-    reserve = strategy.default_reserve if args.reserve is None else args.reserve
+    reserve = config.reserve
     scenarios = [
-        {'gross_value': value, 'reserve': reserve, 'budget': value * (1 - reserve)}
+        {'gross_value': value, 'reserve': reserve, 'budget': available_budget(value, reserve)}
         for value in args.gross_values
     ] + [{'gross_value': None, 'reserve': Decimal(0), 'budget': value} for value in args.budgets]
     report = {

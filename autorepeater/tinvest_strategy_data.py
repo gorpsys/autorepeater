@@ -106,6 +106,8 @@ class TInvestStrategyData:
         instrument = response.instrument
         if instrument is None:
             raise ValueError(f'instrument {uid}: instrument is missing')
+        if not isinstance(instrument.api_trade_available_flag, bool):
+            raise ValueError(f'instrument {uid}: api_trade_available_flag must be bool')
         return InstrumentInfo(
             uid=instrument.uid,
             ticker=instrument.ticker,
@@ -114,6 +116,7 @@ class TInvestStrategyData:
             class_code=instrument.class_code,
             lot=instrument.lot,
             currency=instrument.currency,
+            api_trade_available=instrument.api_trade_available_flag,
         )
 
     def get_last_prices(self, uids: Sequence[str]) -> list[PriceQuote]:

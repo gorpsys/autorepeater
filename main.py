@@ -19,9 +19,6 @@ def main():
     parser.add_argument("-t", "--threshold", type=float, help="порог стоимости, ниже "
                         "которого не выполняется синхронизация - доля стоимости счёта"
                         " назначения. По умолчанию 0.001")
-    parser.add_argument("-r", "--reserve", type=float, help="переопределить резерв"
-                        " для округлений и комиссий (доля стоимости счёта назначения). "
-                        "По умолчанию из конфига стратегии; для повторения счёта 0.01")
     args = parser.parse_args()
 
     prepared = prepare_strategy(args.algoritm, args.src)
@@ -33,8 +30,7 @@ def main():
         dst=args.dst,
         params=RunnerParams(
             debug=args.debug,
-            threshold=args.threshold,
-            reserve=args.reserve))
+            threshold=args.threshold))
     runer.run()
 
 if __name__ == "__main__":

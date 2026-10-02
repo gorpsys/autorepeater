@@ -3,25 +3,65 @@
 import inspect
 import subprocess
 import sys
-from collections.abc import Iterable
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from unittest.mock import Mock, call, create_autospec, patch
+from unittest.mock import ANY, Mock, call, create_autospec, patch
 
 import pytest
 
+from autorepeater import strategy_contract
 from autorepeater.account_strategy import AccountStrategy
+from autorepeater.account_strategy import PreparedAccountSource
+from autorepeater.account_config import AccountConfig
+from autorepeater.composite_strategy import (
+    CompositeStrategy, PreparedCompositeComponent, PreparedCompositeSource,
+)
 from autorepeater.index_config import IndexConfig, IndexInstrument
 from autorepeater.index_strategy import IndexStrategy
+from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.portfolio import TargetPortfolio, validate_target
-from autorepeater.strategy_contract import AlgorithmDefinition, Strategy, validate_strategy
+from autorepeater.strategy_budget import available_budget
+from autorepeater.strategy_contract import (
+    AlgorithmDefinition, PreparationContext, PreparedStrategy, Strategy, create_strategy,
+    validate_strategy,
+)
 from autorepeater.strategy_data import (
     DataAccessError, InstrumentInfo, InstrumentMatch, InstrumentType, MoneyBlocking,
     PortfolioEntry, PortfolioSnapshot, PositionEvent, PriceQuote, StrategyData,
 )
+
+
+@pytest.mark.parametrize('accounts, message', [
+    (None, 'must return a nonempty tuple'),
+    ('dst', 'must return a nonempty tuple'),
+    (['dst'], 'must return a nonempty tuple'),
+    ((), 'must return a nonempty tuple'),
+    (('',), 'must contain account strings'),
+    ((' ',), 'must contain account strings'),
+    (('dst ',), 'must contain account strings'),
+    (('a\tb',), 'must contain account strings'),
+    (('a\nb',), 'must contain account strings'),
+    (('a\u00a0b',), 'must contain account strings'),
+    ((None,), 'must contain account strings'),
+    ((5,), 'must contain account strings'),
+    ((True,), 'must contain account strings'),
+    (('dst', []), 'must contain account strings'),
+    (('dst', 'dst'), 'must not contain duplicates'),
+])
+def test_validate_event_accounts_preserves_exact_errors(accounts, message):
+    """The neutral validator retains declaration, ID and duplicate diagnostics."""
+    with pytest.raises(ValueError) as error:
+        strategy_contract.validate_event_accounts(accounts)
+    assert str(error.value) == 'strategy event_accounts ' + message
+
+
+@pytest.mark.parametrize('accounts', [('dst',), ('00123', 'dst', 'other')])
+def test_validate_event_accounts_preserves_order_and_identity(accounts):
+    """Validation keeps opaque IDs and returns the original ordered declaration."""
+    assert strategy_contract.validate_event_accounts(accounts) is accounts
 
 
 @dataclass(frozen=True)
@@ -42,18 +82,14 @@ class IndependentStrategy:
 
     def __init__(self, source):
         self.source = source
+        self.reserve = Decimal('0.02')
 
     @staticmethod
-    def prepare_source(src):
+    def prepare_source(src, context):  # pylint: disable=unused-argument
         """Only the algorithm defines the quote: source syntax."""
         if not isinstance(src, str) or not src.startswith('quote:') or not src[6:]:
             raise ValueError('expected quote:<uid>')
         return IndependentSource(src[6:])
-
-    @property
-    def default_reserve(self):
-        """Use a reserve distinct from both real strategy fixtures."""
-        return Decimal('0.02')
 
     def load_snapshot(self, data):
         """Read only the requested quote through the common port."""
@@ -62,15 +98,19 @@ class IndependentStrategy:
 
     def build_target(self, snapshot, budget):
         """Keep fractional units without any external data lookup."""
+        budget = available_budget(budget, self.reserve)
         return TargetPortfolio({snapshot.uid: budget / snapshot.unit_price},
                                {snapshot.uid: snapshot.unit_price})
 
-    def events(self, data, dst_account_id):
-        """Yield decisions from one lazy destination subscription."""
-        for event in data.position_events([dst_account_id]):
-            yield (event.has_position and event.account_id == dst_account_id
-                   and bool(event.money)
-                   and all(item.blocked_value == 0 for item in event.money))
+    def event_accounts(self, dst_account_id):
+        """Declare the destination without reading data."""
+        return (dst_account_id,)
+
+    def should_rebalance(self, event, dst_account_id):
+        """Decide only from the supplied event."""
+        return (event.has_position and event.account_id == dst_account_id
+                and bool(event.money)
+                and all(item.blocked_value == 0 for item in event.money))
 
 
 def contract_case(algoritm):
@@ -85,7 +125,7 @@ def contract_case(algoritm):
     data.find_instruments.return_value = [
         InstrumentMatch('uid', 'ONE', 'One', InstrumentType.SHARE, 'TQBR')]
     data.get_instrument.return_value = InstrumentInfo(
-        'uid', 'ONE', 'One', InstrumentType.SHARE, 'TQBR', 3, 'RUB')
+        'uid', 'ONE', 'One', InstrumentType.SHARE, 'TQBR', 3, 'RUB', True)
     data.get_last_prices.return_value = [PriceQuote('uid', Decimal('2'), None)]
     data.position_events.return_value = iter((
         PositionEvent(False, '', (), (), 'ping'),
@@ -93,20 +133,30 @@ def contract_case(algoritm):
         PositionEvent(True, 'dst', (), (MoneyBlocking(Decimal('1')),), 'blocked'),
     ))
     if algoritm == 'ACCOUNT':
-        strategy = AccountStrategy('00123')
+        strategy = AccountStrategy(PreparedAccountSource('00123', AccountConfig(Decimal('0.01'))))
     elif algoritm == 'INDEX':
         config = IndexConfig('CONTRACT', Decimal('0.05'), [IndexInstrument(
             'ONE', Decimal('1'), Decimal('1'), Decimal('1'), Decimal('2'),
             Decimal('100'), Decimal('12'))], reserve=Decimal('0.03'))
         strategy = IndexStrategy(config)
+    elif algoritm == 'COMPOSITE':
+        source = PreparedCompositeSource('CONTRACT', tuple(
+            PreparedCompositeComponent('INDEPENDENT', 'quote:uid', Decimal('0.5'),
+                                       PreparedStrategy(IndependentStrategy,
+                                                        IndependentSource('uid'), 'quote:uid'))
+            for _ in range(2)))
+        strategy = CompositeStrategy(source)
     else:
-        strategy = IndependentStrategy(IndependentStrategy.prepare_source('quote:uid'))
+        context = create_autospec(PreparationContext, instance=True, spec_set=True)
+        source = IndependentStrategy.prepare_source('quote:uid', context)
+        context.prepare.assert_not_called()
+        strategy = create_strategy(PreparedStrategy(IndependentStrategy, source, 'quote:uid'))
     return strategy, data
 
 
-@pytest.fixture(name='case', params=['ACCOUNT', 'INDEX', 'INDEPENDENT'])
+@pytest.fixture(name='case', params=['ACCOUNT', 'INDEX', 'INDEPENDENT', 'COMPOSITE'])
 def fixture_case(request):
-    """Every contract test runs unchanged against all three implementations."""
+    """Every contract test runs unchanged against all implementations."""
     return request.param, *contract_case(request.param)
 
 
@@ -129,20 +179,16 @@ def assert_own_values(value):
         assert type(value) in (str, int, bool, Decimal, datetime, type(None))
 
 
-def test_signatures_and_required_reserve(case):
+def test_signatures_and_runtime_surface(case):
     """All implementations match Protocol parameter names, kinds and defaults."""
-    algoritm, strategy, _ = case
-    for method in ('load_snapshot', 'build_target', 'events'):
+    _, strategy, _ = case
+    for method in ('load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'):
         actual = inspect.signature(getattr(type(strategy), method)).parameters.values()
         expected = inspect.signature(getattr(Strategy, method)).parameters.values()
         assert [(item.name, item.kind, item.default) for item in actual] == [
             (item.name, item.kind, item.default) for item in expected]
-    assert isinstance(inspect.getattr_static(type(strategy), 'default_reserve'), property)
-    assert strategy.default_reserve == {
-        'ACCOUNT': Decimal('0.01'), 'INDEX': Decimal('0.03'),
-        'INDEPENDENT': Decimal('0.02'),
-    }[algoritm]
-    assert isinstance(strategy.default_reserve, Decimal)
+    assert not hasattr(strategy, 'default_reserve')
+    assert not hasattr(strategy, 'events')
     assert validate_strategy(strategy) is strategy
 
 
@@ -151,23 +197,20 @@ def test_validation_never_invokes_strategy_methods(case):
     _, strategy, data = case
     with patch.object(strategy, 'load_snapshot', wraps=strategy.load_snapshot) as load, \
             patch.object(strategy, 'build_target', wraps=strategy.build_target) as build, \
-            patch.object(strategy, 'events', wraps=strategy.events) as events:
+            patch.object(strategy, 'event_accounts', wraps=strategy.event_accounts) as accounts, \
+            patch.object(strategy, 'should_rebalance', wraps=strategy.should_rebalance) as decision:
         assert validate_strategy(strategy) is strategy
         load.assert_not_called()
         build.assert_not_called()
-        events.assert_not_called()
+        accounts.assert_not_called()
+        decision.assert_not_called()
     assert data.mock_calls == []
 
 
-def test_reserve_cannot_be_omitted(case, monkeypatch):
-    """Each implementation must expose its own reserve; no fallback is allowed."""
+def test_reserve_is_private_to_strategy(case):
+    """The structural contract does not require a public financial setting."""
     _, strategy, data = case
-    monkeypatch.delattr(type(strategy), 'default_reserve')
-    with pytest.raises(TypeError, match='default_reserve') as caught:
-        validate_strategy(strategy)
-    assert isinstance(caught.value, TypeError)
-    assert type(caught.value).__module__ == 'builtins'
-    assert caught.value.__cause__ is None
+    assert validate_strategy(strategy) is strategy
     assert data.mock_calls == []
 
 
@@ -183,69 +226,62 @@ def test_snapshots_and_pure_targets_use_only_own_data(case):
         'INDEX': [call.find_instruments('ONE'), call.get_instrument('uid'),
                   call.get_last_prices(['uid'])],
         'INDEPENDENT': [call.get_last_prices(['uid'])],
+        'COMPOSITE': [call.get_last_prices(['uid'])] * 2,
     }
     assert data.mock_calls == expected_reads[algoritm] * 2
     data.reset_mock()
     target = strategy.build_target(snapshot, Decimal('60'))
     assert isinstance(target, TargetPortfolio)
     validate_target(target)
-    assert target.quantities == {'uid': Decimal('30')}
+    assert target.quantities == {'uid': {
+        'ACCOUNT': Decimal('29.70'), 'INDEX': Decimal('27'),
+        'INDEPENDENT': Decimal('29.40'),
+        'COMPOSITE': Decimal('29.40'),
+    }[algoritm]}
     assert target.prices == {'uid': Decimal('2')}
     assert_own_values(target)
     assert data.mock_calls == []
 
 
-def test_events_are_lazy_and_read_one_event_at_a_time(case):
-    """Only advancing the returned iterable opens and advances its subscription."""
+def test_event_methods_are_pure_and_return_exact_accounts_and_bools(case, caplog):
+    """Declarations and predicates never read data, open streams or log skips."""
     algoritm, strategy, data = case
+    caplog.set_level(20, logger=LOGGER_NAME)
     source_events = tuple(data.position_events.return_value)
-    consumed = []
-
-    def stream():
-        for index, event in enumerate(source_events):
-            consumed.append(index)
-            yield event
-
-    data.position_events.return_value = stream()
-    decisions = strategy.events(data, 'dst')
-    assert isinstance(decisions, Iterable)
-    data.position_events.assert_not_called()
-    assert not consumed
-    validate_strategy(strategy)
-    data.position_events.assert_not_called()
-    assert not consumed
-    iterator = iter(decisions)
-    for index, expected in enumerate((False, True, False)):
-        decision = next(iterator)
-        assert isinstance(decision, bool)
-        assert decision is expected
-        assert consumed == list(range(index + 1))
-    with pytest.raises(StopIteration):
-        next(iterator)
-    assert data.mock_calls == [call.position_events(
-        ['00123', 'dst'] if algoritm == 'ACCOUNT' else ['dst'])]
+    with patch('builtins.open', side_effect=AssertionError('event I/O')), \
+            patch('pathlib.Path.open', side_effect=AssertionError('event I/O')):
+        assert strategy.event_accounts('dst') == (
+            ('00123', 'dst') if algoritm == 'ACCOUNT' else ('dst',))
+        assert strategy.event_accounts('00123') == ('00123',)
+        for event, expected in zip(source_events, (False, True, False)):
+            assert strategy.should_rebalance(event, 'dst') is expected
+    assert data.mock_calls == []
+    assert caplog.records == []
 
 
-@pytest.mark.parametrize('operation', ['snapshot', 'events'])
-def test_port_failures_remain_own_errors(case, operation):
-    """No SDK exception is required for snapshot or mid-stream transport failures."""
+@pytest.mark.parametrize('money, account_decision, index_decision', [
+    ((MoneyBlocking(Decimal('0')), MoneyBlocking(Decimal('1'))), True, False),
+    ((MoneyBlocking(Decimal('1')), MoneyBlocking(Decimal('0'))), False, False),
+    ((MoneyBlocking(Decimal('0')), MoneyBlocking(Decimal('0'))), True, True),
+])
+def test_destination_money_predicates_remain_distinct(money, account_decision, index_decision):
+    """ACCOUNT uses the first money blocking; INDEX requires every money to be clear."""
+    account, account_data = contract_case('ACCOUNT')
+    index, index_data = contract_case('INDEX')
+    event = PositionEvent(True, 'dst', (), money, 'money')
+    assert account.should_rebalance(event, 'dst') is account_decision
+    assert index.should_rebalance(event, 'dst') is index_decision
+    assert account_data.mock_calls == index_data.mock_calls == []
+
+
+def test_port_failures_remain_own_errors(case):
+    """No SDK exception is required for snapshot transport failures."""
     algoritm, strategy, data = case
     error = DataAccessError('port unavailable')
-    if operation == 'snapshot':
-        read = data.get_portfolio if algoritm == 'ACCOUNT' else data.get_last_prices
-        read.side_effect = error
-        with pytest.raises(DataAccessError) as caught:
-            strategy.load_snapshot(data)
-    else:
-        def stream():
-            yield PositionEvent(False, '', (), (), 'ping')
-            raise error
-
-        data.position_events.return_value = stream()
-        decisions = iter(strategy.events(data, 'dst'))
-        assert next(decisions) is False
-        with pytest.raises(DataAccessError) as caught:
-            next(decisions)
+    read = data.get_portfolio if algoritm == 'ACCOUNT' else data.get_last_prices
+    read.side_effect = error
+    with pytest.raises(DataAccessError) as caught:
+        strategy.load_snapshot(data)
     assert caught.value is error
     assert type(caught.value).__module__ == 'autorepeater.strategy_data'
     assert caught.value.args == ('port unavailable',)
@@ -353,15 +389,15 @@ def assert_launch_execution(launch, streaming):
     from t_tech import invest
 
     client, data, prepare, create, sdk_client, adapter = launch
-    prepare.assert_called_once_with('quote:uid')
+    prepare.assert_called_once_with('quote:uid', ANY)
     create.assert_called_once_with(IndependentSource('uid'))
     sdk_client.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
     sdk_client.return_value.__enter__.assert_called_once_with()
     sdk_client.return_value.__exit__.assert_called_once()
     adapter.assert_called_once_with(client)
     reads = [call.get_last_prices(['uid'])]
-    assert data.mock_calls == (reads + [call.position_events(['dst'])] + reads
-                               + [call.position_events(['dst'])] if streaming else reads)
+    assert data.mock_calls == (reads + [call.position_events(('dst',))] + reads
+                               + [call.position_events(('dst',))] if streaming else reads)
     count = 2 if streaming else 1
     assert client.operations.get_portfolio.call_args_list == [call(account_id='dst')] * count
     assert client.users.get_accounts.call_args_list == ([call()] if streaming else [])
@@ -393,8 +429,35 @@ from autorepeater.strategy_contract import validate_strategy
 from autorepeater.portfolio import validate_target
 from autorepeater.strategy_data import DataAccessError
 from decimal import Decimal
+from autorepeater import strategies
+assert set(strategies.ALGORITHMS) == {'ACCOUNT', 'INDEX', 'COMPOSITE'}
+from autorepeater.strategy_contract import AlgorithmDefinition, create_strategy
+from test.test_strategy_contract import IndependentStrategy
+from test.test_strategy_preparation import TreePreparation, create_tree
+from unittest.mock import patch
 
-for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT'):
+nodes = {'root': (('TREE', 'branch'), ('TREE', 'branch')),
+         'branch': (('INDEPENDENT', 'quote:uid'),)}
+strategies.register_algorithm('INDEPENDENT', AlgorithmDefinition(
+    IndependentStrategy.prepare_source, IndependentStrategy))
+strategies.register_algorithm('TREE', AlgorithmDefinition(TreePreparation(nodes).prepare, create_tree))
+with patch('builtins.open', side_effect=AssertionError('tree I/O')), \
+        patch('pathlib.Path.open', side_effect=AssertionError('tree I/O')):
+    prepared = strategies.prepare_strategy('TREE', 'root')
+    tree = create_strategy(prepared)
+    first, second = tree.children
+    assert first is not second
+    assert first.children[0] is not second.children[0]
+    assert first.children[0].source.uid == second.children[0].source.uid == 'uid'
+    nodes['branch'] = (('TREE', 'root'),)
+    try:
+        strategies.prepare_strategy('TREE', 'root')
+    except ValueError as error:
+        assert 'TREE/root -> TREE/branch -> TREE/root' in str(error)
+    else:
+        raise AssertionError('missing cycle failure')
+
+for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT', 'COMPOSITE'):
     strategy, data = contract_case(algorithm)
     validate_strategy(strategy)
     assert data.mock_calls == []
@@ -403,12 +466,20 @@ for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT'):
     data.reset_mock()
     target = strategy.build_target(snapshot, Decimal('60'))
     validate_target(target)
-    assert target.quantities == {'uid': Decimal('30')}
+    assert target.quantities == {'uid': {
+        'ACCOUNT': Decimal('29.70'), 'INDEX': Decimal('27'),
+        'INDEPENDENT': Decimal('29.40'),
+        'COMPOSITE': Decimal('29.40'),
+    }[algorithm]}
     assert target.prices == {'uid': Decimal('2')}
     assert data.mock_calls == []
-    decisions = strategy.events(data, 'dst')
-    data.position_events.assert_not_called()
-    assert list(decisions) == [False, True, False]
+    events = tuple(data.position_events.return_value)
+    with patch('builtins.open', side_effect=AssertionError('event I/O')), \
+            patch('pathlib.Path.open', side_effect=AssertionError('event I/O')):
+        assert strategy.event_accounts('dst') == (
+            ('00123', 'dst') if algorithm == 'ACCOUNT' else ('dst',))
+        assert [strategy.should_rebalance(event, 'dst') for event in events] == [False, True, False]
+    assert data.mock_calls == []
     data.get_portfolio.side_effect = DataAccessError('read failed')
     data.get_last_prices.side_effect = DataAccessError('read failed')
     try:

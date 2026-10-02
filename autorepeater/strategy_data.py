@@ -47,8 +47,8 @@ class InstrumentMatch:
 
 
 @dataclass(frozen=True, slots=True)
-class InstrumentInfo:
-    """Full instrument metadata loaded after selecting one UID."""
+class InstrumentInfo:  # pylint: disable=too-many-instance-attributes
+    """Full instrument metadata, including API permission, loaded for one UID."""
 
     uid: str
     ticker: str
@@ -57,6 +57,7 @@ class InstrumentInfo:
     class_code: str
     lot: int
     currency: str
+    api_trade_available: bool
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,20 +1,24 @@
 # pylint: disable=too-many-arguments, too-many-positional-arguments
 """Explicit algorithm selection and isolated, one-pass index preparation."""
 import json
+import logging
 import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import pytest
 
 from autorepeater import strategies
 from autorepeater import index_config
+from autorepeater import composite_config
 from autorepeater import runner as runner_module
 from autorepeater import serverless
 from autorepeater.index_config import load_index_configs, select_index_config
 from autorepeater.index_strategy import IndexQuote
+from autorepeater.account_strategy import PreparedAccountSource
+from autorepeater.account_config import AccountConfig
 from autorepeater.strategy_contract import AlgorithmDefinition
 from scripts import check_imoex_strategy as calibration
 import main as cli
@@ -25,6 +29,8 @@ def selection_environment(monkeypatch):
     """Every selection has controlled paths and a private registry."""
     monkeypatch.delenv('INDEX_CONFIG_DIR', raising=False)
     monkeypatch.delenv('IMOEX_CONFIG_PATH', raising=False)
+    monkeypatch.delenv('ACCOUNT_CONFIG_PATH', raising=False)
+    monkeypatch.delenv('COMPOSITE_CONFIG_DIR', raising=False)
     for name in ('ALGORITM', 'SRC_ACCOUNT', 'DST_ACCOUNT', 'INVEST_TOKEN', 't_token'):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(strategies, 'ALGORITHMS', dict(strategies.ALGORITHMS))
@@ -62,20 +68,20 @@ def test_algorithm_required_and_exact(algoritm):
 def test_registration_prepares_once_without_creating(monkeypatch):
     """The saved factory and opaque input survive later registry changes."""
     opaque = object()
-    strategy = Mock(spec_set=['default_reserve', 'load_snapshot', 'build_target', 'events'])
-    strategy.default_reserve = Decimal('0.01')
-    prepare = Mock(return_value=opaque)
+    strategy = Mock(spec_set=[
+        'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'])
+    prepare = Mock(side_effect=lambda src, context: opaque)
     create = Mock(return_value=strategy)
     strategies.register_algorithm('CUSTOM', AlgorithmDefinition(prepare, create))
     monkeypatch.setenv('INDEX_CONFIG_DIR', '/missing-index')
     monkeypatch.setenv('IMOEX_CONFIG_PATH', '/also-missing')
     prepared = strategies.prepare_strategy('CUSTOM', 'own-source')
     create.assert_not_called()
-    prepare.assert_called_once_with('own-source')
+    prepare.assert_called_once_with('own-source', ANY)
     monkeypatch.delitem(strategies.ALGORITHMS, 'CUSTOM')
     assert strategies.create_strategy(prepared) is strategy
     create.assert_called_once_with(opaque)
-    prepare.assert_called_once_with('own-source')
+    prepare.assert_called_once_with('own-source', ANY)
 
 
 def test_selected_valid_config_survives_foreign_errors(documents, tmp_path, caplog):
@@ -186,11 +192,17 @@ def test_selected_schema_error_stops_before_factory_and_client(documents, monkey
 def test_independent_algorithm_never_reads_index_settings(algoritm, src):
     """The meaning of src belongs to its registration, with no index environment access."""
     if algoritm == 'CUSTOM':
-        strategies.register_algorithm('CUSTOM', AlgorithmDefinition(lambda value: value, Mock()))
-    with patch.object(index_config.os, 'environ', Mock(spec_set=dict)) as environment:
+        strategies.register_algorithm('CUSTOM', AlgorithmDefinition(
+            lambda value, context: value, Mock()))
+    with patch.object(index_config, '_index_paths',
+                      side_effect=AssertionError('index settings read')) as paths:
         prepared = strategies.prepare_strategy(algoritm, src)
-    assert prepared.prepared_source == src
-    assert environment.mock_calls == []
+    if algoritm == 'ACCOUNT':
+        assert prepared.prepared_source == PreparedAccountSource(
+            src, AccountConfig(Decimal('0.01')))
+    else:
+        assert prepared.prepared_source == src
+    paths.assert_not_called()
 
 
 @pytest.mark.parametrize('chosen', ['GOOD', 'BAD'])
@@ -248,6 +260,7 @@ def test_old_creation_interface_is_removed():
 def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog,
                                       entrypoint, foreign):
     """All application launches use one preparation, read pass, and warning pass."""
+    caplog.set_level(logging.WARNING, logger='tinkoffBot')
     documents('good.json')
     if foreign == 'schema':
         documents('bad.json', 'BAD', reserve='NaN')
@@ -283,7 +296,7 @@ def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog
             prepared = strategies.prepare_strategy('INDEX', 'GOOD')
             client.assert_not_called()
             runner_module.Runner('synthetic-token', prepared, 'dst').run_sync()
-        prepare.assert_called_once_with('GOOD')
+        prepare.assert_called_once_with('GOOD', ANY)
         create.assert_called_once()
         assert sorted(str(item.args[0]) for item in read.call_args_list) == sorted(
             str(path) for path in tmp_path.glob('*.json'))
@@ -349,15 +362,16 @@ def test_cloud_query_algorithm_priority(monkeypatch):
         result = serverless.handler({'queryStringParameters': {
             'algoritm': 'ACCOUNT', 'src': '00123'}}, None)
     prepared = runner.call_args.kwargs['prepared_strategy']
-    assert prepared.prepared_source == '00123'
+    assert prepared.prepared_source.src == '00123'
     assert runner.call_args.kwargs['token'] == 'legacy-token'
     assert result['body'] == f'Success sync, 00123 {serverless.DEFAULT_DST_ACCOUNT}!'
 
 
+@pytest.mark.parametrize('algoritm', ['ACCOUNT', 'INDEX'])
 @pytest.mark.parametrize('query', [{}, {'src': None}, {'src': ''}, {'src': ' '}])
-def test_cloud_requires_explicit_source(monkeypatch, query):
-    """ACCOUNT has no default source; a present empty source never falls back."""
-    monkeypatch.setenv('ALGORITM', 'ACCOUNT')
+def test_cloud_requires_explicit_source(monkeypatch, query, algoritm):
+    """Nondefault algorithms require a source; empty values never fall back."""
+    monkeypatch.setenv('ALGORITM', algoritm)
     if query:
         monkeypatch.setenv('SRC_ACCOUNT', '123')
     with patch.object(serverless, 'Runner') as runner, \
@@ -371,31 +385,41 @@ def test_cloud_requires_explicit_source(monkeypatch, query):
 @pytest.mark.parametrize('event', [
     None, {}, {'queryStringParameters': None}, {'queryStringParameters': {}},
 ])
-def test_cloud_defaults_to_tmon(monkeypatch, event):
-    """A timer invocation selects the bundled single-instrument config once."""
+def test_cloud_defaults_to_balanced(monkeypatch, event):
+    """A timer invocation prepares the exact ordered composition once."""
     monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
     with patch.object(serverless, 'Runner', autospec=True) as runner, \
             patch.object(serverless, 'configure_yc_logging'), \
             patch.object(index_config, 'read_index_document',
-                         wraps=index_config.read_index_document) as read:
+                         wraps=index_config.read_index_document) as read, \
+            patch.object(composite_config, 'read_composite_document',
+                         wraps=composite_config.read_composite_document) as composite_read:
         result = serverless.handler(event, None)
     prepared = runner.call_args.kwargs['prepared_strategy']
     strategy = strategies.create_strategy(prepared)
-    assert strategy.config.name == 'TMON'
-    assert [item.ticker for item in strategy.config.instruments] == ['TMON']
-    assert strategy.default_reserve == Decimal('0.0005')
-    paths = Path(index_config.__file__).with_name('configs').glob('*.json')
-    assert sorted(str(item.args[0]) for item in read.call_args_list) == sorted(map(str, paths))
+    assert strategy.source.name == 'BALANCED'
+    assert [(item.algoritm, item.src, str(item.weight)) for item in strategy.source.components] == [
+        ('INDEX', 'IMOEX', '0.684210526'),
+        ('INDEX', 'OBLG', '0.210526316'),
+        ('INDEX', 'GOLD', '0.105263158')]
+    assert sum(item.weight for item in strategy.source.components) == Decimal('1')
+    assert [child.config.name for child in strategy.children] == ['IMOEX', 'OBLG', 'GOLD']
+    assert [child.config.reserve for child in strategy.children] == [
+        Decimal('0.01'), Decimal('0.006'), Decimal('0.006')]
+    paths = list(Path(index_config.__file__).with_name('configs').glob('*.json'))
+    assert sorted(str(item.args[0]) for item in read.call_args_list) == sorted(map(str, paths * 3))
+    composite_read.assert_called_once_with(
+        Path(composite_config.__file__).parent / 'configs/composite/balanced.json')
     runner.assert_called_once_with(token='synthetic-token', prepared_strategy=prepared,
                                    dst=serverless.DEFAULT_DST_ACCOUNT)
     assert runner.return_value.method_calls == [call.run_sync()]
-    assert result['body'] == f'Success sync, TMON {serverless.DEFAULT_DST_ACCOUNT}!'
+    assert result['body'] == f'Success sync, BALANCED {serverless.DEFAULT_DST_ACCOUNT}!'
 
 
 @pytest.mark.parametrize('location', ['query', 'environment'])
-@pytest.mark.parametrize('source', [None, 'GOLD'])
+@pytest.mark.parametrize('source', [None, 'GOLD', 'BALANCED'])
 def test_cloud_partial_index_selection(monkeypatch, location, source):
-    """Missing INDEX source or algorithm uses the cloud defaults, not inference."""
+    """Explicit INDEX needs src; src alone names a COMPOSITE config."""
     monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
     query = {}
     name, value = ('algoritm', 'INDEX') if source is None else ('src', source)
@@ -405,9 +429,31 @@ def test_cloud_partial_index_selection(monkeypatch, location, source):
         monkeypatch.setenv('ALGORITM' if name == 'algoritm' else 'SRC_ACCOUNT', value)
     with patch.object(serverless, 'Runner', autospec=True) as runner, \
             patch.object(serverless, 'configure_yc_logging'):
+        if source != 'BALANCED':
+            with pytest.raises(ValueError, match=(
+                    'src is required' if source is None else 'unsupported src: GOLD')):
+                serverless.handler({'queryStringParameters': query}, None)
+            runner.assert_not_called()
+            return
         serverless.handler({'queryStringParameters': query}, None)
-    assert runner.call_args.kwargs['prepared_strategy'].prepared_source.name == (source or 'TMON')
+    assert runner.call_args.kwargs['prepared_strategy'].prepared_source.name == 'BALANCED'
     runner.return_value.run_sync.assert_called_once_with()
+
+
+@pytest.mark.parametrize('location', ['query', 'environment'])
+def test_cloud_explicit_previous_default(monkeypatch, location):
+    """INDEX/TMON remains selectable explicitly with the same reserve."""
+    monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
+    query = {'algoritm': 'INDEX', 'src': 'TMON'} if location == 'query' else {}
+    if location == 'environment':
+        monkeypatch.setenv('ALGORITM', 'INDEX')
+        monkeypatch.setenv('SRC_ACCOUNT', 'TMON')
+    with patch.object(serverless, 'Runner') as runner, \
+            patch.object(serverless, 'configure_yc_logging'):
+        serverless.handler({'queryStringParameters': query}, None)
+    strategy = strategies.create_strategy(runner.call_args.kwargs['prepared_strategy'])
+    assert strategy.config.name == 'TMON'
+    assert strategy.config.reserve == Decimal('0.0005')
 
 
 @pytest.mark.parametrize('payload', ['{}', '[]', '{"name":"BAD","reserve":"NaN"}'])
@@ -461,28 +507,18 @@ def test_calibrator_uses_same_single_pass_selection(documents, monkeypatch, capl
         client.assert_called_once()
 
 
-def test_registry_import_does_not_read_files_or_sdk():
+def test_registry_import_does_not_read_files_or_sdk(guarded_import_script):
     """A fresh process imports built-in registrations without filesystem or network I/O."""
-    script = '''
-import builtins
-import pathlib
-import socket
-
-original_import = builtins.__import__
-def guarded_import(name, *args, **kwargs):
-    if name.startswith(('t_tech', 'grpc')):
-        raise AssertionError('SDK import forbidden')
-    return original_import(name, *args, **kwargs)
-def blocked_io(*args, **kwargs):
-    raise AssertionError('I/O forbidden')
-builtins.__import__ = guarded_import
-builtins.open = blocked_io
-pathlib.Path.open = blocked_io
-socket.socket = blocked_io
+    script = guarded_import_script(('t_tech', 'grpc'), '''
 from autorepeater.strategies import ALGORITHMS, prepare_strategy
-assert set(ALGORITHMS) == {'ACCOUNT', 'INDEX'}
-assert prepare_strategy('ACCOUNT', '00123').prepared_source == '00123'
-'''
+assert set(ALGORITHMS) == {'ACCOUNT', 'INDEX', 'COMPOSITE'}
+try:
+    prepare_strategy('ACCOUNT', '00123')
+except AssertionError as error:
+    assert str(error) == 'I/O forbidden'
+else:
+    raise AssertionError('ACCOUNT preparation must read its own settings')
+''')
     result = subprocess.run([sys.executable, '-c', script],
                             cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, check=False, timeout=30)

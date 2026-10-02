@@ -3,16 +3,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_FLOOR
 
-from autorepeater import reporting
 from autorepeater.index_config import select_index_config
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_data import InstrumentType
+from autorepeater import reporting
 
 
-INDEX_BOARDS = {InstrumentType.SHARE: 'TQBR', InstrumentType.ETF: 'TQTF'}
+INDEX_TYPES = (InstrumentType.SHARE, InstrumentType.ETF)
 
 
-def prepare_index_source(src):
+def prepare_index_source(src, context):  # pylint: disable=unused-argument
     """Prepare the exact JSON name using an isolated, one-pass selection."""
     return select_index_config(src)
 
@@ -27,28 +28,42 @@ class IndexQuote:
     time: datetime | None = None
 
 
-def _resolve_index_instrument(data, ticker, resolved):
-    matches = [item for item in data.find_instruments(ticker)
-               if item.ticker == ticker and item.instrument_type in INDEX_BOARDS
-               and item.class_code == INDEX_BOARDS[item.instrument_type]]
-    if len(matches) != 1:
-        raise ValueError(
-            f'expected exactly one index instrument: {ticker} (TQBR/TQTF), '
-            f'found {len(matches)}')
-    class_code = matches[0].class_code
-    instrument_type = matches[0].instrument_type
-    uid = matches[0].uid
+def _load_index_candidate(data, match, resolved):
+    ticker, uid, class_code = match.ticker, match.uid, match.class_code
     if not isinstance(uid, str) or not uid or uid in resolved:
         raise ValueError(f'invalid or duplicate index UID: {ticker} ({class_code})')
     instrument = data.get_instrument(uid)
     if (instrument.uid != uid or instrument.ticker != ticker
-            or instrument.instrument_type != instrument_type
+            or instrument.instrument_type != match.instrument_type
             or instrument.class_code != class_code):
         raise ValueError(f'invalid index instrument metadata: {ticker} ({uid}, {class_code})')
-    if (isinstance(instrument.lot, bool) or not isinstance(instrument.lot, int)
+    if not isinstance(instrument.api_trade_available, bool):
+        raise ValueError(f'invalid index api_trade_available: {ticker} ({uid}, {class_code})')
+    if instrument.api_trade_available and (
+            isinstance(instrument.lot, bool) or not isinstance(instrument.lot, int)
             or instrument.lot <= 0):
         raise ValueError(f'invalid index lot: {ticker} ({class_code})')
     return instrument
+
+
+def _resolve_index_instrument(data, ticker, resolved):
+    matches = [item for item in data.find_instruments(ticker)
+               if item.ticker == ticker and item.instrument_type in INDEX_TYPES]
+    candidates = [_load_index_candidate(data, match, resolved) for match in matches]
+    available = []
+    for instrument in candidates:
+        if instrument.api_trade_available:
+            available.append(instrument)
+        else:
+            reporting.print_unavailable_index_candidate(instrument)
+    if not available:
+        details = ', '.join(f'{item.uid}/{item.class_code}' for item in candidates) or 'none'
+        raise ValueError(f'no index instrument: {ticker} available via API; candidates: {details}')
+    chosen = available[0]
+    if len(available) > 1:
+        reporting.print_index_selection_warning(ticker, chosen, available)
+    reporting.print_index_instrument_selected(chosen)
+    return chosen
 
 
 def _index_price(price, ticker):
@@ -64,11 +79,6 @@ class IndexStrategy:
 
     def __init__(self, config):
         self.config = config
-
-    @property
-    def default_reserve(self):
-        """Use the config's reserve unless the caller explicitly overrides it."""
-        return self.config.reserve
 
     def load_snapshot(self, data):
         """Resolve the entire base anew; unavailable data aborts the calculation."""
@@ -95,20 +105,23 @@ class IndexStrategy:
         return snapshot
 
     def build_target(self, snapshot, budget):
-        """Use the shared pure calculator without further SDK calls."""
-        return build_index_target(self.config, snapshot, budget)
+        """Reserve the configured fraction of gross value before the pure calculation."""
+        if not isinstance(budget, Decimal) or not budget.is_finite():
+            raise ValueError('index budget must be a positive finite Decimal')
+        return build_index_target(
+            self.config, snapshot, available_budget(budget, self.config.reserve))
 
-    def events(self, data, dst_account_id):
-        """Recalculate populated, fully unblocked destinations; propagate stream errors."""
-        for event in data.position_events([dst_account_id]):
-            triggered = (
-                event.has_position and event.account_id == dst_account_id
-                and bool(event.securities or event.money)
-                and all(item.blocked == 0 for item in event.securities)
-                and all(item.blocked_value == 0 for item in event.money))
-            if not triggered:
-                reporting.print_skipped_strategy_event(event)
-            yield triggered
+    def event_accounts(self, dst_account_id):
+        """Watch only destination positions; prices do not trigger synchronization."""
+        return (dst_account_id,)
+
+    def should_rebalance(self, event, dst_account_id):
+        """Recalculate populated destinations only when every blocking is zero."""
+        return (
+            event.has_position and event.account_id == dst_account_id
+            and bool(event.securities or event.money)
+            and all(item.blocked == 0 for item in event.securities)
+            and all(item.blocked_value == 0 for item in event.money))
 
 
 @dataclass

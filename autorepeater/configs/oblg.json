@@ -1,11 +1,11 @@
 {
-  "name": "BOND",
-  "reserve": "0.0005",
+  "name": "OBLG",
+  "reserve": "0.006",
   "max_lot_weight_error": "0.05",
   "min_position_value": "0",
   "instruments": [
     {
-      "ticker": "BOND",
+      "ticker": "OBLG",
       "reference_price": "1",
       "effective_quantity": "1",
       "free_float": "1",
