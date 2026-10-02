@@ -2,6 +2,7 @@
 import os
 
 from autorepeater.logging_config import configure_yc_logging
+from autorepeater.reporting import print_launch
 from autorepeater.runner import Runner
 from autorepeater.strategies import prepare_strategy
 
@@ -42,6 +43,7 @@ def handler(event, context):
     src = params['src'] if 'src' in params else os.environ.get('SRC_ACCOUNT', default_src)
     prepared = prepare_strategy(algoritm, src)
     dst = get_param(params, 'dst', 'DST_ACCOUNT', DEFAULT_DST_ACCOUNT)
+    print_launch(algoritm, src, dst)
     invest_token = get_param(params, 'token', 'INVEST_TOKEN')
     if invest_token is None:
         invest_token = os.environ['t_token']

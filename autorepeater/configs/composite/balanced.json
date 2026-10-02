@@ -2,7 +2,7 @@
   "name": "BALANCED",
   "components": [
     {"algoritm": "INDEX", "src": "IMOEX", "weight": "0.684210526"},
-    {"algoritm": "INDEX", "src": "BOND", "weight": "0.210526316"},
+    {"algoritm": "INDEX", "src": "OBLG", "weight": "0.210526316"},
     {"algoritm": "INDEX", "src": "GOLD", "weight": "0.105263158"}
   ]
 }

@@ -7,9 +7,10 @@ from autorepeater.index_config import select_index_config
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_data import InstrumentType
+from autorepeater import reporting
 
 
-INDEX_BOARDS = {InstrumentType.SHARE: 'TQBR', InstrumentType.ETF: 'TQTF'}
+INDEX_TYPES = (InstrumentType.SHARE, InstrumentType.ETF)
 
 
 def prepare_index_source(src, context):  # pylint: disable=unused-argument
@@ -27,28 +28,42 @@ class IndexQuote:
     time: datetime | None = None
 
 
-def _resolve_index_instrument(data, ticker, resolved):
-    matches = [item for item in data.find_instruments(ticker)
-               if item.ticker == ticker and item.instrument_type in INDEX_BOARDS
-               and item.class_code == INDEX_BOARDS[item.instrument_type]]
-    if len(matches) != 1:
-        raise ValueError(
-            f'expected exactly one index instrument: {ticker} (TQBR/TQTF), '
-            f'found {len(matches)}')
-    class_code = matches[0].class_code
-    instrument_type = matches[0].instrument_type
-    uid = matches[0].uid
+def _load_index_candidate(data, match, resolved):
+    ticker, uid, class_code = match.ticker, match.uid, match.class_code
     if not isinstance(uid, str) or not uid or uid in resolved:
         raise ValueError(f'invalid or duplicate index UID: {ticker} ({class_code})')
     instrument = data.get_instrument(uid)
     if (instrument.uid != uid or instrument.ticker != ticker
-            or instrument.instrument_type != instrument_type
+            or instrument.instrument_type != match.instrument_type
             or instrument.class_code != class_code):
         raise ValueError(f'invalid index instrument metadata: {ticker} ({uid}, {class_code})')
-    if (isinstance(instrument.lot, bool) or not isinstance(instrument.lot, int)
+    if not isinstance(instrument.api_trade_available, bool):
+        raise ValueError(f'invalid index api_trade_available: {ticker} ({uid}, {class_code})')
+    if instrument.api_trade_available and (
+            isinstance(instrument.lot, bool) or not isinstance(instrument.lot, int)
             or instrument.lot <= 0):
         raise ValueError(f'invalid index lot: {ticker} ({class_code})')
     return instrument
+
+
+def _resolve_index_instrument(data, ticker, resolved):
+    matches = [item for item in data.find_instruments(ticker)
+               if item.ticker == ticker and item.instrument_type in INDEX_TYPES]
+    candidates = [_load_index_candidate(data, match, resolved) for match in matches]
+    available = []
+    for instrument in candidates:
+        if instrument.api_trade_available:
+            available.append(instrument)
+        else:
+            reporting.print_unavailable_index_candidate(instrument)
+    if not available:
+        details = ', '.join(f'{item.uid}/{item.class_code}' for item in candidates) or 'none'
+        raise ValueError(f'no index instrument: {ticker} available via API; candidates: {details}')
+    chosen = available[0]
+    if len(available) > 1:
+        reporting.print_index_selection_warning(ticker, chosen, available)
+    reporting.print_index_instrument_selected(chosen)
+    return chosen
 
 
 def _index_price(price, ticker):

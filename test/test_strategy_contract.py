@@ -125,7 +125,7 @@ def contract_case(algoritm):
     data.find_instruments.return_value = [
         InstrumentMatch('uid', 'ONE', 'One', InstrumentType.SHARE, 'TQBR')]
     data.get_instrument.return_value = InstrumentInfo(
-        'uid', 'ONE', 'One', InstrumentType.SHARE, 'TQBR', 3, 'RUB')
+        'uid', 'ONE', 'One', InstrumentType.SHARE, 'TQBR', 3, 'RUB', True)
     data.get_last_prices.return_value = [PriceQuote('uid', Decimal('2'), None)]
     data.position_events.return_value = iter((
         PositionEvent(False, '', (), (), 'ping'),

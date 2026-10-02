@@ -55,6 +55,7 @@ class AutoRepeater:
                 id=item_id).instrument
             if (instrument.trading_status != SecurityTradingStatus.
                     SECURITY_TRADING_STATUS_NORMAL_TRADING):
+                reporting.print_nontrading_instrument(instrument, 'sell')
                 continue
             if item_id not in target_positions:
                 quantity = round(get_quantity_position(
@@ -67,6 +68,10 @@ class AutoRepeater:
                             quantity=quantity,
                             direction=OrderDirection.ORDER_DIRECTION_SELL,
                             order_type=OrderType.ORDER_TYPE_BESTPRICE))
+                else:
+                    reporting.print_order_skip(
+                        instrument, 'sell', get_quantity_position(item_value),
+                        Decimal('0'), quantity)
             elif target_positions[item_id] < get_quantity_position(item_value):
                 quantity = round((get_quantity_position(
                     item_value) - target_positions[item_id]) / Decimal(str(instrument.lot)))
@@ -78,6 +83,14 @@ class AutoRepeater:
                             quantity=quantity,
                             direction=OrderDirection.ORDER_DIRECTION_SELL,
                             order_type=OrderType.ORDER_TYPE_BESTPRICE))
+                else:
+                    reporting.print_order_skip(
+                        instrument, 'sell', get_quantity_position(item_value),
+                        target_positions[item_id], quantity)
+            else:
+                reporting.print_order_skip(
+                    instrument, 'sell', get_quantity_position(item_value),
+                    target_positions[item_id])
         return result
 
     def calc_buy_positions(self, dst_positions, target_positions):
@@ -89,6 +102,7 @@ class AutoRepeater:
                 id=item_id).instrument
             if (instrument.trading_status != SecurityTradingStatus.
                     SECURITY_TRADING_STATUS_NORMAL_TRADING):
+                reporting.print_nontrading_instrument(instrument, 'buy')
                 continue
             if item_id not in dst_positions:
                 quantity = round(item_value / Decimal(str(instrument.lot)))
@@ -100,6 +114,9 @@ class AutoRepeater:
                             quantity=quantity,
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
                             order_type=OrderType.ORDER_TYPE_BESTPRICE))
+                else:
+                    reporting.print_order_skip(
+                        instrument, 'buy', Decimal('0'), item_value, quantity)
             elif item_value > get_quantity_position(dst_positions[item_id]):
                 position = dst_positions[item_id]
                 quantity = round((item_value -
@@ -113,6 +130,12 @@ class AutoRepeater:
                             quantity=quantity,
                             direction=OrderDirection.ORDER_DIRECTION_BUY,
                             order_type=OrderType.ORDER_TYPE_BESTPRICE))
+                else:
+                    reporting.print_order_skip(
+                        instrument, 'buy', get_quantity_position(position), item_value, quantity)
+            else:
+                reporting.print_order_skip(
+                    instrument, 'buy', get_quantity_position(dst_positions[item_id]), item_value)
         return result
 
     def post_orders(self, dst_account_id, orders_params_sell,
@@ -120,22 +143,24 @@ class AutoRepeater:
         """post all orders"""
         for order_params in orders_params_sell:
             reporting.print_order(order_params)
-            reporting.print_order_result(
-                self.client.orders.post_order(
-                    instrument_id=order_params.instrument_id,
-                    quantity=order_params.quantity,
-                    direction=order_params.direction,
-                    account_id=dst_account_id,
-                    order_type=order_params.order_type).order_id)
+            response = self.client.orders.post_order(
+                instrument_id=order_params.instrument_id,
+                quantity=order_params.quantity,
+                direction=order_params.direction,
+                account_id=dst_account_id,
+                order_type=order_params.order_type)
+            reporting.print_order_result(response.order_id)
+            reporting.print_order_execution(response)
         for order_params in orders_params_buy:
             reporting.print_order(order_params)
-            reporting.print_order_result(
-                self.client.orders.post_order(
-                    instrument_id=order_params.instrument_id,
-                    quantity=order_params.quantity,
-                    direction=order_params.direction,
-                    account_id=dst_account_id,
-                    order_type=order_params.order_type).order_id)
+            response = self.client.orders.post_order(
+                instrument_id=order_params.instrument_id,
+                quantity=order_params.quantity,
+                direction=order_params.direction,
+                account_id=dst_account_id,
+                order_type=order_params.order_type)
+            reporting.print_order_result(response.order_id)
+            reporting.print_order_execution(response)
 
     def sync_accounts(self, dst_account_id):
         """Build and validate a fresh target before calculating any orders."""
@@ -156,18 +181,24 @@ class AutoRepeater:
         if not target.quantities:
             reporting.print_empty_target(dst_account_id, target.empty_reason)
             return
+        reporting.print_target(target, total_dst)
 
         orders_params_sell = self.calc_sell_positions(
             dst_positions, target.quantities)
         orders_params_buy = self.calc_buy_positions(
             dst_positions, target.quantities)
 
-        if (not self.debug) and (
-                get_max_sum_positions_price(orders_params_sell, orders_params_buy,
-                                            {uid: currency_to_decimal_price(position)
-                                             for uid, position in dst_positions.items()},
-                                            target.prices) >
-                total_dst * self.threshold):
+        if self.debug:
+            reporting.print_execution_decision(orders_params_sell, orders_params_buy)
+            return
+        volume = get_max_sum_positions_price(
+            orders_params_sell, orders_params_buy,
+            {uid: currency_to_decimal_price(position) for uid, position in dst_positions.items()},
+            target.prices)
+        threshold_value = total_dst * self.threshold
+        reporting.print_execution_decision(
+            orders_params_sell, orders_params_buy, volume, threshold_value)
+        if volume > threshold_value:
             self.post_orders(
                 dst_account_id,
                 orders_params_sell,

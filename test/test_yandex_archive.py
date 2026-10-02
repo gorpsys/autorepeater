@@ -233,7 +233,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
             assert [(item.algoritm, item.src, item.weight)
                     for item in balanced.source.components] == [
                 ('INDEX', 'IMOEX', Decimal('0.684210526')),
-                ('INDEX', 'BOND', Decimal('0.210526316')),
+                ('INDEX', 'OBLG', Decimal('0.210526316')),
                 ('INDEX', 'GOLD', Decimal('0.105263158'))]
             assert launch.return_value.method_calls == [call.run_sync()]
 

@@ -2,6 +2,7 @@
 # pylint: disable=too-many-locals
 """Real entrypoints and engine with saved composite trees and mocked execution."""
 import json
+import logging
 import sys
 from contextlib import nullcontext
 from decimal import Decimal
@@ -240,7 +241,7 @@ def test_invalid_child_contract_before_client(catalog, execution):
 @pytest.mark.usefixtures('catalog')
 def test_partial_failure_never_submits_and_next_sync_succeeds(execution, failure, caplog):
     """Successful prior children do not expose a partial portfolio to execution."""
-    caplog.set_level(25, logger=LOGGER_NAME)
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
     client, data, *_ = execution
     runner = runner_module.Runner(
         'test-token', strategies.prepare_strategy('COMPOSITE', 'ROOT'), 'dst')
@@ -386,9 +387,9 @@ def test_builtin_balanced_default_runs_actual_engine(execution, monkeypatch, eve
             quantity=invest.Quotation(units=100000, nano=0))])
 
     def info(ticker):
-        kind = InstrumentType.ETF if ticker in ('BOND', 'GOLD') else InstrumentType.SHARE
+        kind = InstrumentType.ETF if ticker in ('OBLG', 'GOLD') else InstrumentType.SHARE
         return InstrumentInfo('uid-' + ticker, ticker, ticker, kind,
-                              'TQTF' if kind == InstrumentType.ETF else 'TQBR', 1, 'RUB')
+                              'TQTF' if kind == InstrumentType.ETF else 'TQBR', 1, 'RUB', True)
 
     def find(query):
         instrument = info(query)
@@ -403,8 +404,8 @@ def test_builtin_balanced_default_runs_actual_engine(execution, monkeypatch, eve
     assert result['body'] == 'Success sync, BALANCED dst!'
     orders_sent = client.orders.post_order.call_args_list
     sent = {item.kwargs['instrument_id']: item.kwargs['quantity'] for item in orders_sent}
-    assert sent['uid-BOND'] == 2104
-    assert sent['uid-GOLD'] == 1052
+    assert sent['uid-OBLG'] == 2092
+    assert sent['uid-GOLD'] == 1046
     assert len(sent) == len(orders_sent) and len(sent) > 2
     assert sum(sent.values()) * 10 <= Decimal('100000')
     assert all(item.kwargs['account_id'] == 'dst' and item.kwargs['direction'] == (
