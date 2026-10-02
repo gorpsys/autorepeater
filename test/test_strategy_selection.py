@@ -1,6 +1,7 @@
 # pylint: disable=too-many-arguments, too-many-positional-arguments
 """Explicit algorithm selection and isolated, one-pass index preparation."""
 import json
+import logging
 import subprocess
 import sys
 from decimal import Decimal
@@ -259,6 +260,7 @@ def test_old_creation_interface_is_removed():
 def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog,
                                       entrypoint, foreign):
     """All application launches use one preparation, read pass, and warning pass."""
+    caplog.set_level(logging.WARNING, logger='tinkoffBot')
     documents('good.json')
     if foreign == 'schema':
         documents('bad.json', 'BAD', reserve='NaN')
@@ -398,10 +400,12 @@ def test_cloud_defaults_to_balanced(monkeypatch, event):
     assert strategy.source.name == 'BALANCED'
     assert [(item.algoritm, item.src, str(item.weight)) for item in strategy.source.components] == [
         ('INDEX', 'IMOEX', '0.684210526'),
-        ('INDEX', 'BOND', '0.210526316'),
+        ('INDEX', 'OBLG', '0.210526316'),
         ('INDEX', 'GOLD', '0.105263158')]
     assert sum(item.weight for item in strategy.source.components) == Decimal('1')
-    assert [child.config.name for child in strategy.children] == ['IMOEX', 'BOND', 'GOLD']
+    assert [child.config.name for child in strategy.children] == ['IMOEX', 'OBLG', 'GOLD']
+    assert [child.config.reserve for child in strategy.children] == [
+        Decimal('0.01'), Decimal('0.006'), Decimal('0.006')]
     paths = list(Path(index_config.__file__).with_name('configs').glob('*.json'))
     assert sorted(str(item.args[0]) for item in read.call_args_list) == sorted(map(str, paths * 3))
     composite_read.assert_called_once_with(

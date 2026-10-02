@@ -66,6 +66,7 @@ def test_instrument_models_separate_search_and_full_metadata():
         class_code='TQBR',
         lot=10,
         currency='RUB',
+        api_trade_available=True,
     )
 
     assert {field.name for field in fields(InstrumentMatch)} == {
@@ -74,6 +75,7 @@ def test_instrument_models_separate_search_and_full_metadata():
     assert not hasattr(match, 'lot')
     assert info.currency == 'RUB'
     assert info.lot == 10
+    assert info.api_trade_available is True
     assert InstrumentType.ETF.value == 'etf'
     assert InstrumentType.CURRENCY.value == 'currency'
 
@@ -128,7 +130,7 @@ def test_position_event_preserves_service_event_and_blocking_order():
                        Decimal('1'), 'diagnostic'),
         PortfolioSnapshot(()),
         InstrumentMatch('uid', 'TEST', 'Test', InstrumentType.SHARE, 'TQBR'),
-        InstrumentInfo('uid', 'TEST', 'Test', InstrumentType.SHARE, 'TQBR', 1, 'RUB'),
+        InstrumentInfo('uid', 'TEST', 'Test', InstrumentType.SHARE, 'TQBR', 1, 'RUB', True),
         PriceQuote('uid', Decimal('1'), None),
         SecurityBlocking(0),
         MoneyBlocking(Decimal('0')),

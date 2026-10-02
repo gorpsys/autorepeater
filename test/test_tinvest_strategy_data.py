@@ -161,14 +161,15 @@ def test_get_instrument_uses_uid_query_and_full_metadata(client, data):
     client.instruments.get_instrument_by.return_value = InstrumentResponse(
         instrument=Instrument(
             uid='uid', ticker='TEST', name='Test share',
-            instrument_type='share', class_code='TQBR', lot=10, currency='RUB'))
+            instrument_type='share', class_code='TQBR', lot=10, currency='RUB',
+            api_trade_available_flag=True))
 
     result = data.get_instrument('uid')
 
     assert result == InstrumentInfo(
         uid='uid', ticker='TEST', name='Test share',
         instrument_type=InstrumentType.SHARE, class_code='TQBR',
-        lot=10, currency='RUB')
+        lot=10, currency='RUB', api_trade_available=True)
     assert client.mock_calls == [call.instruments.get_instrument_by(
         id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid')]
 

@@ -459,7 +459,7 @@ def test_index_strategy_uses_own_data_port_and_preserves_query_order(index_sdk_c
     data.find_instruments.return_value = [InstrumentMatch(
         'uid', ticker, 'index name', InstrumentType.SHARE, 'TQBR')]
     data.get_instrument.return_value = InstrumentInfo(
-        'uid', ticker, 'index name', InstrumentType.SHARE, 'TQBR', 10, 'RUB')
+        'uid', ticker, 'index name', InstrumentType.SHARE, 'TQBR', 10, 'RUB', True)
     quote_time = datetime(2026, 9, 30, tzinfo=timezone.utc)
     data.get_last_prices.return_value = [PriceQuote('uid', Decimal('12.5'), quote_time)]
     config = replace(index_sdk_config, instruments=(index_sdk_config.instruments[0],))
@@ -1544,7 +1544,7 @@ def test_sync_empty_target_skips_all_orders(
             patch('autorepeater.repeater.get_max_sum_positions_price', autospec=True) as volume, \
             patch('autorepeater.repeater.validate_target', autospec=True,
                   side_effect=validate_target) as validate, \
-            caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+            caplog.at_level(logging.INFO, logger=logging_config.LOGGER_NAME):
         assert repeater.sync_accounts(account) is None
         validate.assert_called_once_with(target)
         sell.assert_not_called()
@@ -1552,7 +1552,7 @@ def test_sync_empty_target_skips_all_orders(
         volume.assert_not_called()
         post.assert_not_called()
     assert (caplog.records[-1].levelno, caplog.messages[-1]) == (
-        logging_config.IMPORTANT,
+        logging.INFO,
         f'Skipping synchronization for destination {account}: empty target')
     client.instruments.get_instrument_by.assert_not_called()
     client.orders.post_order.assert_not_called()
@@ -1685,7 +1685,7 @@ def test_composite_sync_trades_only_complete_valid_target(
             patch.object(engine, 'calc_buy_positions', wraps=engine.calc_buy_positions) as buy, \
             patch('autorepeater.repeater.get_max_sum_positions_price',
                   wraps=get_max_sum_positions_price) as volume, \
-            caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+            caplog.at_level(logging.INFO, logger=logging_config.LOGGER_NAME):
         if outcome in ('invalid', 'build_error', 'load_error'):
             with pytest.raises(ValueError if outcome == 'invalid' else DataAccessError):
                 engine.sync_accounts('5')
@@ -3156,10 +3156,10 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
     assert second.config.min_position_value == Decimal('2000')
     assert second.config.reserve == Decimal('0.02')
     assert second.config is not strategy.config
-    for name in ['GOLD', 'BOND', 'TMON']:
+    for name, reserve in [('GOLD', '0.006'), ('OBLG', '0.006'), ('TMON', '0.0005')]:
         single = create_strategy(prepare_strategy('INDEX', name))
         assert [item.ticker for item in single.config.instruments] == [name]
-        assert single.config.reserve == Decimal('0.0005')
+        assert single.config.reserve == Decimal(reserve)
 
     launches = []
     def capture_launch(application):
@@ -3171,7 +3171,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
             assert strategy.source.name == 'BALANCED'
             assert [(item.algoritm, item.src, item.weight) for item in strategy.source.components] == [
                 ('INDEX', 'IMOEX', Decimal('0.684210526')),
-                ('INDEX', 'BOND', Decimal('0.210526316')),
+                ('INDEX', 'OBLG', Decimal('0.210526316')),
                 ('INDEX', 'GOLD', Decimal('0.105263158'))]
             assert sum(item.weight for item in strategy.source.components) == Decimal('1')
             snapshot = CompositeSnapshot(tuple(
@@ -3179,7 +3179,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                  for item in child.config.instruments} for child in strategy.children))
             target = strategy.build_target(snapshot, Decimal('100000'))
             assert target.quantities
-            assert 'uid-BOND' in target.quantities and 'uid-GOLD' in target.quantities
+            assert 'uid-OBLG' in target.quantities and 'uid-GOLD' in target.quantities
             launches.append(('BALANCED', None, engine.debug))
             assert engine.strategy is strategy and engine.data is data
             assert application.dst == 'destination'
@@ -3403,7 +3403,8 @@ def test_local_logging(monkeypatch):
 
 @pytest.mark.parametrize(
     'level, expected',
-    [(logging_config.IMPORTANT, 'INFO'), (logging.WARNING, 'WARN'), (logging.CRITICAL, 'FATAL')],
+    [(logging.INFO, 'INFO'), (logging_config.IMPORTANT, 'INFO'),
+     (logging.WARNING, 'WARN'), (logging.CRITICAL, 'FATAL')],
 )
 def test_cloud_logging(level, expected, monkeypatch):
     """Repeated cloud calls reuse a single handler and emit Yandex JSON levels."""
@@ -3416,7 +3417,7 @@ def test_cloud_logging(level, expected, monkeypatch):
     logging_config.configure_yc_logging()
 
     assert logger.handlers == [first_handler]
-    assert logger.level == logging_config.IMPORTANT
+    assert logger.level == logging.INFO
     assert logger.propagate is False
     record = logging.LogRecord(logger.name, level, __file__, 0, 'sync %s', ('complete',), None)
     result = json.loads(first_handler.format(record))
@@ -3795,7 +3796,7 @@ def fixture_index_launch(client, tmp_path, index_config_data, invest_environment
     instruments = {
         uid: InstrumentResponse(instrument=Instrument(
             uid=uid, ticker=ticker, instrument_type='share', class_code='TQBR',
-            name=ticker, lot=1, currency='rub',
+            name=ticker, lot=1, currency='rub', api_trade_available_flag=True,
             trading_status=SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING))
         for uid, ticker in [('1', 'OLD'), ('2', 'AFKS')]
     }
@@ -3856,7 +3857,7 @@ def test_index_launches(entrypoint, scenario, client, index_launch, caplog,
     with patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
             patch.object(runner_module, 'configure_local_logging', autospec=True), \
             patch.object(serverless, 'configure_yc_logging', autospec=True), \
-            caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+            caplog.at_level(logging.INFO, logger=logging_config.LOGGER_NAME):
         sdk_client.return_value.__enter__.return_value = client
         if scenario == 'data_error':
             with pytest.raises(ValueError, match='missing index price: AFKS'):
@@ -3888,7 +3889,7 @@ def test_index_launches(entrypoint, scenario, client, index_launch, caplog,
     ] * count if scenario in ['trade', 'min_trade', 'min_ignored'] else [])
     skipped = [record for record in caplog.records if 'empty target' in record.getMessage()]
     assert len(skipped) == (count if scenario == 'empty' else 0)
-    assert all(record.levelno == logging_config.IMPORTANT for record in skipped)
+    assert all(record.levelno == logging.INFO for record in skipped)
 
 
 @pytest.mark.usefixtures('index_launch')
@@ -4003,10 +4004,13 @@ def test_index_config_reserve(tmp_path, index_config_data, value):
 
 
 def test_bundled_reserves():
-    """The original index retains 1%; other bundled configs reserve 0.05% for fees."""
+    """GOLD and OBLG retain a sandbox-tested 0.6% margin; TMON stays unchanged."""
     configs = load_index_configs()
     assert configs['IMOEX'].reserve == Decimal('0.01')
-    assert configs['GOLD'].reserve == configs['BOND'].reserve == Decimal('0.0005')
+    assert configs['GOLD'].reserve == configs['OBLG'].reserve == Decimal('0.006')
+    assert 'BOND' not in configs
+    for name in ('GOLD', 'OBLG'):
+        assert [item.ticker for item in configs[name].instruments] == [name]
     assert configs['TMON'].reserve == Decimal('0.0005')
 
 
@@ -4222,7 +4226,7 @@ def test_single_instrument_maximum_lots(budget, lots):
 
 @pytest.fixture(name='single_fund')
 def fixture_single_fund(client, request):
-    """Real bundled config with an ETF on its primary board and a partially filled account."""
+    """Real bundled config with one API-enabled ETF and an unavailable alternative."""
     name = request.param
     strategy = strategies.create_strategy(strategies.prepare_strategy('INDEX', name))
     assert strategy.config.name == name
@@ -4230,16 +4234,22 @@ def fixture_single_fund(client, request):
     client.instruments.find_instrument.side_effect = None
     client.instruments.find_instrument.return_value = FindInstrumentResponse(instruments=[
         InstrumentShort(ticker=name, uid='wrong', instrument_type='etf', class_code='SPEQ'),
-        InstrumentShort(ticker=name, uid='fund', instrument_type='etf', class_code='TQTF'),
+        InstrumentShort(ticker=name, uid='fund', instrument_type='etf', class_code='TQBR'),
     ])
     client.instruments.find_instrument.side_effect = lambda **kwargs: (
         FindInstrumentResponse(instruments=[InstrumentShort(ticker=name, name=name)])
         if kwargs['query'] == 'fund' else client.instruments.find_instrument.return_value)
     client.instruments.get_instrument_by.side_effect = None
     client.instruments.get_instrument_by.return_value = InstrumentResponse(instrument=Instrument(
-        uid='fund', ticker=name, name=name, instrument_type='etf', class_code='TQTF',
-        currency='rub', lot=10,
+        uid='fund', ticker=name, name=name, instrument_type='etf', class_code='TQBR',
+        currency='rub', lot=10, api_trade_available_flag=True,
         trading_status=SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING))
+    unavailable = InstrumentResponse(instrument=Instrument(
+        uid='wrong', ticker=name, name=name, instrument_type='etf', class_code='SPEQ',
+        currency='rub', lot=1, api_trade_available_flag=False))
+    client.instruments.get_instrument_by.side_effect = lambda **kwargs: (
+        unavailable if kwargs['id'] == 'wrong'
+        else client.instruments.get_instrument_by.return_value)
     client.market_data.get_last_prices.return_value = GetLastPricesResponse(last_prices=[
         LastPrice(instrument_uid='fund', price=Quotation(3, 0),
                   time=datetime(2026, 9, 29, 10, tzinfo=timezone.utc))])
@@ -4253,7 +4263,7 @@ def fixture_single_fund(client, request):
     return strategy
 
 
-@pytest.mark.parametrize('single_fund', ['GOLD', 'BOND', 'TMON'], indirect=True)
+@pytest.mark.parametrize('single_fund', ['GOLD', 'OBLG', 'TMON'], indirect=True)
 @pytest.mark.parametrize('reserve, buy_lots', [(None, 7), (Decimal('0.5'), 3), (Decimal(0), 8)])
 @pytest.mark.parametrize('debug', [False, True])
 def test_single_fund_sync_full_budget(single_fund, client, reserve, buy_lots, debug):
@@ -4274,19 +4284,15 @@ def test_single_fund_sync_full_budget(single_fund, client, reserve, buy_lots, de
     client.operations.get_portfolio.assert_called_once_with(account_id='5')
 
 
-@pytest.mark.parametrize('single_fund', ['GOLD', 'BOND', 'TMON'], indirect=True)
-@pytest.mark.parametrize('case', ['wrong_board', 'wrong_type', 'ambiguous'])
+@pytest.mark.parametrize('single_fund', ['GOLD', 'OBLG', 'TMON'], indirect=True)
+@pytest.mark.parametrize('case', ['wrong_board', 'wrong_type'])
 def test_single_fund_invalid_metadata(single_fund, client, case):
-    """Funds must retain their board and type; duplicate primary matches are an error."""
+    """Full metadata must describe the same board and type as the search candidate."""
     instrument = client.instruments.get_instrument_by.return_value.instrument
-    if case == 'ambiguous':
-        client.instruments.find_instrument.return_value.instruments.append(
-            InstrumentShort(ticker=single_fund.config.name, uid='other',
-                            instrument_type='etf', class_code='TQTF'))
-    elif case == 'wrong_type':
+    if case == 'wrong_type':
         instrument.instrument_type = 'share'
     else:
-        instrument.class_code = 'TQBR'
+        instrument.class_code = 'TQTF'
     with pytest.raises(ValueError, match='index instrument'):
         single_fund.load_snapshot(TInvestStrategyData(client))
     client.market_data.get_last_prices.assert_not_called()
@@ -4572,12 +4578,8 @@ def fixture_index_sdk_config(client):
             InstrumentShort(ticker='A-extra', instrument_type='share',
                             class_code='TQBR', uid='ignored'),
             InstrumentShort(ticker='A', instrument_type='bond', class_code='TQBR', uid='bond'),
-            InstrumentShort(ticker='A', instrument_type='share', class_code='PTEQ', uid='pteq-A',
-                            api_trade_available_flag=True),
             InstrumentShort(ticker='A', instrument_type='share', class_code='TQBR', uid='uid-A',
-                            api_trade_available_flag=False),
-            InstrumentShort(ticker='A', instrument_type='share', class_code='SPEQ', uid='speq-A',
-                            api_trade_available_flag=True)]),
+                            api_trade_available_flag=False)]),
         FindInstrumentResponse(instruments=[
             InstrumentShort(ticker='B', instrument_type='share', class_code='TQBR', uid='uid-B')]),
     ]
@@ -4585,11 +4587,11 @@ def fixture_index_sdk_config(client):
         InstrumentResponse(instrument=Instrument(
             uid='uid-A', ticker='A', instrument_type='share',
             class_code='TQBR', lot=2, currency='rub',
-            api_trade_available_flag=False,
+            api_trade_available_flag=True,
             trading_status=SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING)),
         InstrumentResponse(instrument=Instrument(
             uid='uid-B', ticker='B', instrument_type='share',
-            class_code='TQBR', lot=1, currency='rub',
+            class_code='TQBR', lot=1, currency='rub', api_trade_available_flag=True,
             trading_status=SecurityTradingStatus.SECURITY_TRADING_STATUS_BREAK_IN_TRADING)),
     ]
     client.market_data.get_last_prices.return_value = GetLastPricesResponse(last_prices=[
@@ -4602,7 +4604,7 @@ def fixture_index_sdk_config(client):
 
 
 def test_index_snapshot_complete_and_pure_target(client, index_sdk_config):
-    """Only TQBR matches survive, regardless of API availability or trading breaks."""
+    """Full API permission controls selection; session breaks do not change the target."""
     strategy = IndexStrategy(index_sdk_config)
     assert client.mock_calls == []
     snapshot = strategy.load_snapshot(TInvestStrategyData(client))
@@ -4642,10 +4644,10 @@ def test_index_snapshot_refreshes_all_data(client, index_sdk_config):
     client.instruments.get_instrument_by.side_effect = [
         InstrumentResponse(instrument=Instrument(
             uid='new-A', ticker='A', instrument_type='share',
-            class_code='TQBR', lot=4, currency='usd')),
+            class_code='TQBR', lot=4, currency='usd', api_trade_available_flag=True)),
         InstrumentResponse(instrument=Instrument(
             uid='uid-B', ticker='B', instrument_type='share',
-            class_code='TQBR', lot=1, currency='rub')),
+            class_code='TQBR', lot=1, currency='rub', api_trade_available_flag=True)),
     ]
     client.market_data.get_last_prices.return_value = GetLastPricesResponse(last_prices=[
         LastPrice(instrument_uid='new-A', price=Quotation(units=20, nano=1),
@@ -4684,22 +4686,12 @@ def test_index_snapshot_refreshes_all_data(client, index_sdk_config):
     [InstrumentShort(ticker='A-extra', instrument_type='share', class_code='TQBR', uid='partial')],
     [InstrumentShort(ticker=' A', instrument_type='share', class_code='TQBR', uid='space')],
     [InstrumentShort(ticker='A', instrument_type='bond', class_code='TQBR', uid='bond')],
-    [InstrumentShort(ticker='A', instrument_type='share', class_code='PTEQ', uid='pteq',
-                     api_trade_available_flag=True)],
-    [InstrumentShort(ticker='A', instrument_type='share', class_code='SPEQ', uid='speq')],
-    [InstrumentShort(ticker='A', instrument_type='share', class_code='', uid='no-board')],
-    [InstrumentShort(ticker='A', instrument_type='share',
-                     class_code='tqbr', uid='wrong-board-case')],
-    [InstrumentShort(ticker='A', instrument_type='share', class_code='TQBR', uid='one',
-                     api_trade_available_flag=True),
-     InstrumentShort(ticker='A', instrument_type='share', class_code='TQBR', uid='two',
-                     api_trade_available_flag=False)],
 ])
-def test_index_snapshot_requires_unique_exact_share(client, index_sdk_config, matches):
-    """Require one exact TQBR share; neither other boards nor availability are fallbacks."""
+def test_index_snapshot_requires_exact_supported_instrument(client, index_sdk_config, matches):
+    """Other tickers and unsupported instrument types cannot replace a missing share."""
     client.instruments.find_instrument.side_effect = None
     client.instruments.find_instrument.return_value = FindInstrumentResponse(instruments=matches)
-    with pytest.raises(ValueError, match=r'index instrument: A \(TQBR/TQTF\), found [02]'):
+    with pytest.raises(ValueError, match=r'index instrument: A available via API'):
         IndexStrategy(index_sdk_config).load_snapshot(TInvestStrategyData(client))
     client.instruments.find_instrument.assert_called_once_with(query='A')
     client.instruments.get_instrument_by.assert_not_called()
@@ -4732,7 +4724,7 @@ def test_index_snapshot_invalid_or_duplicate_uid(client, index_sdk_config, uid):
 def test_index_snapshot_invalid_metadata(client, index_sdk_config, field, value):
     """Metadata must describe the selected share and provide a positive integer lot."""
     instrument = Instrument(uid='uid-A', ticker='A', instrument_type='share',
-                            class_code='TQBR', lot=2, currency='rub')
+                            class_code='TQBR', lot=2, currency='rub', api_trade_available_flag=True)
     setattr(instrument, field, value)
     client.instruments.get_instrument_by.side_effect = None
     client.instruments.get_instrument_by.return_value = InstrumentResponse(instrument=instrument)
@@ -5086,7 +5078,7 @@ def test_index_calibration_single_renamed_config(calibration_cli, tmp_path, capl
     calibration_cli.assert_called_once_with('synthetic-read-only-token', target=INVEST_GRPC_API)
 
 
-@pytest.mark.parametrize('single_fund', ['GOLD', 'BOND', 'TMON'], indirect=True)
+@pytest.mark.parametrize('single_fund', ['GOLD', 'OBLG', 'TMON'], indirect=True)
 @pytest.mark.parametrize('expected_reserve, budget, lots', [
     ('0.0005', '299.8500', 9), ('0.5', '150.0', 5), ('0', '300', 10),
 ])
