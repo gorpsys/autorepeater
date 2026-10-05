@@ -8,7 +8,7 @@ from contextlib import nullcontext
 import pytest
 
 from autorepeater.execution_data import ExecutionData, ExecutionSnapshot, TradeRules
-from autorepeater.execution import ExecutionReceipt, OrderExecutionError
+from autorepeater.execution import ExecutionReceipt, OrderExecutionError, OrderExecutor
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.repeater import AutoRepeater
 from autorepeater.strategy_contract import Strategy, validate_strategy
@@ -28,7 +28,7 @@ def fixture_runtime():
     strategy = create_autospec(Strategy, instance=True, spec_set=True)
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     execution = create_autospec(ExecutionData, instance=True, spec_set=True)
-    executor = Mock(spec_set=['submit_order'])
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     snapshot = ExecutionSnapshot(PortfolioSnapshot(()), Decimal(100), {}, {},
                                  {'rub': Decimal(100)}, {}, (), True)
     execution.get_destination.return_value = snapshot
@@ -61,7 +61,8 @@ def test_final_api_and_neutral_execution_order(runtime, debug, caplog):
     with caplog.at_level(logging.INFO, logger='tinkoffBot'):
         engine.sync_accounts('dst')
     names = [item[0] for item in timeline.mock_calls]
-    assert names[:5] == ['strategy.load_snapshot', 'execution.get_destination',
+    assert names[:6] == ['data.begin_snapshot', 'strategy.load_snapshot',
+                         'execution.get_destination',
                          'strategy.allocation_profile', 'strategy.build_plan',
                          'execution.get_trade_rules']
     assert executor.submit_order.call_count == (0 if debug else 1)

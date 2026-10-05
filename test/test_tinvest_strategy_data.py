@@ -499,7 +499,7 @@ def test_public_adapter_surface_is_exactly_the_read_port(client):
     adapter = TInvestStrategyData(client)
 
     assert public_methods == {
-        'get_portfolio', 'find_instruments', 'get_instrument',
+        'begin_snapshot', 'get_portfolio', 'find_instruments', 'get_instrument',
         'get_last_prices', 'position_events'}
     for forbidden in ('orders', 'users', 'client', 'proxy', 'post_order'):
         assert not hasattr(adapter, forbidden)

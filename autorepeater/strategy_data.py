@@ -103,6 +103,9 @@ class DataAccessError(Exception):
 class StrategyData(Protocol):
     """Minimal read-only data port available to every strategy."""
 
+    def begin_snapshot(self) -> None:
+        """Discard metadata caches before a new calculation; no market I/O required."""
+
     def get_portfolio(self, account_id: str) -> PortfolioSnapshot:
         """Return an ordered snapshot for one account."""
 

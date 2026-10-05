@@ -64,6 +64,7 @@ class AutoRepeater:
     def sync_accounts(self, dst_account_id):
         """Validate every main target before reading rules or sending any order."""
         try:
+            self.data.begin_snapshot()
             snapshot = self.strategy.load_snapshot(self.data)
             destination = self.execution_data.get_destination(dst_account_id)
             profile = self.strategy.allocation_profile(snapshot)

@@ -2,8 +2,9 @@
 from collections.abc import Iterable, Iterator, Sequence
 from decimal import Decimal, InvalidOperation
 
-from t_tech.invest import InstrumentIdType, RequestError
+from t_tech.invest import InstrumentIdType, InstrumentStatus, RequestError
 
+from autorepeater.logging_config import logger
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.strategy_data import InstrumentInfo
 from autorepeater.strategy_data import InstrumentMatch
@@ -14,6 +15,7 @@ from autorepeater.strategy_data import PortfolioSnapshot
 from autorepeater.strategy_data import PositionEvent
 from autorepeater.strategy_data import PriceQuote
 from autorepeater.strategy_data import SecurityBlocking
+from autorepeater.tinvest_requests import call_api
 
 
 NANO_FACTOR = Decimal('1000000000')
@@ -58,16 +60,34 @@ def _transport_error(error):
     return DataAccessError(str(error))
 
 
+def _instrument_info(instrument, instrument_type):
+    """Share/ETF catalogs and GetInstrumentBy expose the same full metadata fields."""
+    return InstrumentInfo(
+        uid=instrument.uid, ticker=instrument.ticker, name=instrument.name,
+        instrument_type=instrument_type, class_code=instrument.class_code,
+        lot=instrument.lot, currency=instrument.currency,
+        api_trade_available=instrument.api_trade_available_flag)
+
+
 class TInvestStrategyData:
     """Translate T-Invest read services into the strategy data contract."""
 
     def __init__(self, client):
         self._client = client
+        self._instrument_cache = None
+        self._catalogs = {}
+        self._match_types = {}
+
+    def begin_snapshot(self):
+        """Share full metadata within one pass, never across independent calculations."""
+        self._instrument_cache = {}
+        self._catalogs = {}
+        self._match_types = {}
 
     def get_portfolio(self, account_id: str) -> PortfolioSnapshot:
         """Return an ordered portfolio snapshot for one account."""
         try:
-            response = self._client.operations.get_portfolio(
+            response = call_api(self._client.operations.get_portfolio,
                 account_id=account_id)
         except RequestError as error:
             raise _transport_error(error) from error
@@ -78,11 +98,11 @@ class TInvestStrategyData:
     def find_instruments(self, query: str) -> list[InstrumentMatch]:
         """Return ordered short metadata without loading full instruments."""
         try:
-            response = self._client.instruments.find_instrument(query=query)
+            response = call_api(self._client.instruments.find_instrument, query=query)
         except RequestError as error:
             raise _transport_error(error) from error
 
-        return [
+        matches = [
             InstrumentMatch(
                 uid=instrument.uid,
                 ticker=instrument.ticker,
@@ -92,37 +112,58 @@ class TInvestStrategyData:
             )
             for instrument in response.instruments
         ]
+        self._match_types.update((item.uid, item.instrument_type) for item in matches)
+        return matches
+
+    def _catalog_instrument(self, uid):
+        instrument_type = self._match_types.get(uid)
+        methods = {InstrumentType.SHARE: self._client.instruments.shares,
+                   InstrumentType.ETF: self._client.instruments.etfs}
+        if instrument_type not in methods:
+            return None
+        if instrument_type not in self._catalogs:
+            try:
+                response = call_api(methods[instrument_type],
+                    instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
+            except RequestError as error:
+                raise _transport_error(error) from error
+            catalog = {}
+            for item in response.instruments:
+                if item.uid in catalog:
+                    raise ValueError(f'duplicate instrument catalog UID: {item.uid}')
+                catalog[item.uid] = _instrument_info(item, instrument_type)
+            self._catalogs[instrument_type] = catalog
+            logger.info('Loaded full instrument catalog: type=%s count=%d',
+                        instrument_type, len(catalog))
+        return self._catalogs[instrument_type].get(uid)
 
     def get_instrument(self, uid: str) -> InstrumentInfo:
-        """Return full metadata for one UID."""
-        try:
-            response = self._client.instruments.get_instrument_by(
-                id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
-                id=uid,
-            )
-        except RequestError as error:
-            raise _transport_error(error) from error
-
-        instrument = response.instrument
-        if instrument is None:
-            raise ValueError(f'instrument {uid}: instrument is missing')
-        if not isinstance(instrument.api_trade_available_flag, bool):
+        """Use full catalogs for search candidates and direct reads for other UIDs."""
+        if self._instrument_cache is not None and uid in self._instrument_cache:
+            return self._instrument_cache[uid]
+        info = self._catalog_instrument(uid) if self._instrument_cache is not None else None
+        if info is None:
+            try:
+                response = call_api(self._client.instruments.get_instrument_by,
+                    id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
+            except RequestError as error:
+                raise _transport_error(error) from error
+            instrument = response.instrument
+            if instrument is None:
+                raise ValueError(f'instrument {uid}: instrument is missing')
+            info = _instrument_info(instrument, _instrument_type(instrument.instrument_type))
+            if self._instrument_cache is not None:
+                logger.info('Loaded instrument metadata by UID: %s (not in current catalogs)', uid)
+        if not isinstance(info.api_trade_available, bool):
             raise ValueError(f'instrument {uid}: api_trade_available_flag must be bool')
-        return InstrumentInfo(
-            uid=instrument.uid,
-            ticker=instrument.ticker,
-            name=instrument.name,
-            instrument_type=_instrument_type(instrument.instrument_type),
-            class_code=instrument.class_code,
-            lot=instrument.lot,
-            currency=instrument.currency,
-            api_trade_available=instrument.api_trade_available_flag,
-        )
+        if self._instrument_cache is not None:
+            self._instrument_cache[uid] = info
+        return info
 
     def get_last_prices(self, uids: Sequence[str]) -> list[PriceQuote]:
         """Return SDK quote records in their original order."""
         try:
-            response = self._client.market_data.get_last_prices(
+            response = call_api(self._client.market_data.get_last_prices,
                 instrument_id=list(uids))
         except RequestError as error:
             raise _transport_error(error) from error

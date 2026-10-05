@@ -432,7 +432,7 @@ with patch('socket.socket.connect', side_effect=AssertionError('network forbidde
     prepared = prepare_strategy('ARCHIVE_INDEPENDENT', 'independent-source')
     strategy = create_strategy(prepared)
     assert strategy.prepared == 'independent-source'
-    data = Mock(spec_set=['get_portfolio', 'position_events'])
+    data = Mock(spec_set=['begin_snapshot', 'get_portfolio', 'position_events'])
     data.get_portfolio.return_value = PortfolioSnapshot(())
     data.position_events.side_effect = RuntimeError('finite offline stream')
     execution = Mock(spec_set=['get_destination', 'get_trade_rules'])

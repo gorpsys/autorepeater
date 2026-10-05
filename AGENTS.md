@@ -156,9 +156,15 @@ Reporting использует загруженные DTO/UID без допол�
 ради расчётных логов. Явный просмотр счетов допустим в Runner.run().
 AutoRepeater(strategy, data, execution_data, executor), sync_accounts/mainflow
 получают только dst. RunnerParams содержит только debug.
-StrategyData read-only: get_portfolio/find_instruments/get_instrument/
+StrategyData read-only: begin_snapshot/get_portfolio/find_instruments/get_instrument/
 get_last_prices/position_events; свои DTO/enum, units+nano без округления,
 порядок/дубликаты сохраняются, никаких raw_response.
+Движок вызывает begin_snapshot перед каждым пересчётом. SDK-адаптер лениво
+читает полные Shares/Etfs с INSTRUMENT_STATUS_ALL один раз за проход,
+использует порядок FindInstrument и полный api_trade_available_flag,
+кэширует метаданные UID только до следующего begin_snapshot. Неизвестный
+каталогу UID читается через GetInstrumentBy; ошибки каталога не маскируются.
+Цены, портфели, разрешения текущего статуса и собственные лимиты не кэшируются.
 ExecutionData: get_destination(account_id), get_trade_rules(account_id,uids);
 ExecutionSnapshot/TradeRules собственные деньги, позиции, caps и flags.
 SDK-преобразования подтверждены в [docs/execution-adapter.md](docs/execution-adapter.md).
@@ -226,12 +232,27 @@ Decimal prec28, сравнения строго без epsilon; exact_sum/exact_
 Совместимые дубликаты UID агрегируются без изменения nano B,
 несовместимые отклоняются.
 
-Каждая SELL/BUY отправляется один раз, FILL и requested=executed=intent.lots.
-Неизвестный/частичный ответ останавливает текущий проход с ERROR,
-без retry/ожидания/отмены, уже совершённое не откатывается.
+Каждая SELL/BUY имеет один order_id, FILL и requested=executed=intent.lots.
+SELL NEW/PARTIALLYFILL с валидными UID/направлением/лотами проверяется по
+broker order_id через OrderExecutor.get_order_state каждые 2s, окно 30s.
+Нельзя повторно отправлять продажу, менять ID или доверять несовпавшему ответу.
+Отказ/плохие данные/ошибка чтения/таймаут останавливают проход с ERROR;
+неподтверждённый BUY по-прежнему немедленно останавливает проход.
+Автоматической отмены нет, уже совершённое не откатывается.
+Исключение: общая SDK-обёртка call_api при RESOURCE_EXHAUSTED ждёт 10 секунд
+и повторяет тот же unary-запрос до успеха или другой ошибки, без лимита
+попыток. PostOrder сохраняет order_id; аргументы и токены не логируются.
+Deadline/прочие ошибки не повторяются. Общий тайм-аут облака остаётся границей.
 После SELL свежие positions/money/caps, BUY перепланируется при той же main.
-Неотражённое поступление/несовпавшие позиции откладывают BUY с INFO.
-Перед дальнейшими покупками доступность снова читается.
+После всех SELL FILL отдельно ожидать readiness и совпадения фиксированного
+владения с позициями: чтение каждые 2s в окне 30s, затем WARNING и отложенный BUY.
+Это не доказательство полного поступления выручки; own money/caps обязательны.
+Окна не прерывают текущий RPC/квотный retry; общий таймаут облака учитывает ожидания.
+INFO: этап, loading, конкретные блокировки, active order_id/UID/status/лоты,
+expected/actual quantities, отправка/подтверждение сделки и итоговые числа SELL/BUY.
+Только загруженные поля, без токенов/raw DTO/дополнительных запросов ради логов.
+Перед дальнейшими покупками доступность снова читается, включая такое же
+окно readiness/positions 30s с шагом 2s после FILL BUY; не повторять уже купленный UID.
 Unary interceptor deadline10s, меньший existing timeout сохранить,
 стрим не ограничивать unary-дедлайном.
 

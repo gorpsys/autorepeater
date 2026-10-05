@@ -6,7 +6,10 @@ from t_tech.invest import GetMaxLotsRequest, OrderExecutionReportStatus, Request
 from autorepeater.execution_data import (
     ActiveOrder, ExecutionDataError, ExecutionSnapshot, TradeRules,
 )
+from autorepeater.logging_config import logger as LOGGER
+from autorepeater.money import format_decimal, format_decimal_map
 from autorepeater.strategy_data import DataAccessError, InstrumentType
+from autorepeater.tinvest_requests import call_api
 from autorepeater.tinvest_strategy_data import _decimal_value
 
 NANO = Decimal('0.000000001')
@@ -44,7 +47,7 @@ def _quotation(value, field):
 
 def _read(method, **kwargs):
     try:
-        return method(**kwargs)
+        return call_api(method, **kwargs)
     except (RequestError, DataAccessError) as error:
         raise ExecutionDataError('execution data read failed') from error
 
@@ -72,6 +75,9 @@ def _portfolio_state(portfolio):
         blocked_flag = _bool(position.blocked, f'{context}.blocked')
         blocked_count = _decimal(position.blocked_lots, f'{context}.blocked_lots', nonnegative=True)
         blocked = blocked or blocked_flag or blocked_count != 0
+        if blocked_flag or blocked_count != 0:
+            LOGGER.info('Execution portfolio blocking: uid=%s blocked=%s blocked_lots=%s',
+                        uid, blocked_flag, format_decimal(blocked_count))
         budget += (price * quantity).quantize(NANO)
         identity = (price, position.currency, position.instrument_type)
         if uid in identities and identities[uid] != identity:
@@ -86,7 +92,12 @@ def _portfolio_state(portfolio):
 
 
 def _positions_blocked(positions):
-    blocked = any(amount != 0 for amount in _money(positions.blocked, 'blocked').values())
+    blocked_money = _money(positions.blocked, 'blocked')
+    blocked = any(amount != 0 for amount in blocked_money.values())
+    for currency, amount in blocked_money.items():
+        if amount != 0:
+            LOGGER.info('Execution money blocking: currency=%s amount=%s',
+                        currency, format_decimal(amount))
     for group in ('securities', 'futures', 'options'):
         for item in getattr(positions, group):
             field = f'{group} {item.instrument_uid}'
@@ -94,6 +105,9 @@ def _positions_blocked(positions):
             exchange = (_bool(item.exchange_blocked, f'{field}.exchange_blocked')
                         if group == 'securities' else False)
             blocked = blocked or count != 0 or exchange
+            if count != 0 or exchange:
+                LOGGER.info('Execution position blocking: group=%s uid=%s blocked=%s '
+                            'exchange_blocked=%s', group, item.instrument_uid, count, exchange)
     return blocked
 
 
@@ -142,6 +156,14 @@ class TInvestExecutionData:
         positions_blocked = _positions_blocked(positions)
         active = _active_orders(orders.orders)
         ready = not (loading or portfolio_blocked or positions_blocked or active)
+        LOGGER.info('Execution snapshot: account=%s limits_ready=%s loading=%s '
+                    'portfolio_blocked=%s positions_blocked=%s active_orders=%d cash=%s',
+                    account_id, ready, loading, portfolio_blocked, positions_blocked,
+                    len(active), format_decimal_map(cash))
+        for order in active:
+            LOGGER.info('Execution active order: order_id=%s uid=%s status=%s '
+                        'requested=%d executed=%d', order.order_id, order.uid, order.status,
+                        order.lots_requested, order.lots_executed)
         return ExecutionSnapshot(
             portfolio, budget, quantities, marks,
             {currency: amount if ready else Decimal(0) for currency, amount in cash.items()},
@@ -172,8 +194,10 @@ class TInvestExecutionData:
                               f'instrument {uid}.bestprice_order_available_flag')
             caps = _read(self._client.orders.get_max_lots,
                          request=GetMaxLotsRequest(account_id=account_id, instrument_id=uid))
-            if _text(caps.currency, f'instrument {uid}.currency') != currency:
-                raise ValueError(f'instrument {uid}: currency mismatch')
+            caps_currency = _text(caps.currency, f'instrument {uid}.GetMaxLots.currency')
+            if caps_currency.lower() != currency.lower():
+                raise ValueError(f'instrument {uid}: currency mismatch: '
+                                 f'GetMaxLots={caps_currency!r}, metadata={currency!r}')
             if (not hasattr(caps.buy_limits, 'buy_money_amount')
                     or not hasattr(caps.sell_limits, 'sell_max_lots')):
                 raise ValueError(f'instrument {uid}: own limits are missing')

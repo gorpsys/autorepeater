@@ -98,7 +98,7 @@ def compare_target(config, snapshot, scenario, threshold):
     }
 
 
-def main(argv=None):
+def main(argv=None):  # pylint: disable=too-many-locals
     """Read the explicitly supplied token only when invoked; never query accounts."""
     parser, args = parse_args(argv)
     token = os.environ.get('READ_ONLY_INVEST_TOKEN')
@@ -113,7 +113,9 @@ def main(argv=None):
     with Client(token, target=(
             INVEST_GRPC_API_SANDBOX if args.sandbox else INVEST_GRPC_API),
             interceptors=[UnaryDeadlineInterceptor()]) as client:
-        snapshot = strategy.load_snapshot(TInvestStrategyData(client))
+        data = TInvestStrategyData(client)
+        data.begin_snapshot()
+        snapshot = strategy.load_snapshot(data)
     received = datetime.now(timezone.utc)
     reserve = config.reserve
     scenarios = [

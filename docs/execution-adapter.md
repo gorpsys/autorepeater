@@ -26,6 +26,10 @@ public repository; no account, token or live Invest API request was used.
   `buy_max_lots` and `sell_max_lots` are counts of lots. Requests include the
   destination account and instrument UID. Margin limits are ignored. The
   separate market-order cap is not evidence of a BESTPRICE cap and is ignored.
+  Currency codes from GetMaxLots and metadata are compared case-insensitively;
+  no currency conversion or alias substitution is performed. The metadata
+  currency is retained in TradeRules. A genuine mismatch fails before trading
+  and reports both original currency codes and the instrument UID.
 - [GetTradingStatusResponse](https://github.com/RussianInvestments/investAPI/blob/3eaf23a25f598fe483c913184acdbd9132bc68d2/src/docs/contracts/marketdata.proto#L515-L526)
   provides explicit API and BESTPRICE availability flags. API permission also
   requires full instrument metadata permission. Board/status enum values and
@@ -67,12 +71,21 @@ infer a reserve or read strategy configuration. A fresh read always performs
 new requests; there is no execution-state cache.
 
 There is no claimed atomic settlement across these reads. BESTPRICE price
-movement and non-atomic reads remain accepted execution risks. Step 6 must
-check FILL and both lot counts, then obtain fresh destination availability
-and own caps before purchases. If a sale is not yet reflected in sufficient
-fresh availability, the future executor must defer with INFO. It must not
-estimate settled proceeds from `total_order_amount`, order price or a target
-mark. The SDK order adapter therefore leaves neutral `ExecutionReceipt.cash`
+movement and non-atomic reads remain accepted execution risks. Pending sales
+in NEW/PARTIALLYFILL are polled through GetOrderState using the broker order_id
+every two seconds in a 30-second window, without resubmission or cancellation.
+The neutral executor verifies UID, side, order_id and both lot counts before
+accepting FILL. Rejection, malformed data, transport failure or execution
+timeout stops the pass with ERROR; unconfirmed purchases still stop immediately.
+After all sales fill, a separate 30-second window polls fresh destination
+readiness and matching physical positions every two seconds. A settlement
+timeout defers purchases with WARNING. Readiness is not proof that all proceeds
+have arrived: purchases still require fresh own money and caps. Neither
+order price nor `total_order_amount` nor target marks establish settled cash.
+The same readiness/position polling window runs after each confirmed BUY
+when more purchases remain; temporary post-purchase blocking must not abandon
+the whole remaining queue immediately. Already submitted UIDs are not resubmitted.
+The SDK order adapter therefore leaves neutral `ExecutionReceipt.cash`
 empty. A receipt from an executor with documented net monetary facts may
 provide those facts per currency: execution attributes them to the sale's
 owners and permitted recipients, capped by fresh global availability and own
@@ -82,13 +95,32 @@ can fund every recipient. It is never assigned to an isolated seller from
 the account cash delta. This receipt field is used by the neutral funding
 protocol and is not an SDK proceeds estimate.
 
+INFO diagnostics list loading, portfolio/currency/security/exchange blockers,
+active order IDs/UIDs/statuses/lot counts, expected versus actual quantities,
+submission and verified FILL results, refresh stages and pass result counts.
+Only explicitly selected loaded fields are logged; raw responses and credentials
+are never dumped. No extra API reads are added solely for logging.
+Polling windows do not interrupt in-flight RPCs or the established quota retry
+loop; the cloud invocation timeout remains the overall deadline.
+
 ## Transport
 
 Runner (both modes) and the explicit calibration script install the same
 `grpc.UnaryUnaryClientInterceptor` through the actual SDK
 `Client(interceptors=[...])` channel hook before the first RPC. The default
 unary timeout is 10 seconds; a smaller existing timeout is preserved.
-Streams are not intercepted, and no operation is automatically retried.
+Streams are not intercepted. The SDK-only call_api wrapper retries unary
+RESOURCE_EXHAUSTED errors every 10 seconds without an attempt cap, until
+success or a different error. All other errors retain the fail-stop behavior.
+PostOrder generates its order_id once, outside the retry loop. Neither
+request arguments nor tokens are logged. The platform invocation timeout
+can still end a retrying cloud call.
 RequestError/DataAccessError become ExecutionDataError with their cause.
 ValueError and programming errors are not masked. No trading method is
-exposed by ExecutionData. The existing engine remains active until step 7.
+exposed by ExecutionData.
+
+StrategyData.begin_snapshot clears UID/catalog caches before each pass.
+Full Shares/Etfs catalogs with INSTRUMENT_STATUS_ALL serve searched candidates;
+GetInstrumentBy remains the fallback for UIDs absent from a catalog. The
+full catalog API flag, not FindInstrument's short flag, remains authoritative.
+Current trading status, own caps, money and prices are not cached.

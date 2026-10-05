@@ -120,9 +120,10 @@ def test_incompatible_duplicate_is_rejected(reads, change):
 
 @pytest.mark.parametrize('guard', ['loading', 'money', 'security', 'exchange', 'future',
                                  'option', 'portfolio_flag', 'portfolio_number', 'new', 'partial'])
-def test_any_blocking_disables_availability(reads, guard):
+def test_any_blocking_disables_availability(reads, guard, caplog):
     """No balance units or money-minus-blocked arithmetic is needed."""
     client, data, adapter = reads
+    caplog.set_level('INFO', logger='tinkoffBot')
     positions = client.operations.get_positions.return_value
     if guard == 'loading':
         positions.limits_loading_in_progress = True
@@ -151,6 +152,21 @@ def test_any_blocking_disables_availability(reads, guard):
     assert result.available_cash == {'rub': D(0)}
     assert result.available_quantities == {'uid': D(0)}
     assert result.budget == D(100)
+    assert 'limits_ready=False' in caplog.text
+    explanations = {
+        'loading': 'loading=True',
+        'money': 'currency=rub amount=25',
+        'security': 'group=securities uid=uid blocked=3 exchange_blocked=False',
+        'exchange': 'group=securities uid=uid blocked=0 exchange_blocked=True',
+        'future': 'group=futures uid=future blocked=1',
+        'option': 'group=options uid=option blocked=1',
+        'portfolio_flag': 'uid=uid blocked=True blocked_lots=0',
+        'portfolio_number': 'uid=uid blocked=False blocked_lots=1',
+        'new': 'order_id=order uid=uid status=NEW requested=2 executed=0',
+        'partial': 'order_id=order uid=uid status=PARTIALLYFILL requested=2 executed=1',
+    }
+    assert explanations[guard] in caplog.text
+    assert all(record.levelname == 'INFO' for record in caplog.records)
 
 
 def test_native_own_caps_not_market_or_margin_and_no_lot_multiplication(reads):
@@ -167,6 +183,26 @@ def test_native_own_caps_not_market_or_margin_and_no_lot_multiplication(reads):
     data.get_instrument.assert_called_once_with('uid')
     client.market_data.get_trading_status.assert_called_once_with(instrument_id='uid')
     assert adapter.get_trade_rules('other', []) == {}
+
+
+@pytest.mark.parametrize('currency', ['RUB', 'Rub', 'rUb'])
+def test_cap_currency_case_does_not_change_native_own_limits(reads, currency):
+    """Equivalent currency codes must not block trading or change monetary units."""
+    client, _, adapter = reads
+    client.orders.get_max_lots.return_value.currency = currency
+    rules = adapter.get_trade_rules('account', ['uid'])['uid']
+    assert rules.currency == 'rub'
+    assert (rules.buy_money_amount, rules.buy_max_lots, rules.sell_max_lots) == (D('75.5'), 1, 2)
+
+
+def test_cap_currency_mismatch_reports_both_native_codes(reads):
+    """Different currencies remain an error with evidence for cloud diagnostics."""
+    client, _, adapter = reads
+    client.orders.get_max_lots.return_value.currency = 'USD'
+    mismatch = "uid: currency mismatch.*GetMaxLots='USD'.*metadata='rub'"
+    with pytest.raises(ValueError, match=mismatch):
+        adapter.get_trade_rules('account', ['uid'])
+    client.orders.post_order.assert_not_called()
 
 
 @pytest.mark.parametrize('field', ['api_trade_available_flag', 'bestprice_order_available_flag'])
@@ -284,7 +320,8 @@ def test_invalid_status_fields(reads, field, value):
 
 
 @pytest.mark.parametrize('field, value', [
-    ('currency', 'usd'), ('currency', ''), ('buy_limits', None), ('sell_limits', None),
+    ('currency', 'usd'), ('currency', ''), ('currency', None),
+    ('buy_limits', None), ('sell_limits', None),
 ])
 def test_invalid_cap_currency_or_missing_own_limits(reads, field, value):
     """A currency mismatch or absent own limits cannot fall back to margin limits."""

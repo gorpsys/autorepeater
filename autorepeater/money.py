@@ -25,6 +25,12 @@ def format_decimal(value):
     return formatted + '.0'
 
 
+def format_decimal_map(values):
+    """Format diagnostic money/quantity maps without Decimal repr or exponents."""
+    return '{' + ', '.join(f'{key}: {format_decimal(value)}'
+                          for key, value in values.items()) + '}'
+
+
 def money_to_string(money):
     """convert money to human-readable string"""
     result = money.currency

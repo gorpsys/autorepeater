@@ -20,6 +20,20 @@ from autorepeater.execution import (
 )
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.order_plan import OrderIntent, build_order_plan
+from autorepeater import execution as execution_module
+
+
+@pytest.fixture(name='clock')
+def fixture_clock(monkeypatch):
+    """Deterministic polling without real sleeps or network requests."""
+    state = SimpleNamespace(now=0)
+    def advance(seconds):
+        state.now += seconds
+    sleeper = Mock(side_effect=advance)
+    monkeypatch.setattr(execution_module, 'SETTLEMENT_TIMEOUT', 5)
+    monkeypatch.setattr(execution_module, 'monotonic', lambda: state.now)
+    monkeypatch.setattr(execution_module, 'sleep', sleeper)
+    return sleeper
 
 
 def sale_plan():
@@ -61,9 +75,10 @@ def test_both_counts_must_match_submitted(requested, executed):
     assert executor.submit_order.call_count == 1
 
 
-def test_fresh_money_and_caps_replan_no_fake_proceeds():
+def test_fresh_money_and_caps_replan_no_fake_proceeds(caplog):
     """fresh money and caps replan no fake proceeds."""
     executor = Mock()
+    caplog.set_level('INFO', logger='tinkoffBot')
     executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
     data = Mock()
     data.get_destination.return_value = destination(cash='3')
@@ -72,15 +87,214 @@ def test_fresh_money_and_caps_replan_no_fake_proceeds():
     assert [(item.uid, item.side, item.lots_requested) for item in result] == [
         ('X', 'SELL', 10), ('Z', 'SELL', 10), ('Y', 'BUY', 2)]
     data.get_destination.assert_called_once_with('offline')
+    assert 'Submitting order: account=offline uid=X side=SELL lots=10' in caplog.text
+    assert 'Confirmed order: uid=X side=SELL order_id=id status=FILL requested=10 executed=10' \
+        in caplog.text
+    assert 'Confirmed order: uid=Y side=BUY order_id=id status=FILL requested=2 executed=2' \
+        in caplog.text
+    assert 'stage=finished confirmed_sells=2 confirmed_buys=1' in caplog.text
 
 
-def test_fresh_active_order_defers_buys():
+def test_fresh_active_order_defers_buys(caplog):
     """fresh active order defers buys."""
     executor = Mock()
+    caplog.set_level('INFO', logger='tinkoffBot')
     executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
     data = Mock()
     data.get_destination.return_value = replace(destination(), active_orders=('old',))
     assert len(execute_plan('offline', sale_plan(), data, executor)) == 2
+    assert 'stage=before_buys limits_ready=True active_orders=1' in caplog.text
+    assert 'stage=before_buys confirmed_sells=2 confirmed_buys=0' in caplog.text
+    assert 'side=BUY' not in caplog.text
+    data.get_trade_rules.assert_not_called()
+
+
+@pytest.mark.parametrize('guard', ['blocked', 'active', 'stale_positions'])
+def test_sale_settlement_waits_for_readiness_and_matching_positions(clock, guard, caplog):
+    """A transient post-sale snapshot cannot cause duplicate sales or early buys."""
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+    executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
+    stale = destination({'X': D(10), 'Z': D(10)}, cash='30')
+    transient = {
+        'blocked': replace(destination(cash='30'), limits_ready=False),
+        'active': replace(destination(cash='30'), active_orders=('pending',)),
+        'stale_positions': stale,
+    }[guard]
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
+    data.get_destination.side_effect = [transient, destination(cash='30')]
+    data.get_trade_rules.return_value = rules('X', 'Y', 'Z')
+    with caplog.at_level('INFO', logger='tinkoffBot'):
+        result = execute_plan('offline', sale_plan(), data, executor)
+    assert [item.side for item in result] == ['SELL', 'SELL', 'BUY']
+    assert executor.submit_order.call_count == 3
+    executor.get_order_state.assert_not_called()
+    assert data.get_destination.call_count == 2
+    clock.assert_called_once_with(2)
+    assert 'Waiting for execution settlement' in caplog.text
+    assert 'Execution settlement confirmed' in caplog.text
+    if guard == 'stale_positions':
+        assert 'uid=X expected=0.0 actual=10.0' in caplog.text
+
+
+def test_sale_settlement_timeout_never_funds_buys(clock, caplog):
+    """Polling ends at the deadline with confirmed sales only, not guessed availability."""
+    executor = Mock()
+    executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
+    data = Mock()
+    data.get_destination.return_value = replace(destination(), limits_ready=False)
+    with caplog.at_level('INFO', logger='tinkoffBot'):
+        result = execute_plan('offline', sale_plan(), data, executor)
+    assert [item.side for item in result] == ['SELL', 'SELL']
+    assert data.get_destination.call_count == 3
+    assert clock.call_args_list == [call(2), call(2), call(1)]
+    assert 'Execution settlement timeout' in caplog.text
+    assert 'stage=before_buys confirmed_sells=2 confirmed_buys=0' in caplog.text
+
+
+@pytest.mark.parametrize('guard', ['blocked', 'active', 'stale_positions'])
+def test_first_filled_buy_waits_before_next_purchase(clock, guard, caplog):
+    """Reproduce the cloud BUY-first stall, then finish both remaining fund purchases."""
+    plan = build_order_plan(leaf(target={'A': D(2), 'B': D(2), 'C': D(2)}), destination(),
+                            {(): {}}, dict.fromkeys(('A', 'B', 'C'), D(1)), rules('A', 'B', 'C'))
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+    executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
+    first = destination({'A': D(2)}, cash='8')
+    transient = {
+        'blocked': replace(first, limits_ready=False),
+        'active': replace(first, active_orders=('pending',)),
+        'stale_positions': destination(cash='8'),
+    }[guard]
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
+    data.get_destination.side_effect = [
+        transient, first, destination({'A': D(2), 'B': D(2)}, cash='6')]
+    data.get_trade_rules.return_value = rules('A', 'B', 'C')
+    with caplog.at_level('INFO', logger='tinkoffBot'):
+        result = execute_plan('offline', plan, data, executor)
+    assert [(item.uid, item.side) for item in result] == [
+        ('A', 'BUY'), ('B', 'BUY'), ('C', 'BUY')]
+    assert executor.submit_order.call_count == 3
+    executor.get_order_state.assert_not_called()
+    assert data.get_destination.call_count == 3
+    clock.assert_called_once_with(2)
+    assert 'stage=after_buy' in caplog.text
+    assert 'stage=finished confirmed_sells=0 confirmed_buys=3' in caplog.text
+
+
+def test_buy_settlement_timeout_preserves_one_confirmed_buy(clock, caplog):
+    """A permanently blocked post-BUY state cannot cause a duplicate or a second purchase."""
+    plan = build_order_plan(leaf(target={'A': D(2), 'B': D(2)}), destination(),
+                            {(): {}}, {'A': D(1), 'B': D(1)}, rules('A', 'B'))
+    executor = Mock()
+    executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
+    data = Mock()
+    data.get_destination.return_value = replace(destination({'A': D(2)}), limits_ready=False)
+    with caplog.at_level('INFO', logger='tinkoffBot'):
+        result = execute_plan('offline', plan, data, executor)
+    assert [(item.uid, item.side) for item in result] == [('A', 'BUY')]
+    executor.submit_order.assert_called_once()
+    assert data.get_destination.call_count == 3
+    assert clock.call_args_list == [call(2), call(2), call(1)]
+    assert 'stage=after_buy timeout=5' in caplog.text
+    assert 'stage=between_buys confirmed_sells=0 confirmed_buys=1' in caplog.text
+
+
+@pytest.mark.parametrize('initial_status', ['NEW', 'PARTIALLYFILL'])
+def test_pending_sale_polls_same_order_until_fill(clock, initial_status, caplog):
+    """Two pending sells become FILL without ever repeating their submissions."""
+    plan = sale_plan()
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+    executor.submit_order.side_effect = lambda _account, intent: replace(
+        receipt(intent, initial_status if intent.side == 'SELL' else 'FILL',
+                executed=0 if intent.side == 'SELL' else intent.lots), order_id=intent.uid)
+    executor.get_order_state.side_effect = [
+        replace(receipt(plan.sells[0], 'PARTIALLYFILL', executed=5), order_id='X'),
+        replace(receipt(plan.sells[0]), order_id='X'),
+        replace(receipt(plan.sells[1]), order_id='Z'),
+    ]
+    data = Mock()
+    data.get_destination.return_value = destination(cash='30')
+    data.get_trade_rules.return_value = rules('X', 'Y', 'Z')
+    with caplog.at_level('INFO', logger='tinkoffBot'):
+        result = execute_plan('offline', plan, data, executor)
+    assert [item.side for item in result] == ['SELL', 'SELL', 'BUY']
+    assert executor.submit_order.call_count == 3
+    assert executor.get_order_state.call_args_list == [
+        call('offline', 'X'), call('offline', 'X'), call('offline', 'Z')]
+    assert clock.call_args_list == [call(2), call(2), call(2)]
+    assert 'Waiting for sale execution' in caplog.text
+
+
+def test_pending_sale_timeout_stops_remaining_orders(clock, caplog):
+    """A partial fill at timeout cannot authorize further sales or any purchases."""
+    plan = sale_plan()
+    executor = Mock()
+    pending = receipt(plan.sells[0], 'PARTIALLYFILL', executed=5)
+    executor.submit_order.return_value = pending
+    executor.get_order_state.return_value = pending
+    with caplog.at_level('INFO', logger='tinkoffBot'), pytest.raises(OrderExecutionError):
+        execute_plan('offline', plan, Mock(), executor)
+    executor.submit_order.assert_called_once()
+    assert executor.get_order_state.call_count == 2
+    assert clock.call_args_list == [call(2), call(2), call(1)]
+    assert 'Sale execution timeout' in caplog.text
+    assert 'status=PARTIALLYFILL requested=10 executed=5' in caplog.text
+
+
+@pytest.mark.parametrize('failure', ['transport', 'wrong_id', 'rejected', 'wrong_uid'])
+def test_sale_poll_errors_stop_without_resubmission(clock, failure):
+    """Only pending matching orders are polled; a different error fails immediately."""
+    plan = sale_plan()
+    executor = Mock()
+    executor.submit_order.return_value = receipt(plan.sells[0], 'NEW', executed=0)
+    confirmed = receipt(plan.sells[0])
+    if failure == 'transport':
+        executor.get_order_state.side_effect = OrderExecutionError('status transport failed')
+    else:
+        changes = {'wrong_id': {'order_id': 'other'}, 'rejected': {'status': 'REJECTED'},
+                   'wrong_uid': {'uid': 'other'}}[failure]
+        executor.get_order_state.return_value = replace(confirmed, **changes)
+    data = Mock()
+    with pytest.raises(OrderExecutionError):
+        execute_plan('offline', plan, data, executor)
+    executor.submit_order.assert_called_once()
+    executor.get_order_state.assert_called_once_with('offline', 'id')
+    data.get_destination.assert_not_called()
+    clock.assert_called_once_with(2)
+
+
+def test_sdk_order_status_read_preserves_identity_and_counts():
+    """Status checks use the broker's ID and do not submit orders or guess proceeds."""
+    client = Mock(spec_set=['orders'])
+    client.orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
+    client.orders.get_order_state.return_value = SimpleNamespace(
+        instrument_uid='uid', direction=OrderDirection.ORDER_DIRECTION_SELL, order_id='order',
+        execution_report_status=OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_PARTIALLYFILL,
+        lots_requested=10, lots_executed=3)
+    result = TInvestOrderExecutor(client).get_order_state('offline', 'order')
+    assert result == ExecutionReceipt('uid', 'SELL', 'order', 'PARTIALLYFILL', 10, 3, {})
+    client.orders.get_order_state.assert_called_once_with(account_id='offline', order_id='order')
+    client.orders.post_order.assert_not_called()
+
+
+@pytest.mark.parametrize('direction', [None, 'SELL', OrderDirection.ORDER_DIRECTION_UNSPECIFIED])
+def test_sdk_order_status_invalid_direction_fails(direction):
+    """Malformed status direction cannot be silently interpreted as a sale."""
+    client = Mock()
+    client.orders.get_order_state.return_value = SimpleNamespace(direction=direction)
+    with pytest.raises(OrderExecutionError, match='invalid order direction'):
+        TInvestOrderExecutor(client).get_order_state('offline', 'order')
+
+
+def test_sdk_order_status_transport_preserves_cause():
+    """Nonquota status read errors do not create an alternative sale."""
+    client = Mock()
+    error = RequestError(StatusCode.UNAVAILABLE, 'offline', None)
+    client.orders.get_order_state.side_effect = error
+    with pytest.raises(OrderExecutionError) as raised:
+        TInvestOrderExecutor(client).get_order_state('offline', 'order')
+    assert raised.value.__cause__ is error
+    client.orders.get_order_state.assert_called_once()
+    client.orders.post_order.assert_not_called()
 
 
 def test_sdk_enum_conversion_at_boundary():

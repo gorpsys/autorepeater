@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 import logging
 
 from autorepeater.execution_data import TradeRules
+from autorepeater.money import format_decimal_map
 from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import (
     TradeMode, exact_product, exact_sum, finite_decimal, validate_map,
@@ -32,10 +33,13 @@ class OrderPlan:  # pylint: disable=too-many-instance-attributes
     buys: tuple[OrderIntent, ...]
 
 
-def ready(snapshot):
+def ready(snapshot, stage='planning'):
     """Blocked/loading or outstanding orders defer this entire trading phase."""
     if not snapshot.limits_ready or snapshot.active_orders:
-        LOGGER.info('Defer execution: active orders or unavailable/blocked limits')
+        LOGGER.info('Defer execution: active orders or unavailable/blocked limits; '
+                    'stage=%s limits_ready=%s active_orders=%d available_cash=%s',
+                    stage, snapshot.limits_ready, len(snapshot.active_orders),
+                    format_decimal_map(snapshot.available_cash))
         return False
     return True
 

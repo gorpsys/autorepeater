@@ -4,6 +4,12 @@ import json
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def immediate_settlement_timeout(monkeypatch):
+    """Ordinary fake snapshots do not settle with time; polling tests use a fake clock."""
+    monkeypatch.setattr('autorepeater.execution.SETTLEMENT_TIMEOUT', 0)
+
+
 @pytest.fixture
 def guarded_import_script():
     """Build a fresh-interpreter probe with shared SDK/schema and I/O guards."""

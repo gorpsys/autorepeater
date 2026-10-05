@@ -20,6 +20,8 @@ from grpc import StatusCode
 
 from t_tech.invest import MoneyValue
 from t_tech.invest import Instrument
+from t_tech.invest import InstrumentStatus
+from t_tech.invest import Share, SharesResponse
 from t_tech.invest import PortfolioPosition
 from t_tech.invest import Quotation
 from t_tech.invest import PositionData
@@ -3406,6 +3408,10 @@ def test_index_public_snapshot_main_exclusions(public_index_snapshot):
 @pytest.fixture(name='calibration_cli')
 def fixture_calibration_cli(client, index_sdk_config, monkeypatch, tmp_path):
     """Use real snapshot loading with SDK autospecs and only synthetic credentials."""
+    client.instruments.shares.return_value = SharesResponse(instruments=[
+        Share(uid=f'uid-{ticker}', ticker=ticker, name=ticker, class_code='TQBR',
+              lot=lot, currency='rub', api_trade_available_flag=True)
+        for ticker, lot in [('A', 2), ('B', 1)]])
     path = write_index_config(
         tmp_path, json.loads(json.dumps(asdict(index_sdk_config), default=str)))
     monkeypatch.setattr(calibration.os, 'environ', {
@@ -3444,9 +3450,8 @@ def test_index_calibration_cli(defaults, calibration_cli, client, tmp_path, monk
     calibration_cli.return_value.__exit__.assert_called_once_with(None, None, None)
     assert client.instruments.mock_calls == [
         call.find_instrument(query='A'),
-        call.get_instrument_by(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid-A'),
+        call.shares(instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL),
         call.find_instrument(query='B'),
-        call.get_instrument_by(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid-B'),
     ]
     assert client.market_data.mock_calls == [call.get_last_prices(instrument_id=['uid-A', 'uid-B'])]
     messages = [record.message for record in caplog.records if record.levelno == 25]
