@@ -1,18 +1,24 @@
 """Neutral receipts and one-pass execution, without SDK dependencies."""
+from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 import logging
 from time import monotonic, sleep
 from typing import Protocol
 
-from autorepeater.execution_data import ExecutionDataError
+from autorepeater.execution_data import (
+    ExecutionData, ExecutionDataError, ExecutionSnapshot, TradeRules,
+)
 from autorepeater.money import format_decimal, format_decimal_map
 from autorepeater.order_plan import (
-    ZERO, allocate_money, cash_bound, difference, nodes, ready,
+    OrderIntent, OrderPlan, ZERO, allocate_money, cash_bound, difference, nodes, ready,
     spending_limits, validate_intent, validate_rules,
 )
 from autorepeater.purchase_plan import purchase_intents
 from autorepeater.strategy_allocation import proportional_split
-from autorepeater.strategy_plan import exact_product, exact_sum, validate_map, validate_plan
+from autorepeater.strategy_plan import (
+    StrategyPlan, exact_product, exact_sum, validate_map, validate_plan,
+)
 
 LOGGER = logging.getLogger('tinkoffBot')
 SETTLEMENT_TIMEOUT = 30
@@ -32,21 +38,21 @@ class ExecutionReceipt:  # pylint: disable=too-many-instance-attributes
     status: str
     lots_requested: int
     lots_executed: int
-    cash: dict
+    cash: dict[str, Decimal]
 
 
 class OrderExecutor(Protocol):  # pylint: disable=too-few-public-methods
     """Neutral submission boundary, never retried by the orchestrator."""
 
-    def submit_order(self, account_id, intent) -> ExecutionReceipt:
+    def submit_order(self, account_id: str, intent: OrderIntent) -> ExecutionReceipt:
         """Submit one intent, returning documented execution facts."""
 
 
-    def get_order_state(self, account_id, order_id) -> ExecutionReceipt:
+    def get_order_state(self, account_id: str, order_id: str) -> ExecutionReceipt:
         """Read an already submitted order; never submits or cancels it."""
 
 
-def _receipt_matches(receipt, intent):
+def _receipt_matches(receipt: object, intent: OrderIntent) -> bool:
     return (isinstance(receipt, ExecutionReceipt) and receipt.uid == intent.uid
             and receipt.side == intent.side and isinstance(receipt.order_id, str)
             and bool(receipt.order_id)
@@ -58,7 +64,8 @@ def _receipt_matches(receipt, intent):
             and 0 <= receipt.lots_executed <= receipt.lots_requested)
 
 
-def _wait_for_order(account_id, intent, executor, receipt):
+def _wait_for_order(account_id: str, intent: OrderIntent, executor: OrderExecutor,
+                    receipt: ExecutionReceipt) -> ExecutionReceipt:
     deadline = monotonic() + SETTLEMENT_TIMEOUT
     order_id = receipt.order_id
     while _receipt_matches(receipt, intent) and receipt.status in ('NEW', 'PARTIALLYFILL'):
@@ -89,7 +96,7 @@ def _wait_for_order(account_id, intent, executor, receipt):
     return receipt
 
 
-def _submit(account_id, intent, executor):
+def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor) -> ExecutionReceipt:
     LOGGER.info('Submitting order: account=%s uid=%s side=%s lots=%d',
                 account_id, intent.uid, intent.side, intent.lots)
     try:
@@ -118,7 +125,8 @@ def _submit(account_id, intent, executor):
     return receipt
 
 
-def _fresh(account_id, data, uids):
+def _fresh(account_id: str, data: ExecutionData, uids: Sequence[str]
+           ) -> tuple[ExecutionSnapshot, dict[str, TradeRules]]:
     try:
         snapshot = data.get_destination(account_id)
         LOGGER.info('Execution refresh: account=%s budget=%s available_cash=%s '
@@ -137,7 +145,8 @@ def _fresh(account_id, data, uids):
     return snapshot, rules
 
 
-def _sale_paths(origin, by_path, limits):
+def _sale_paths(origin: tuple[int, ...], by_path: dict[tuple[int, ...], StrategyPlan],
+                limits: dict[tuple[int, ...], Decimal]) -> set[tuple[int, ...]]:
     domain = origin
     while domain and by_path[domain[:-1]].decision.redistribution_allowed:
         domain = domain[:-1]
@@ -154,7 +163,10 @@ def _sale_paths(origin, by_path, limits):
     return result
 
 
-def _fresh_money(plan, ownership, snapshot, rules, receipts):  # pylint: disable=too-many-locals
+def _fresh_money(plan: OrderPlan, ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                 snapshot: ExecutionSnapshot, rules: dict[str, TradeRules],
+                 receipts: Sequence[ExecutionReceipt]) -> dict[tuple[int, ...], Decimal]:
+    # pylint: disable=too-many-locals
     limits = spending_limits(plan.strategy, ownership, plan.marks)
     amount = cash_bound(plan.strategy, snapshot, rules)
     money = {path: min(limit, plan.money[path]) for path, limit in limits.items()}
@@ -193,7 +205,8 @@ def _fresh_money(plan, ownership, snapshot, rules, receipts):  # pylint: disable
     return {path: exact_sum((initial[path], extra[path])) for path in limits}
 
 
-def _positions_match(snapshot, ownership):
+def _positions_match(snapshot: ExecutionSnapshot,
+                     ownership: dict[tuple[int, ...], dict[str, Decimal]]) -> bool:
     uids = set(snapshot.quantities) | {uid for values in ownership.values() for uid in values}
     mismatches = {}
     for uid in sorted(uids):
@@ -211,7 +224,9 @@ def _positions_match(snapshot, ownership):
     return True
 
 
-def _wait_for_settlement(account_id, data, uids, ownership, stage):
+def _wait_for_settlement(account_id: str, data: ExecutionData, uids: Sequence[str],
+                         ownership: dict[tuple[int, ...], dict[str, Decimal]], stage: str
+                         ) -> tuple[ExecutionSnapshot, dict[str, TradeRules]]:
     """Poll only reads after FILL; never resubmit orders or infer settled money."""
     deadline = monotonic() + SETTLEMENT_TIMEOUT
     snapshot, rules = _fresh(account_id, data, uids)
@@ -235,7 +250,8 @@ def _wait_for_settlement(account_id, data, uids, ownership, stage):
     return snapshot, rules
 
 
-def _execution_result(plan, receipts, stage):
+def _execution_result(plan: OrderPlan, receipts: Sequence[ExecutionReceipt], stage: str
+                      ) -> tuple[ExecutionReceipt, ...]:
     sells = sum(receipt.side == 'SELL' for receipt in receipts)
     LOGGER.info('Execution result: stage=%s confirmed_sells=%d confirmed_buys=%d '
                 'planned_sells=%d planned_buys=%d', stage, sells, len(receipts) - sells,
@@ -243,7 +259,9 @@ def _execution_result(plan, receipts, stage):
     return tuple(receipts)
 
 
-def execute_plan(account_id, plan, data, executor):  # pylint: disable=too-many-locals
+def execute_plan(account_id: str, plan: OrderPlan, data: ExecutionData,
+                  executor: OrderExecutor) -> tuple[ExecutionReceipt, ...]:
+    # pylint: disable=too-many-locals
     """Sales confirmed individually; fresh positions/caps constrain a new BUY plan."""
     validate_plan(plan.strategy)
     for intent in (*plan.sells, *plan.buys):

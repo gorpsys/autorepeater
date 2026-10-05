@@ -18,7 +18,7 @@ class AccountConfig:
     allocation_drift_limit: Decimal
 
 
-def _fraction(data, field):
+def _fraction(data: dict[str, object], field: str) -> Decimal:
     raw = data.get(field)
     label = f'account config.{field}'
     if not isinstance(raw, str):
@@ -32,7 +32,7 @@ def _fraction(data, field):
     return value
 
 
-def validate_account_config(data):
+def validate_account_config(data: object) -> AccountConfig:
     """Validate a parsed document without accessing files or services."""
     if not isinstance(data, dict):
         raise ValueError('account config: expected an object')
@@ -46,7 +46,7 @@ def validate_account_config(data):
                          _fraction(data, 'allocation_drift_limit'))
 
 
-def _account_paths():
+def _account_paths() -> list[Path]:
     """Discover only this algorithm's immediate, nonhidden documents."""
     configured = os.environ.get('ACCOUNT_CONFIG_PATH')
     directory = os.environ.get('ACCOUNT_CONFIG_DIR')
@@ -68,18 +68,18 @@ def _account_paths():
     return paths
 
 
-def read_account_document(path):
+def read_account_document(path: str | Path) -> object:
     """Parse one JSON document, without guessing names from malformed text."""
     with open(path, encoding='utf-8') as config_file:
         return json.load(config_file)
 
 
-def load_account_config(path):
+def load_account_config(path: str | Path) -> AccountConfig:
     """Read and validate one explicit document."""
     return validate_account_config(read_account_document(path))
 
 
-def select_account_config(name):
+def select_account_config(name: str) -> AccountConfig:
     """Select an exact name and isolate foreign errors through the shared catalog."""
     candidates = discover_candidates(
         _account_paths(), read_account_document, validate_account_config)

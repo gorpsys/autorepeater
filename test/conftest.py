@@ -1,5 +1,6 @@
 """Keep local strategy configuration paths independent of the caller's shell."""
 import json
+from collections.abc import Callable
 
 import pytest
 
@@ -11,9 +12,9 @@ def immediate_settlement_timeout(monkeypatch):
 
 
 @pytest.fixture
-def guarded_import_script():
+def guarded_import_script() -> Callable[[tuple[str, ...], str], str]:
     """Build a fresh-interpreter probe with shared SDK/schema and I/O guards."""
-    def build(forbidden, body):
+    def build(forbidden: tuple[str, ...], body: str) -> str:
         return f'''
 import builtins
 import pathlib

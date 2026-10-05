@@ -1,20 +1,25 @@
 """Schema-neutral catalog discovery and exact-name selection."""
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Generic, TypeVar, cast
 from pathlib import Path
 
 from autorepeater.strategy_contract import UnsupportedSourceError
 
+ConfigT = TypeVar('ConfigT')
+
 
 @dataclass
-class Candidate:
+class Candidate(Generic[ConfigT]):
     """One parsed document or its diagnostic, without assuming a config schema."""
     path: Path
     name: str | None
-    config: object
+    config: ConfigT | None
     error: ValueError | None
 
 
-def discover_candidates(paths, read_document, validate_document):
+def discover_candidates(paths: Sequence[Path], read_document: Callable[[Path], object],
+                        validate_document: Callable[[object], ConfigT]) -> list[Candidate[ConfigT]]:
     """Read each path once; retain readable names even when validation fails."""
     candidates = []
     for path in paths:
@@ -33,12 +38,13 @@ def discover_candidates(paths, read_document, validate_document):
     return candidates
 
 
-def _duplicate_message(name, candidates):
+def _duplicate_message(name: str, candidates: Sequence[Candidate[ConfigT]]) -> str:
     paths = ', '.join(str(candidate.path) for candidate in candidates)
     return f'duplicate strategy name: {name} ({paths})'
 
 
-def select_candidate(candidates, name, warn):
+def select_candidate(candidates: Sequence[Candidate[ConfigT]], name: str,
+                     warn: Callable[[str], None]) -> ConfigT:
     """Warn about foreign problems in order, then return one exact valid match."""
     catalog = {}
     for candidate in candidates:
@@ -58,4 +64,4 @@ def select_candidate(candidates, name, warn):
         raise ValueError(_duplicate_message(name, matches))
     if matches[0].error is not None:
         raise matches[0].error
-    return matches[0].config
+    return cast(ConfigT, matches[0].config)

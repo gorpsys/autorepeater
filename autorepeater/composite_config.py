@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 
 from autorepeater import reporting
-from autorepeater.config_catalog import discover_candidates, select_candidate
+from autorepeater.config_catalog import Candidate, discover_candidates, select_candidate
 
 
 @dataclass(frozen=True)
@@ -25,19 +25,19 @@ class CompositeConfig:
     component_drift_limit: Decimal
 
 
-def _check_keys(data, allowed, context):
+def _check_keys(data: dict[str, object], allowed: set[str], context: str) -> None:
     unknown = data.keys() - allowed
     if unknown:
         raise ValueError(f'{context}: unknown fields: {", ".join(sorted(unknown))}')
 
 
-def _name(value, label):
+def _name(value: object, label: str) -> str:
     if not isinstance(value, str) or not value or any(char.isspace() for char in value):
         raise ValueError(f'{label}: expected a nonempty name without whitespace')
     return value
 
 
-def _load_component(data, position):
+def _load_component(data: object, position: int) -> CompositeComponent:
     context = f'components[{position}]'
     if not isinstance(data, dict):
         raise ValueError(f'{context}: expected an object')
@@ -58,7 +58,7 @@ def _load_component(data, position):
     return CompositeComponent(algoritm, src, weight)
 
 
-def validate_composite_config(data):
+def validate_composite_config(data: object) -> CompositeConfig:
     """Validate a parsed document without filesystem or registry access."""
     if not isinstance(data, dict):
         raise ValueError('composite config: expected an object')
@@ -85,18 +85,18 @@ def validate_composite_config(data):
     return CompositeConfig(name, components, limit)
 
 
-def read_composite_document(path):
+def read_composite_document(path: str | Path) -> object:
     """Parse one document without extracting names from invalid JSON."""
     with open(path, encoding='utf-8') as config_file:
         return json.load(config_file)
 
 
-def load_composite_config(path):
+def load_composite_config(path: str | Path) -> CompositeConfig:
     """Read and strictly validate a single composition."""
     return validate_composite_config(read_composite_document(path))
 
 
-def _composite_paths():
+def _composite_paths() -> list[Path]:
     configured = os.environ.get('COMPOSITE_CONFIG_DIR')
     if configured is not None and not configured.strip():
         raise ValueError('composite config path must not be empty')
@@ -113,11 +113,11 @@ def _composite_paths():
     return paths
 
 
-def _discover_candidates():
+def _discover_candidates() -> list[Candidate[CompositeConfig]]:
     return discover_candidates(
         _composite_paths(), read_composite_document, validate_composite_config)
 
 
-def select_composite_config(name):
+def select_composite_config(name: str) -> CompositeConfig:
     """Select an exact name, warning about foreign errors without substituting them."""
     return select_candidate(_discover_candidates(), name, reporting.print_config_warning)

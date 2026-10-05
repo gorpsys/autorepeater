@@ -1,4 +1,5 @@
 """Neutral financial models and validation, independent from the working engine."""
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from enum import StrEnum
@@ -55,7 +56,8 @@ class StrategyPlan:  # pylint: disable=too-many-instance-attributes
     positions: tuple[PortfolioEntry, ...] = ()
 
 
-def finite_decimal(value, field, minimum=Decimal(0), positive=False):
+def finite_decimal(value: object, field: str, minimum: Decimal = Decimal(0),
+                   positive: bool = False) -> Decimal:
     """Validate without coercion or epsilon at a financial boundary."""
     if (not isinstance(value, Decimal) or not value.is_finite()
             or value < minimum or (positive and value == minimum)):
@@ -64,7 +66,7 @@ def finite_decimal(value, field, minimum=Decimal(0), positive=False):
     return value
 
 
-def exact_sum(values):
+def exact_sum(values: Iterable[Decimal]) -> Decimal:
     """Sum finite decimal operands without losing small residuals."""
     values = tuple(values)
     if any(not isinstance(value, Decimal) or not value.is_finite() for value in values):
@@ -81,14 +83,14 @@ def exact_sum(values):
         return sum(values, Decimal(0))
 
 
-def exact_product(left, right):
+def exact_product(left: Decimal, right: Decimal) -> Decimal:
     """Retain the complete finite product used for virtual position valuation."""
     with localcontext() as context:
         context.prec = max(28, len(left.as_tuple().digits) + len(right.as_tuple().digits))
         return left * right
 
 
-def validate_path(path):
+def validate_path(path: object) -> None:
     """Occurrence identity is an ordered tuple of nonnegative component indices."""
     if (not isinstance(path, tuple)
             or any(isinstance(index, bool) or not isinstance(index, int) or index < 0
@@ -96,7 +98,7 @@ def validate_path(path):
         raise ValueError('path: expected a tuple of nonnegative indices')
 
 
-def validate_map(values, field, positive=False):
+def validate_map(values: object, field: str, positive: bool = False) -> None:
     """Validate a UID map without silently ignoring malformed entries."""
     if not isinstance(values, dict):
         raise ValueError(f'{field}: expected a dict')
@@ -106,7 +108,7 @@ def validate_map(values, field, positive=False):
         finite_decimal(value, f'{field}[{uid}]', positive=positive)
 
 
-def validate_profile(profile):
+def validate_profile(profile: object) -> None:
     """DTOs may have zero invested fraction; capital recovery checks positivity."""
     if not isinstance(profile, AllocationProfile):
         raise ValueError('profile: expected AllocationProfile')
@@ -123,7 +125,7 @@ def validate_profile(profile):
         raise ValueError('profile sum(exposures) + reserve_fraction must not exceed 1')
 
 
-def validate_positions(positions, marks=None):
+def validate_positions(positions: object, marks: dict[str, Decimal] | None = None) -> None:
     """Only long securities, consistently valued by one shared mark per UID."""
     if not isinstance(positions, tuple):
         raise ValueError('positions: expected a tuple')
@@ -147,7 +149,7 @@ def validate_positions(positions, marks=None):
             raise ValueError(f'positions[{entry.uid}]: price/marks mismatch')
 
 
-def validate_context(context):
+def validate_context(context: object) -> None:
     """Reject invalid budgets and an inconsistent forced-reduction flag."""
     if not isinstance(context, StrategyContext):
         raise ValueError('context: expected StrategyContext')
@@ -161,7 +163,7 @@ def validate_context(context):
     validate_positions(context.positions, context.marks)
 
 
-def validate_decision(decision):
+def validate_decision(decision: object) -> None:
     """Validate explicit permission without interpreting its diagnostic reason."""
     if not isinstance(decision, StrategyDecision):
         raise ValueError('decision: expected StrategyDecision')
@@ -179,7 +181,7 @@ def validate_decision(decision):
             finite_decimal(value, f'decision {field}')
 
 
-def _validate_main_target(target):
+def _validate_main_target(target: object) -> None:
     if not isinstance(target, TargetPortfolio):
         raise ValueError('plan target: expected TargetPortfolio')
     validate_target(target)
@@ -191,7 +193,7 @@ def _validate_main_target(target):
             raise ValueError(f'plan target price must be positive for UID {uid}')
 
 
-def validate_plan(plan, context=None):
+def validate_plan(plan: object, context: StrategyContext | None = None) -> None:
     """Validate the entire future financial tree before any execution."""
     if not isinstance(plan, StrategyPlan):
         raise ValueError('plan: expected StrategyPlan')

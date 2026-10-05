@@ -1,15 +1,18 @@
 """Pure financial permissions and budgets, isolated from the working runtime."""
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 
 from autorepeater.portfolio import TargetPortfolio, validate_target
 from autorepeater.strategy_allocation import (
-    attribute_positions, component_weights, proportional_split, recovered_capital,
+    PositionAttribution, attribute_positions, component_weights,
+    proportional_split, recovered_capital,
 )
 from autorepeater.strategy_plan import (
-    StrategyContext, StrategyDecision, TradeMode, exact_product, exact_sum,
+    AllocationProfile, StrategyContext, StrategyDecision, TradeMode, exact_product, exact_sum,
     finite_decimal, validate_context, validate_map, validate_positions,
 )
+from autorepeater.strategy_data import PortfolioEntry
 
 
 @dataclass(frozen=True)
@@ -21,18 +24,19 @@ class ComponentAllocation:
     unallocated_budget: Decimal
 
 
-def _limit(value):
+def _limit(value: Decimal) -> None:
     finite_decimal(value, 'policy limit')
     if value >= 1:
         raise ValueError('policy limit must be less than 1')
 
 
-def _normalized(values):
+def _normalized(values: Sequence[Decimal]) -> tuple[Decimal, ...] | None:
     total = exact_sum(values)
     return proportional_split(Decimal(1), values) if total > 0 else None
 
 
-def allocation_drift(positions, control, marks):
+def allocation_drift(positions: tuple[PortfolioEntry, ...], control: TargetPortfolio,
+                     marks: dict[str, Decimal]) -> Decimal | None:
     """Half-L1 security weights, or None when invested/control value is zero."""
     validate_positions(positions, marks)
     if not isinstance(control, TargetPortfolio):
@@ -57,7 +61,8 @@ def allocation_drift(positions, control, marks):
     return exact_product(exact_sum(differences), Decimal('.5'))
 
 
-def leaf_decision(context, control, limit):
+def leaf_decision(context: StrategyContext, control: TargetPortfolio,
+                  limit: Decimal) -> StrategyDecision:
     """The explicit capital obligation precedes the independent internal criterion."""
     validate_context(context)
     _limit(limit)
@@ -72,7 +77,7 @@ def leaf_decision(context, control, limit):
     return StrategyDecision(mode, False, reason, metric, limit)
 
 
-def component_drift(capitals, weights):
+def component_drift(capitals: tuple[Decimal, ...], weights: tuple[Decimal, ...]) -> Decimal | None:
     """Maximum relative share error; zero current capital has no share metric."""
     if (not isinstance(capitals, tuple) or not isinstance(weights, tuple)
             or not capitals or len(capitals) != len(weights)):
@@ -91,7 +96,8 @@ def component_drift(capitals, weights):
                for left, right in zip(actual, target))
 
 
-def _target_budgets(budget, weights, pool):
+def _target_budgets(budget: Decimal, weights: tuple[Decimal, ...],
+                    pool: Decimal) -> tuple[Decimal, ...]:
     """Correct only the residual of budget * weight products in the target branch."""
     receiver = max(range(len(weights)), key=weights.__getitem__)
     precision = 28
@@ -106,7 +112,8 @@ def _target_budgets(budget, weights, pool):
         precision *= 2
 
 
-def _budgets(budget, weights, capitals, above_limit):
+def _budgets(budget: Decimal, weights: tuple[Decimal, ...], capitals: tuple[Decimal, ...],
+              above_limit: bool) -> tuple[tuple[Decimal, ...], Decimal, str]:
     """Apply the agreed priority and conserve the exact child pool after correction."""
     pool = exact_product(budget, exact_sum(weights))
     targets = _target_budgets(budget, weights, pool)
@@ -126,7 +133,8 @@ def _budgets(budget, weights, capitals, above_limit):
     return budgets, pool, 'fund_deficits'
 
 
-def _capital_shortfall(pool, capitals, profiles):
+def _capital_shortfall(pool: Decimal, capitals: tuple[Decimal, ...],
+                        profiles: tuple[AllocationProfile, ...]) -> bool:
     """Only leaf reserves may explain a reserve-only shortage of the pool."""
     reserves = exact_sum(exact_product(capital, profile.reserve_fraction)
                          for capital, profile in zip(capitals, profiles))
@@ -134,7 +142,9 @@ def _capital_shortfall(pool, capitals, profiles):
     return pool < capital_without_reserve
 
 
-def _child_contexts(context, attributed, capitals, budgets, force):
+def _child_contexts(context: StrategyContext, attributed: PositionAttribution,
+                     capitals: tuple[Decimal, ...], budgets: tuple[Decimal, ...],
+                     force: bool) -> tuple[StrategyContext, ...]:
     children = tuple(StrategyContext(context.path + (index,), budget, capital,
                                      budget < capital and force, positions, context.marks)
                      for index, (budget, capital, positions)
@@ -144,7 +154,8 @@ def _child_contexts(context, attributed, capitals, budgets, force):
     return children
 
 
-def allocate_component_budgets(context, profiles, weights, limit):
+def allocate_component_budgets(context: StrategyContext, profiles: tuple[AllocationProfile, ...],
+                               weights: tuple[Decimal, ...], limit: Decimal) -> ComponentAllocation:
     """Attribute holdings, restore capital and propagate only justified reductions."""
     validate_context(context)
     _limit(limit)

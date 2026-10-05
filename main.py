@@ -7,7 +7,7 @@ from autorepeater.runner import RunnerParams
 from autorepeater.runner import Runner
 from autorepeater.strategies import prepare_strategy
 
-def main():
+def main() -> None:
     """main function"""
     parser = argparse.ArgumentParser(description="autorepeater")
 

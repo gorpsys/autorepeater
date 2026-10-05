@@ -1,12 +1,13 @@
 """Local index composition and validation, without SDK access."""
 import json
+from collections.abc import Callable
 import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from autorepeater import reporting
-from autorepeater.config_catalog import discover_candidates, select_candidate
+from autorepeater.config_catalog import Candidate, discover_candidates, select_candidate
 from autorepeater.strategy_contract import UnsupportedSourceError
 
 @dataclass
@@ -51,7 +52,8 @@ _INSTRUMENT_RANGES = {
 }
 
 
-def _decimal_field(data, field, context, valid_range):
+def _decimal_field(data: dict[str, object], field: str, context: str,
+                   valid_range: Callable[[Decimal], bool]) -> Decimal:
     raw = data.get(field)
     label = f'{context}.{field}'
     if not isinstance(raw, str):
@@ -65,7 +67,7 @@ def _decimal_field(data, field, context, valid_range):
     return value
 
 
-def _load_instrument(data, position):
+def _load_instrument(data: object, position: int) -> IndexInstrument:
     context = f'instruments[{position}]'
     if not isinstance(data, dict):
         raise ValueError(f'{context}: expected an object')
@@ -79,7 +81,7 @@ def _load_instrument(data, position):
     return IndexInstrument(ticker=ticker, **values)
 
 
-def _load_drift_ranges(data):
+def _load_drift_ranges(data: dict[str, object]) -> tuple[AllocationDriftRange, ...]:
     records = data.get('allocation_drift_limits')
     if not isinstance(records, list) or not records:
         raise ValueError('allocation_drift_limits: expected a nonempty array')
@@ -113,7 +115,7 @@ def _load_drift_ranges(data):
     return tuple(ranges)
 
 
-def validate_index_config(data):
+def validate_index_config(data: object) -> IndexConfig:
     """Validate an already parsed document without filesystem access."""
     if not isinstance(data, dict):
         raise ValueError('index config: expected an object')
@@ -142,18 +144,18 @@ def validate_index_config(data):
         data['name'], max_error, instruments, reserve, _load_drift_ranges(data), minimum)
 
 
-def read_index_document(path):
+def read_index_document(path: str | Path) -> object:
     """Parse one JSON document without applying schema validation."""
     with open(path, encoding='utf-8') as config_file:
         return json.load(config_file)
 
 
-def load_index_config(path):
+def load_index_config(path: str | Path) -> IndexConfig:
     """Read and strictly validate one named index document."""
     return validate_index_config(read_index_document(path))
 
 
-def _index_paths():
+def _index_paths() -> list[Path]:
     single_path = os.environ.get('IMOEX_CONFIG_PATH')
     directory = os.environ.get('INDEX_CONFIG_DIR')
     if single_path is not None and directory is not None:
@@ -172,11 +174,11 @@ def _index_paths():
     return paths
 
 
-def _discover_candidates():
+def _discover_candidates() -> list[Candidate[IndexConfig]]:
     return discover_candidates(_index_paths(), read_index_document, validate_index_config)
 
 
-def select_index_config(name=None):
+def select_index_config(name: str | None = None) -> IndexConfig:
     """Select one exact JSON name; isolate foreign errors and read each file once."""
     candidates = _discover_candidates()
     if name is None:
@@ -186,7 +188,7 @@ def select_index_config(name=None):
     return select_candidate(candidates, name, reporting.print_index_config_warning)
 
 
-def load_index_configs():
+def load_index_configs() -> dict[str, IndexConfig]:
     """Strictly validate the complete set, reusing the parser and pure validator."""
     configs = {}
     paths = _index_paths()

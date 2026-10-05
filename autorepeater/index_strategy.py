@@ -2,21 +2,28 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_FLOOR
+from typing import cast
 
-from autorepeater.index_config import select_index_config
+from autorepeater.index_config import IndexConfig, select_index_config
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.rebalance_policy import leaf_decision
 from autorepeater.strategy_budget import available_budget
-from autorepeater.strategy_data import InstrumentType
+from autorepeater.strategy_contract import PreparationContext
+from autorepeater.strategy_data import (
+    InstrumentInfo, InstrumentMatch, InstrumentType, PositionEvent, StrategyData,
+)
 from autorepeater.strategy_allocation import normalize_profile, position_value
-from autorepeater.strategy_plan import StrategyPlan, validate_context, validate_plan
+from autorepeater.strategy_plan import (
+    AllocationProfile, StrategyContext, StrategyPlan, validate_context, validate_plan,
+)
 from autorepeater import reporting
 
 
 INDEX_TYPES = (InstrumentType.SHARE, InstrumentType.ETF)
 
 
-def prepare_index_source(src, context):  # pylint: disable=unused-argument
+def prepare_index_source(src: str, context: PreparationContext) -> IndexConfig:
+    # pylint: disable=unused-argument
     """Prepare the exact JSON name using an isolated, one-pass selection."""
     return select_index_config(src)
 
@@ -31,7 +38,8 @@ class IndexQuote:
     time: datetime | None = None
 
 
-def _load_index_candidate(data, match, resolved):
+def _load_index_candidate(data: StrategyData, match: InstrumentMatch,
+                          resolved: dict[str, InstrumentInfo]) -> InstrumentInfo:
     ticker, uid, class_code = match.ticker, match.uid, match.class_code
     if not isinstance(uid, str) or not uid or uid in resolved:
         raise ValueError(f'invalid or duplicate index UID: {ticker} ({class_code})')
@@ -49,7 +57,8 @@ def _load_index_candidate(data, match, resolved):
     return instrument
 
 
-def _resolve_index_instrument(data, ticker, resolved):
+def _resolve_index_instrument(data: StrategyData, ticker: str,
+                              resolved: dict[str, InstrumentInfo]) -> InstrumentInfo:
     matches = [item for item in data.find_instruments(ticker)
                if item.ticker == ticker and item.instrument_type in INDEX_TYPES]
     candidates = [_load_index_candidate(data, match, resolved) for match in matches]
@@ -69,7 +78,7 @@ def _resolve_index_instrument(data, ticker, resolved):
     return chosen
 
 
-def _index_price(price, ticker):
+def _index_price(price: object, ticker: str) -> Decimal:
     if not isinstance(price, Decimal):
         raise ValueError(f'invalid index price: {ticker}')
     if not price.is_finite() or price <= 0:
@@ -80,10 +89,10 @@ def _index_price(price, ticker):
 class IndexStrategy:
     """Index data and targets with config fixed at construction, without SDK access."""
 
-    def __init__(self, config):
+    def __init__(self, config: IndexConfig) -> None:
         self.config = config
 
-    def load_snapshot(self, data):
+    def load_snapshot(self, data: StrategyData) -> dict[str, IndexQuote]:
         """Resolve the entire base anew; unavailable data aborts the calculation."""
         instruments = {}
         for item in self.config.instruments:
@@ -107,21 +116,22 @@ class IndexStrategy:
                 currency=instrument.currency, time=quote.time)
         return snapshot
 
-    def build_target(self, snapshot, budget):
+    def build_target(self, snapshot: dict[str, IndexQuote], budget: Decimal) -> TargetPortfolio:
         """Reserve the configured fraction of gross value before the pure calculation."""
         if not isinstance(budget, Decimal) or not budget.is_finite():
             raise ValueError('index budget must be a positive finite Decimal')
         return build_index_target(
             self.config, snapshot, available_budget(budget, self.config.reserve))
 
-    def event_accounts(self, dst_account_id):
+    def event_accounts(self, dst_account_id: str) -> tuple[str, ...]:
         """Watch only destination positions; prices do not trigger synchronization."""
         return (dst_account_id,)
 
-    def build_plan(self, snapshot, context):
+    def build_plan(self, snapshot: object, context: StrategyContext) -> StrategyPlan:
         """Choose the main-budget interval independently of invested-value control."""
         validate_context(context)
         self.allocation_profile(snapshot)
+        snapshot = cast(dict[str, IndexQuote], snapshot)
         target = self.build_target(snapshot, context.budget)
         invested = position_value(context.positions, context.marks)
         control = self.build_target(snapshot, invested) if invested > 0 else TargetPortfolio({}, {})
@@ -134,7 +144,7 @@ class IndexStrategy:
         validate_plan(plan, context)
         return plan
 
-    def allocation_profile(self, snapshot):
+    def allocation_profile(self, snapshot: object) -> AllocationProfile:
         """Reuse current capitalizations before all minimum-position and lot cuts."""
         if not isinstance(snapshot, dict):
             raise ValueError('index profile snapshot: expected a dict')
@@ -147,7 +157,7 @@ class IndexStrategy:
             {snapshot[ticker].uid: snapshot[ticker].price for ticker in capitalizations},
             self.config.reserve)
 
-    def should_rebalance(self, event, dst_account_id):
+    def should_rebalance(self, event: PositionEvent, dst_account_id: str) -> bool:
         """Recalculate populated destinations only when every blocking is zero."""
         return (
             event.has_position and event.account_id == dst_account_id
@@ -176,7 +186,7 @@ class IndexCalculation:
     min_exclusions: list[str]
 
 
-def _capitalizations(config, snapshot):
+def _capitalizations(config: IndexConfig, snapshot: dict[str, IndexQuote]) -> dict[str, Decimal]:
     result = {}
     uids = set()
     for instrument in sorted(config.instruments, key=lambda item: item.ticker):
@@ -196,11 +206,12 @@ def _capitalizations(config, snapshot):
     return result
 
 
-def _relative_error(lots, lot_cost, budget, weight):
+def _relative_error(lots: int, lot_cost: Decimal, budget: Decimal, weight: Decimal) -> Decimal:
     return abs(lots * lot_cost / budget - weight) / weight
 
 
-def _allocate_lots(capitalizations, snapshot, budget):
+def _allocate_lots(capitalizations: dict[str, Decimal], snapshot: dict[str, IndexQuote],
+                   budget: Decimal) -> dict[str, IndexAllocation]:
     total = sum((capitalizations[ticker] for ticker in sorted(capitalizations)), Decimal(0))
     weights = {ticker: value / total for ticker, value in capitalizations.items()}
     lot_costs = {ticker: snapshot[ticker].price * snapshot[ticker].lot for ticker in weights}
@@ -229,7 +240,8 @@ def _allocate_lots(capitalizations, snapshot, budget):
     }
 
 
-def calculate_index_target(config, snapshot, budget):
+def calculate_index_target(config: IndexConfig, snapshot: dict[str, IndexQuote],
+                           budget: Decimal) -> IndexCalculation:
     """Allocate an affordable capitalization prefix and renormalize after suffix cuts.
 
     Config is validated by load_index_config; snapshot maps every ticker to an
@@ -276,6 +288,7 @@ def calculate_index_target(config, snapshot, budget):
     return IndexCalculation(target, capitalizations, passes, min_exclusions)
 
 
-def build_index_target(config, snapshot, budget):
+def build_index_target(config: IndexConfig, snapshot: dict[str, IndexQuote],
+                       budget: Decimal) -> TargetPortfolio:
     """Return the engine's target using the same calculation as calibration."""
     return calculate_index_target(config, snapshot, budget).target

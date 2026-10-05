@@ -14,7 +14,8 @@ logger = logging.getLogger(LOGGER_NAME)
 class YcLoggingFormatter(jsonlogger.JsonFormatter):
     """Format records for Yandex Cloud Functions logs."""
 
-    def add_fields(self, log_record, record, message_dict):
+    def add_fields(self, log_record: dict[str, object], record: logging.LogRecord,
+                   message_dict: dict[str, object]) -> None:
         super().add_fields(log_record, record, message_dict)
         log_record['logger'] = record.name
         log_record['level'] = record.levelname.replace(
@@ -22,7 +23,7 @@ class YcLoggingFormatter(jsonlogger.JsonFormatter):
                 'WARNING', 'WARN').replace('CRITICAL', 'FATAL')
 
 
-def configure_local_logging():
+def configure_local_logging() -> None:
     """Configure default logging for local CLI runs."""
     logging.addLevelName(IMPORTANT, 'IMPORTANT')
     logging.basicConfig(level=IMPORTANT)
@@ -30,7 +31,7 @@ def configure_local_logging():
     logger.setLevel(logging.INFO)
 
 
-def configure_yc_logging():
+def configure_yc_logging() -> None:
     """Configure JSON logging expected by Yandex Cloud Functions."""
     logging.addLevelName(IMPORTANT, 'IMPORTANT')
     if not logger.handlers:

@@ -2,7 +2,11 @@
 from collections.abc import Iterable, Iterator, Sequence
 from decimal import Decimal, InvalidOperation
 
-from t_tech.invest import InstrumentIdType, InstrumentStatus, RequestError
+from t_tech.invest import (
+    Etf, Instrument, InstrumentIdType, InstrumentStatus, PortfolioPosition,
+    PositionsStreamResponse, RequestError, Share,
+)
+from t_tech.invest.services import Services
 
 from autorepeater.logging_config import logger
 from autorepeater.strategy_data import DataAccessError
@@ -21,7 +25,7 @@ from autorepeater.tinvest_requests import call_api
 NANO_FACTOR = Decimal('1000000000')
 
 
-def _instrument_type(value):
+def _instrument_type(value: str) -> InstrumentType:
     """Map SDK strings to the stable categories exposed to strategies."""
     return {
         'share': InstrumentType.SHARE,
@@ -30,7 +34,7 @@ def _instrument_type(value):
     }.get(value, InstrumentType.OTHER)
 
 
-def _decimal_value(value, context):
+def _decimal_value(value: object, context: str) -> Decimal:
     """Convert an SDK units/nano value and identify malformed source fields."""
     if value is None:
         raise ValueError(f'{context} is missing')
@@ -55,12 +59,13 @@ def _decimal_value(value, context):
     return result
 
 
-def _transport_error(error):
+def _transport_error(error: RequestError) -> DataAccessError:
     """Create the SDK-independent transport error while retaining its cause."""
     return DataAccessError(str(error))
 
 
-def _instrument_info(instrument, instrument_type):
+def _instrument_info(instrument: Share | Etf | Instrument,
+                     instrument_type: InstrumentType) -> InstrumentInfo:
     """Share/ETF catalogs and GetInstrumentBy expose the same full metadata fields."""
     return InstrumentInfo(
         uid=instrument.uid, ticker=instrument.ticker, name=instrument.name,
@@ -72,13 +77,13 @@ def _instrument_info(instrument, instrument_type):
 class TInvestStrategyData:
     """Translate T-Invest read services into the strategy data contract."""
 
-    def __init__(self, client):
+    def __init__(self, client: Services) -> None:
         self._client = client
         self._instrument_cache = None
         self._catalogs = {}
         self._match_types = {}
 
-    def begin_snapshot(self):
+    def begin_snapshot(self) -> None:
         """Share full metadata within one pass, never across independent calculations."""
         self._instrument_cache = {}
         self._catalogs = {}
@@ -115,7 +120,7 @@ class TInvestStrategyData:
         self._match_types.update((item.uid, item.instrument_type) for item in matches)
         return matches
 
-    def _catalog_instrument(self, uid):
+    def _catalog_instrument(self, uid: str) -> InstrumentInfo | None:
         instrument_type = self._match_types.get(uid)
         methods = {InstrumentType.SHARE: self._client.instruments.shares,
                    InstrumentType.ETF: self._client.instruments.etfs}
@@ -193,7 +198,7 @@ class TInvestStrategyData:
         return self._position_events(iterator)
 
     @staticmethod
-    def _portfolio_entry(position):
+    def _portfolio_entry(position: PortfolioPosition) -> PortfolioEntry:
         uid = position.instrument_uid
         blocked = getattr(position, 'blocked', None)
         blocked_lots = getattr(position, 'blocked_lots', None)
@@ -219,7 +224,7 @@ class TInvestStrategyData:
         )
 
     @classmethod
-    def _position_event(cls, response):
+    def _position_event(cls, response: PositionsStreamResponse) -> PositionEvent:
         position = response.position
         if position is None:
             return PositionEvent(
@@ -246,7 +251,8 @@ class TInvestStrategyData:
         )
 
     @classmethod
-    def _position_events(cls, iterator: Iterator) -> Iterator[PositionEvent]:
+    def _position_events(cls, iterator: Iterator[PositionsStreamResponse]
+                         ) -> Iterator[PositionEvent]:
         while True:
             try:
                 response = next(iterator)

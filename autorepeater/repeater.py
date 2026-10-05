@@ -2,19 +2,21 @@
 from dataclasses import replace
 from decimal import Decimal
 
-from autorepeater.execution import OrderExecutionError, execute_plan
-from autorepeater.execution_data import ExecutionDataError
+from autorepeater.execution import (
+    ExecutionReceipt, OrderExecutionError, OrderExecutor, execute_plan,
+)
+from autorepeater.execution_data import ExecutionData, ExecutionDataError, ExecutionSnapshot
 from autorepeater.logging_config import logger
 from autorepeater.order_plan import build_order_plan
 from autorepeater.purchase_plan import nodes
 from autorepeater.strategy_allocation import build_marks, recovered_capital
-from autorepeater.strategy_contract import validate_event_accounts, validate_strategy
-from autorepeater.strategy_data import DataAccessError, InstrumentType
-from autorepeater.strategy_plan import StrategyContext, exact_sum, validate_plan
+from autorepeater.strategy_contract import Strategy, validate_event_accounts, validate_strategy
+from autorepeater.strategy_data import DataAccessError, InstrumentType, PortfolioEntry, StrategyData
+from autorepeater.strategy_plan import StrategyContext, StrategyPlan, exact_sum, validate_plan
 from autorepeater import reporting
 
 
-def plan_ownership(plan):
+def plan_ownership(plan: StrategyPlan) -> dict[tuple[int, ...], dict[str, Decimal]]:
     """Read fixed occurrence holdings, never reconstruct them from target weights."""
     result = {}
     for node in nodes(plan):
@@ -29,7 +31,7 @@ def plan_ownership(plan):
     return result
 
 
-def destination_positions(destination):
+def destination_positions(destination: ExecutionSnapshot) -> tuple[PortfolioEntry, ...]:
     """Aggregate compatible duplicate DTOs without changing the adapter's nano budget."""
     positions = {}
     for entry in destination.portfolio.positions:
@@ -48,20 +50,21 @@ def destination_positions(destination):
 class AutoRepeater:
     """Check strategy policy from neutral reads, then execute its bounded plan."""
 
-    def __init__(self, strategy, data, execution_data, executor):
+    def __init__(self, strategy: Strategy, data: StrategyData, execution_data: ExecutionData,
+                 executor: OrderExecutor) -> None:
         self.strategy = validate_strategy(strategy)
         self.data = data
         self.execution_data = execution_data
         self.executor = executor
         self.debug = False
 
-    def set_debug(self, debug):
+    def set_debug(self, debug: bool) -> None:
         """Debug still validates the whole financial and physical plan."""
         if not isinstance(debug, bool):
             raise TypeError("Debug flag must be boolean")
         self.debug = debug
 
-    def sync_accounts(self, dst_account_id):
+    def sync_accounts(self, dst_account_id: str) -> tuple[ExecutionReceipt, ...]:
         """Validate every main target before reading rules or sending any order."""
         try:
             self.data.begin_snapshot()
@@ -94,13 +97,13 @@ class AutoRepeater:
             return ()
         return execute_plan(dst_account_id, orders, self.execution_data, self.executor)
 
-    def _local_pass(self, dst):
+    def _local_pass(self, dst: str) -> None:
         try:
             self.sync_accounts(dst)
         except (DataAccessError, ExecutionDataError, OrderExecutionError) as error:
             logger.error('Current pass stopped for destination %s: %s', dst, error)
 
-    def mainflow(self, dst):
+    def mainflow(self, dst: str) -> None:
         """Initial pass and events only; a submission stop does not end the stream."""
         self._local_pass(dst)
         while True:

@@ -3494,6 +3494,29 @@ def test_index_calibration_cli(defaults, calibration_cli, client, tmp_path, monk
                 == Decimal(comparison['budget']))
 
 
+def test_index_calibration_uses_injected_clock(
+        calibration_cli: Mock, client: Mock, caplog: pytest.LogCaptureFixture) -> None:
+    """Timestamp boundaries are deterministic and enclose snapshot reads."""
+    started = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+    received = datetime(2026, 10, 5, 12, 0, 1, tzinfo=timezone.utc)
+
+    def sample_time() -> datetime:
+        if not client.market_data.mock_calls:
+            calibration_cli.return_value.__enter__.assert_not_called()
+            return started
+        calibration_cli.return_value.__exit__.assert_called_once_with(None, None, None)
+        return received
+
+    clock = Mock(side_effect=sample_time)
+    with caplog.at_level(25, logger='tinkoffBot'):
+        calibration.main([], clock=clock)
+    clock.assert_has_calls([call(), call()])
+    assert clock.call_count == 2
+    report = json.loads(caplog.messages[-1])
+    assert report['snapshot_started_at'] == started.isoformat()
+    assert report['snapshot_received_at'] == received.isoformat()
+
+
 def test_index_calibration_sandbox(calibration_cli, client):
     """Sandbox selects the SDK endpoint and still only reads one public snapshot."""
     calibration.main(['--sandbox'])

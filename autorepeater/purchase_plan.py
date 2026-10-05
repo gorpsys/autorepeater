@@ -1,10 +1,12 @@
 """SDK-free greedy monetary underweight reduction with equivalent batching."""
+from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_FLOOR, localcontext
 import logging
 
+from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.strategy_plan import (
-    exact_product, exact_sum, finite_decimal, validate_path,
+    StrategyPlan, exact_product, exact_sum, finite_decimal, validate_path,
 )
 
 LOGGER = logging.getLogger('tinkoffBot')
@@ -13,7 +15,7 @@ LOGGER = logging.getLogger('tinkoffBot')
 ZERO = Decimal(0)
 
 
-def difference(left, right):
+def difference(left: Decimal, right: Decimal) -> Decimal:
     """Subtract finite values without losing a previously corrected residual."""
     return exact_sum((left, right.copy_negate()))
 
@@ -28,7 +30,7 @@ class OrderIntent:
     pieces: dict[tuple[int, ...], Decimal]
 
 
-def validate_intent(intent):
+def validate_intent(intent: object) -> None:
     """Reject malformed physical orders before crossing the SDK boundary."""
     if not isinstance(intent, OrderIntent) or not isinstance(intent.uid, str) or not intent.uid:
         raise ValueError('intent requires a UID')
@@ -46,19 +48,20 @@ def validate_intent(intent):
         raise ValueError('intent ownership sum must equal lots * lot_size')
 
 
-def nodes(plan):
+def nodes(plan: StrategyPlan) -> Iterator[StrategyPlan]:
     """Preorder occurrences, including unassigned money at internal nodes."""
     yield plan
     for child in plan.children:
         yield from nodes(child)
 
 
-def leaves(plan):
+def leaves(plan: StrategyPlan) -> dict[tuple[int, ...], StrategyPlan]:
     """Terminal targets retain their own spending limits."""
     return {node.path: node for node in nodes(plan) if not node.children}
 
 
-def cash_bound(strategy, snapshot, rules):
+def cash_bound(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+               rules: dict[str, TradeRules]) -> Decimal:
     """Intersect documented own money with currency upper bound, reserve once."""
     rub = snapshot.available_cash.get('rub', ZERO)
     bounds = [rule.buy_money_amount for rule in rules.values()
@@ -70,7 +73,8 @@ def cash_bound(strategy, snapshot, rules):
     return max(ZERO, difference(amount, strategy.cash_floor))
 
 
-def take_pieces(amount, capacities):
+def take_pieces(amount: Decimal, capacities: dict[tuple[int, ...], Decimal]
+                ) -> dict[tuple[int, ...], Decimal]:
     """Fill an aggregate in path order, never exceeding an owner's cap."""
     result = {}
     for path in sorted(capacities):
@@ -83,14 +87,19 @@ def take_pieces(amount, capacities):
     return result
 
 
-def allocate_floor(amount, divisor):
+def allocate_floor(amount: Decimal, divisor: Decimal) -> int:
     """Integral ratio without precision-28 rounding up a monetary/piece cap."""
     numerator, denominator = amount.as_integer_ratio()
     div_numerator, div_denominator = divisor.as_integer_ratio()
     return (numerator * div_denominator) // (denominator * div_numerator)
 
 
-def _candidate(uid, state):  # pylint: disable=too-many-locals
+def _candidate(uid: str, state: tuple[
+        StrategyPlan, dict[tuple[int, ...], dict[str, Decimal]], dict[str, Decimal],
+        dict[str, TradeRules], dict[tuple[int, ...], Decimal], dict[str, Decimal],
+        dict[str, int], Decimal, Decimal,
+]) -> tuple[Decimal, str, int, dict[tuple[int, ...], Decimal]] | None:
+    # pylint: disable=too-many-locals
     strategy, ownership, marks, rules, money, quantities, used, remaining, spent = state
     rule = rules.get(uid)
     if (strategy.target.quantities[uid] == 0 or rule is None
@@ -124,7 +133,10 @@ def _candidate(uid, state):  # pylint: disable=too-many-locals
     return cost, uid, max_lots, pieces
 
 
-def purchase_intents(strategy, snapshot, ownership, marks, rules, money):
+def purchase_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                     marks: dict[str, Decimal], rules: dict[str, TradeRules],
+                     money: dict[tuple[int, ...], Decimal]) -> tuple[OrderIntent, ...]:
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """Highest absolute reduction first, UID then path; no per-lot million loop."""
     ownership = {path: dict(values) for path, values in ownership.items()}

@@ -4,12 +4,14 @@ Run from the repository with python -m scripts.check_rebalance_policy.
 No SDK, environment credentials, network, or real order submission is used.
 """
 import argparse
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
 import random
+from typing import Any
 
 from autorepeater.account_config import AccountConfig
 from autorepeater.account_strategy import AccountStrategy, PreparedAccountSource
@@ -37,7 +39,7 @@ D = Decimal
 ZERO = D(0)
 
 
-def load_inputs(capture_path=None):
+def load_inputs(capture_path: Path | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Verify frozen capture bytes before decoding its public market data."""
     manifest = json.loads((ROOT / 'test/data/rebalance_scenarios.json').read_text(encoding='utf-8'))
     path = capture_path or ROOT / 'test/data' / manifest['capture']
@@ -47,18 +49,19 @@ def load_inputs(capture_path=None):
     return manifest, json.loads(payload)
 
 
-def entry(uid, quantity, price):
+def entry(uid: str, quantity: Decimal, price: Decimal) -> PortfolioEntry:
     """Anonymous security, valued in RUB per piece."""
     return PortfolioEntry(uid, InstrumentType.SHARE, 'rub', price, quantity, '')
 
 
-def account_strategy(reserve, limit):
+def account_strategy(reserve: Decimal, limit: Decimal) -> AccountStrategy:
     """A model config has a dummy source ID and is never used for data access."""
     config = AccountConfig('MODEL', '00000', reserve, limit)
     return AccountStrategy(PreparedAccountSource('00000', config))
 
 
-def account_snapshot(quantities, prices):
+def account_snapshot(quantities: dict[str, Decimal], prices: dict[str, Decimal]
+                     ) -> tuple[dict[str, PortfolioEntry], Decimal]:
     """Use the source's established per-position nano arithmetic."""
     positions = {uid: entry(uid, quantity, prices[uid]) for uid, quantity in quantities.items()}
     total = sum((item.quantity * item.current_price).quantize(D('1e-9'))
@@ -66,7 +69,9 @@ def account_snapshot(quantities, prices):
     return positions, total
 
 
-def legacy_orders(current, target, prices, lots, budget):
+def legacy_orders(current: dict[str, Decimal], target: dict[str, Decimal],
+                  prices: dict[str, Decimal], lots: dict[str, int], budget: Decimal
+                  ) -> tuple[list[tuple[str, str, int, int]], bool]:
     """Frozen offline oracle: nearest lot; price * lots; strict old volume gate."""
     orders = []
     volumes = {'SELL': ZERO, 'BUY': ZERO}
@@ -80,14 +85,20 @@ def legacy_orders(current, target, prices, lots, budget):
     return orders, max(volumes.values()) > budget * D('0.004')
 
 
-def metrics(orders, prices, rate):
+def metrics(orders: Sequence[tuple[str, str, int, int]], prices: dict[str, Decimal],
+            rate: Decimal) -> dict[str, Decimal | int]:
     """Actual piece turnover at fixed marks; commission is an explicit estimate."""
     turnover = sum((prices[uid] * count * lot for uid, _, count, lot in orders), ZERO)
     return {'turnover': turnover, 'order_count': len(orders),
             'estimated_commission': turnover * rate}
 
 
-def _account_cases(manifest, capture, repetitions):  # pylint: disable=too-many-locals
+def _account_cases(manifest: dict[str, Any], capture: dict[str, Any], repetitions: int
+                   ) -> Iterator[tuple[
+                       dict[str, Decimal], dict[str, Decimal], dict[str, Decimal],
+                       dict[str, int], Decimal, Decimal | None,
+                   ]]:
+    # pylint: disable=too-many-locals
     """Independent seed reproduces historical holdout, using captured base weights."""
     rng = random.Random(manifest['validation_seed'])
     ranked = sorted(capture['config']['instruments'],

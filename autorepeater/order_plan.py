@@ -3,11 +3,11 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 import logging
 
-from autorepeater.execution_data import TradeRules
+from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.money import format_decimal_map
 from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import (
-    TradeMode, exact_product, exact_sum, finite_decimal, validate_map,
+    StrategyPlan, TradeMode, exact_product, exact_sum, finite_decimal, validate_map,
     validate_plan,
 )
 
@@ -23,17 +23,17 @@ LOGGER = logging.getLogger('tinkoffBot')
 @dataclass(frozen=True)
 class OrderPlan:  # pylint: disable=too-many-instance-attributes
     """One pass, including fixed ownership and initial spending permissions."""
-    strategy: object
-    snapshot: object
-    ownership: dict
-    marks: dict
-    rules: dict
-    money: dict
+    strategy: StrategyPlan
+    snapshot: ExecutionSnapshot
+    ownership: dict[tuple[int, ...], dict[str, Decimal]]
+    marks: dict[str, Decimal]
+    rules: dict[str, TradeRules]
+    money: dict[tuple[int, ...], Decimal]
     sells: tuple[OrderIntent, ...]
     buys: tuple[OrderIntent, ...]
 
 
-def ready(snapshot, stage='planning'):
+def ready(snapshot: ExecutionSnapshot, stage: str = 'planning') -> bool:
     """Blocked/loading or outstanding orders defer this entire trading phase."""
     if not snapshot.limits_ready or snapshot.active_orders:
         LOGGER.info('Defer execution: active orders or unavailable/blocked limits; '
@@ -44,7 +44,7 @@ def ready(snapshot, stage='planning'):
     return True
 
 
-def validate_rules(rules):
+def validate_rules(rules: dict[str, TradeRules]) -> None:
     """Own limits are native currency amounts and integral nonmargin lot caps."""
     for uid, rule in rules.items():
         if not isinstance(rule, TradeRules):
@@ -62,7 +62,9 @@ def validate_rules(rules):
                 raise ValueError(f'trade rules[{uid}]: invalid own cap')
 
 
-def spending_limits(strategy, ownership, marks):
+def spending_limits(strategy: StrategyPlan,
+                    ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                    marks: dict[str, Decimal]) -> dict[tuple[int, ...], Decimal]:
     """Potential monetary gaps are caps, never presumed cash or sale proceeds."""
     result = {}
     for path, node in leaves(strategy).items():
@@ -72,7 +74,8 @@ def spending_limits(strategy, ownership, marks):
     return result
 
 
-def allocate_money(amount, limits):
+def allocate_money(amount: Decimal, limits: dict[tuple[int, ...], Decimal]
+                   ) -> dict[tuple[int, ...], Decimal]:
     """Bounded proportional pool with exact residual conservation."""
     paths = sorted(limits)
     total = exact_sum(limits.values())
@@ -83,7 +86,9 @@ def allocate_money(amount, limits):
     return dict(zip(paths, parts))
 
 
-def _validate_inputs(strategy, snapshot, ownership, marks, rules):
+def _validate_inputs(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                     marks: dict[str, Decimal], rules: dict[str, TradeRules]) -> None:
     # pylint: disable=too-many-branches
     validate_plan(strategy)
     validate_map(snapshot.quantities, 'destination quantities')
@@ -118,7 +123,10 @@ def _validate_inputs(strategy, snapshot, ownership, marks, rules):
             raise ValueError(f'positive mark required for destination UID {uid}')
 
 
-def sale_intents(strategy, snapshot, ownership, rules):  # pylint: disable=too-many-locals
+def sale_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                 ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                 rules: dict[str, TradeRules]) -> tuple[OrderIntent, ...]:
+    # pylint: disable=too-many-locals
     """Net physical excess, then round once within free and permitted ownership."""
     result = []
     for uid, current in sorted(snapshot.quantities.items()):
@@ -167,7 +175,9 @@ def sale_intents(strategy, snapshot, ownership, rules):  # pylint: disable=too-m
     return tuple(result)
 
 
-def build_order_plan(strategy, snapshot, ownership, marks, rules):
+def build_order_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                     marks: dict[str, Decimal], rules: dict[str, TradeRules]) -> OrderPlan:
     """Validate every target first; no conditional proceeds enter the BUY pool."""
     ownership = {path: dict(quantities) for path, quantities in ownership.items()}
     for node in nodes(strategy):

@@ -1,7 +1,11 @@
 """User-facing portfolio, order, and event output."""
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal, localcontext
 import json
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from autorepeater.constants import IMPORTANT
 from autorepeater.logging_config import logger
@@ -10,8 +14,55 @@ from autorepeater.money import currency_to_string
 from autorepeater.money import format_decimal
 from autorepeater.money import get_quantity_position
 from autorepeater.money import no_money_to_string
-from autorepeater.portfolio import get_portfolio
-from autorepeater.strategy_data import InstrumentType
+from autorepeater.portfolio import DisplayPosition, PortfolioClient, TargetPortfolio, get_portfolio
+from autorepeater.strategy_data import InstrumentInfo, InstrumentType, PortfolioEntry, PositionEvent
+
+if TYPE_CHECKING:
+    from autorepeater.order_plan import OrderPlan
+
+KeyT = TypeVar('KeyT')
+
+
+class DisplayInstrument(Protocol):  # pylint: disable=too-few-public-methods
+    """Name and ticker needed for the legacy instrument display."""
+    name: str
+    ticker: str
+
+
+class InstrumentMatches(Protocol):  # pylint: disable=too-few-public-methods
+    """Ordered matches from the legacy display lookup."""
+    instruments: Sequence[DisplayInstrument]
+
+
+class InstrumentFinder(Protocol):  # pylint: disable=too-few-public-methods
+    """Only the instrument lookup used for explicit account display."""
+
+    def find_instrument(self, *, query: str) -> InstrumentMatches:
+        """Find display metadata."""
+
+
+class DisplayAccount(Protocol):  # pylint: disable=too-few-public-methods
+    """Account identity used by explicit account display."""
+    name: str
+    id: str
+
+
+class DisplayAccounts(Protocol):  # pylint: disable=too-few-public-methods
+    """Accounts returned for explicit display."""
+    accounts: Sequence[DisplayAccount]
+
+
+class AccountReader(Protocol):  # pylint: disable=too-few-public-methods
+    """Only the account-list read used by reporting."""
+
+    def get_accounts(self) -> DisplayAccounts:
+        """Read available account identities."""
+
+
+class ReportingClient(PortfolioClient, Protocol):  # pylint: disable=too-few-public-methods
+    """Legacy display reads; strategy reporting still uses only loaded neutral DTOs."""
+    instruments: InstrumentFinder
+    users: AccountReader
 
 
 NANO_QUANT = Decimal('0.000000001')
@@ -21,29 +72,30 @@ class GetInstrumentException(Exception):
     """Instrument not found uniquely by instrument_id."""
 
 
-def print_config_warning(message):
+def print_config_warning(message: str) -> None:
     """Report an unusable foreign config without blocking exact-name selection."""
     logger.warning('%s', message)
 
 
-def print_index_config_warning(message):
+def print_index_config_warning(message: str) -> None:
     """Report an unusable foreign index document without blocking selection."""
     print_config_warning(message)
 
 
-def print_unavailable_index_candidate(instrument):
+def print_unavailable_index_candidate(instrument: InstrumentInfo) -> None:
     """Explain exclusion using full metadata, without additional API reads."""
     logger.info('Skipping index candidate: %s uid=%s class_code=%s api_trade_available=False',
                 instrument.ticker, instrument.uid, instrument.class_code)
 
 
-def print_index_instrument_selected(instrument):
+def print_index_instrument_selected(instrument: InstrumentInfo) -> None:
     """Make the dynamically chosen board and UID visible on every snapshot."""
     logger.info('Selected index instrument: %s uid=%s class_code=%s api_trade_available=True',
                 instrument.ticker, instrument.uid, instrument.class_code)
 
 
-def print_index_selection_warning(ticker, chosen, available):
+def print_index_selection_warning(ticker: str, chosen: InstrumentInfo,
+                                 available: Sequence[InstrumentInfo]) -> None:
     """Multiple live candidates use the API's original order, not a board preference."""
     details = ', '.join(f'{item.uid}/{item.class_code}' for item in available)
     logger.warning('Multiple API-tradable index instruments: %s; '
@@ -51,7 +103,7 @@ def print_index_selection_warning(ticker, chosen, available):
                    ticker, chosen.uid, chosen.class_code, details)
 
 
-def get_instrument(client, instrument_id):
+def get_instrument(client: ReportingClient, instrument_id: str) -> DisplayInstrument:
     """Find the instrument name used for display."""
     result = client.instruments.find_instrument(query=instrument_id).instruments
     if len(result) == 1:
@@ -59,7 +111,7 @@ def get_instrument(client, instrument_id):
     raise GetInstrumentException('error get instrument')
 
 
-def postiton_to_string(client, position):
+def postiton_to_string(client: ReportingClient, position: DisplayPosition) -> str:
     """Convert a position to its existing human-readable representation."""
     if position.instrument_type == 'currency':
         return currency_to_string(position)
@@ -71,17 +123,17 @@ def postiton_to_string(client, position):
     return str(position)
 
 
-def print_account_header(side):
+def print_account_header(side: str) -> None:
     """Identify the account being synchronized before it is loaded."""
     logger.log(IMPORTANT, '%s account', side)
 
 
-def print_position(client, position):
+def print_position(client: ReportingClient, position: DisplayPosition) -> None:
     """Report an already loaded position."""
     logger.log(IMPORTANT, postiton_to_string(client, position))
 
 
-def _strategy_currency_to_string(position):
+def _strategy_currency_to_string(position: PortfolioEntry) -> str:
     with localcontext() as context:
         context.prec = max(
             28, position.current_price.adjusted() + position.quantity.adjusted() + 14)
@@ -89,7 +141,7 @@ def _strategy_currency_to_string(position):
         return f'{position.currency} - {format_decimal(value)}'
 
 
-def strategy_position_to_string(position):
+def strategy_position_to_string(position: PortfolioEntry) -> str:
     """Format a strategy-side position without relying on an SDK DTO."""
     if position.instrument_type == InstrumentType.CURRENCY:
         return _strategy_currency_to_string(position)
@@ -100,22 +152,22 @@ def strategy_position_to_string(position):
     return position.diagnostic_text
 
 
-def print_strategy_position(position):
+def print_strategy_position(position: PortfolioEntry) -> None:
     """Report a position from the SDK-independent strategy data model."""
     logger.info('%s', strategy_position_to_string(position))
 
 
-def print_total(total):
+def print_total(total: Decimal) -> None:
     """Report the caller's calculated total."""
     logger.log(IMPORTANT, 'total: %s', str(total))
 
 
-def print_launch(algoritm, src, dst):
+def print_launch(algoritm: str, src: str, dst: str | None) -> None:
     """Report resolved selection, never the request or authentication token."""
     logger.info('Launch: algoritm=%s src=%s dst=%s', algoritm, src, dst)
 
 
-def print_target(target, budget):
+def print_target(target: TargetPortfolio, budget: Decimal) -> None:
     """Describe the validated full target without inspecting strategy internals."""
     total = Decimal('0')
     for uid, quantity in target.quantities.items():
@@ -129,12 +181,12 @@ def print_target(target, budget):
                 format_decimal(budget - total))
 
 
-def print_missing_destination(mode):
+def print_missing_destination(mode: str) -> None:
     """A portfolio-only local launch or an empty destination does not execute trades."""
     logger.info('Skipping trading: destination account is not set; mode=%s', mode)
 
 
-def print_portfolio_by_account(client, account):
+def print_portfolio_by_account(client: ReportingClient, account: DisplayAccount) -> None:
     """Print detailed information about an account, including its cash."""
     logger.log(IMPORTANT, '%s (%s)', account.name, account.id)
     logger.log(IMPORTANT, '------------')
@@ -147,14 +199,14 @@ def print_portfolio_by_account(client, account):
     logger.log(IMPORTANT, '============')
 
 
-def print_all_portfolio(client):
+def print_all_portfolio(client: ReportingClient) -> None:
     """Print detailed information about all accounts."""
     response = client.users.get_accounts()
     for account in response.accounts:
         print_portfolio_by_account(client, account)
 
 
-def print_skipped_strategy_event(event):
+def print_skipped_strategy_event(event: PositionEvent) -> None:
     """Report the adapter-provided diagnostic representation of an event."""
     logger.log(IMPORTANT, event.diagnostic_text)
     logger.info('Skipping synchronization: event did not trigger rebalance; '
@@ -162,7 +214,7 @@ def print_skipped_strategy_event(event):
                 event.account_id, event.has_position, len(event.securities), len(event.money))
 
 
-def _calibration_json_value(value):
+def _calibration_json_value(value: object) -> str:
     if isinstance(value, Decimal):
         return format(value, 'f')
     if isinstance(value, datetime):
@@ -170,21 +222,21 @@ def _calibration_json_value(value):
     raise TypeError(f'unsupported calibration value: {type(value).__name__}')
 
 
-def format_index_calibration(report):
+def format_index_calibration(report: Mapping[str, object]) -> str:
     """Preserve decimal precision and quotation timestamps in a reusable report."""
     return json.dumps(report, default=_calibration_json_value, indent=2, allow_nan=False)
 
 
-def print_index_calibration(payload):
+def print_index_calibration(payload: str) -> None:
     """Display the same public data that can be saved for offline reproduction."""
     logger.log(IMPORTANT, '%s', payload)
 
-def _decimal_map(values):
+def _decimal_map(values: Mapping[KeyT, Decimal]) -> str:
     return '{' + ', '.join(f'{key}: {format_decimal(value)}'
                            for key, value in values.items()) + '}'
 
 
-def print_rebalance_plan(plan, debug):
+def print_rebalance_plan(plan: OrderPlan, debug: bool) -> None:
     """Report loaded targets, occurrence permissions and actual monetary bounds."""
     from autorepeater.purchase_plan import nodes  # pylint: disable=import-outside-toplevel
     print_target(plan.strategy.target, plan.strategy.budget)

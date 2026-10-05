@@ -44,6 +44,59 @@ def sale_plan():
                             {'X': D(1), 'Y': D(1), 'Z': D(1)}, rules('X', 'Y', 'Z'))
 
 
+def test_injected_order_ids_are_generated_once_per_submission() -> None:
+    """Explicit IDs remain deterministic without patching UUID internals."""
+    orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
+    orders.post_order.return_value = PostOrderResponse(
+        order_id='broker-id', lots_requested=10, lots_executed=10,
+        execution_report_status=OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL)
+    factory = Mock(side_effect=['first-id', 'second-id'])
+    executor = TInvestOrderExecutor(SimpleNamespace(orders=orders), order_id_factory=factory)
+    intents = sale_plan().sells
+    for intent in intents:
+        executor.submit_order('dst', intent)
+    assert factory.mock_calls == [call(), call()]
+    assert orders.mock_calls == [call.post_order(
+        account_id='dst', instrument_id=intent.uid, quantity=intent.lots,
+        direction=OrderDirection.ORDER_DIRECTION_SELL,
+        order_type=OrderType.ORDER_TYPE_BESTPRICE, order_id=order_id)
+        for intent, order_id in zip(intents, ['first-id', 'second-id'])]
+
+
+def test_invalid_intent_does_not_consume_order_id() -> None:
+    """Reject invalid intent before generating or submitting an ID."""
+    factory = Mock(return_value='unused')
+    orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
+    executor = TInvestOrderExecutor(SimpleNamespace(orders=orders), order_id_factory=factory)
+    with pytest.raises(ValueError):
+        executor.submit_order('dst', replace(sale_plan().sells[0], lots=0))
+    factory.assert_not_called()
+    assert orders.mock_calls == []
+
+
+def test_injected_order_id_is_reused_when_api_quota_is_exhausted() -> None:
+    """Quota retries keep the factory's single ID for the same submission."""
+    orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
+    orders.post_order.side_effect = [
+        RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None),
+        PostOrderResponse(order_id='broker-id', lots_requested=10, lots_executed=10,
+                          execution_report_status=OrderExecutionReportStatus.
+                          EXECUTION_REPORT_STATUS_FILL),
+    ]
+    factory = Mock(return_value='request-id')
+    executor = TInvestOrderExecutor(SimpleNamespace(orders=orders), order_id_factory=factory)
+    intent = sale_plan().sells[0]
+    with patch('autorepeater.tinvest_requests.time.sleep') as sleeper:
+        result = executor.submit_order('dst', intent)
+    factory.assert_called_once_with()
+    sleeper.assert_called_once_with(10)
+    assert result.order_id == 'broker-id'
+    assert orders.mock_calls == [call.post_order(
+        account_id='dst', instrument_id=intent.uid, quantity=intent.lots,
+        direction=OrderDirection.ORDER_DIRECTION_SELL,
+        order_type=OrderType.ORDER_TYPE_BESTPRICE, order_id='request-id')] * 2
+
+
 def receipt(intent, status='FILL', requested=None, executed=None, cash=None):
     """Receipt never declares guessed net proceeds."""
     return ExecutionReceipt(intent.uid, intent.side, 'id', status,
@@ -595,7 +648,8 @@ def test_unknown_common_sale_cannot_launder_isolated_sale_cash(caplog):
 @pytest.mark.parametrize('reverse', [False, True])
 @pytest.mark.parametrize('credit', ['unknown', 'isolated', 'common_zero'])
 def test_flat_mixed_sale_scopes_require_proven_credits(
-        budget, held_a, held_b, price_b, cash, reverse, credit, caplog):
+        budget: str, held_a: str, held_b: str, price_b: str, cash: str,
+        reverse: bool, credit: str, caplog: pytest.LogCaptureFixture) -> None:
     """Unassigned root proceeds cannot unlock an isolated child's unknown cash."""
     # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
     marks = {'A': D(1), 'B': D(price_b), 'H': D(1), 'X': D(1),
@@ -653,7 +707,8 @@ def test_flat_mixed_sale_scopes_require_proven_credits(
 
 
 @pytest.mark.parametrize('documented', [False, True])
-def test_all_common_sale_scopes_preserve_unknown_fallback_and_proven_credits(documented):
+def test_all_common_sale_scopes_preserve_unknown_fallback_and_proven_credits(
+        documented: bool) -> None:
     """Common unknown receipts allow fallback; fully proven receipts retain their caps."""
     tree = parent((leaf((0,), {'A': D(100)}, sell=True),
                    leaf((1,), {'B': D(100)})), redistribute=True, unassigned={'Z': D(50)})

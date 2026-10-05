@@ -270,7 +270,8 @@ def test_pure_module_import_boundaries():
     path = Path(__file__).parents[1] / 'autorepeater/rebalance_policy.py'
     tree = ast.parse(path.read_text(encoding='utf-8'))
     imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
-    assert set(imports) <= {'dataclasses', 'decimal', 'autorepeater.portfolio',
+    assert set(imports) <= {'collections.abc', 'dataclasses', 'decimal',
+                            'autorepeater.portfolio', 'autorepeater.strategy_data',
                             'autorepeater.strategy_plan', 'autorepeater.strategy_allocation'}
     assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                    and node.func.id in {'open', 'print'} for node in ast.walk(tree))

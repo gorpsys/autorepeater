@@ -1,7 +1,7 @@
 """Shared structural contract and runtime validation for strategies."""
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
 from autorepeater.strategy_plan import AllocationProfile, StrategyContext, StrategyPlan
 from autorepeater.strategy_data import PositionEvent, StrategyData
@@ -52,17 +52,17 @@ class Strategy(Protocol):
         """Decide strictly bool from one event without data reads or logging."""
 
 
-def validate_strategy(strategy):
+def validate_strategy(strategy: object) -> Strategy:
     """Validate the runtime surface without invoking methods or reading settings."""
     for method_name in ('load_snapshot', 'allocation_profile', 'build_plan',
                         'event_accounts', 'should_rebalance'):
         if not callable(getattr(strategy, method_name, None)):
             raise TypeError(f'strategy {method_name} must be callable')
 
-    return strategy
+    return cast(Strategy, strategy)
 
 
-def validate_event_accounts(accounts):
+def validate_event_accounts(accounts: object) -> tuple[str, ...]:
     """Validate one declaration before opening a stream or merging child accounts."""
     if not isinstance(accounts, tuple) or not accounts:
         raise ValueError('strategy event_accounts must return a nonempty tuple')
@@ -75,7 +75,7 @@ def validate_event_accounts(accounts):
     return accounts
 
 
-def create_strategy(prepared):
+def create_strategy(prepared: PreparedStrategy) -> Strategy:
     """Use the saved factory and data, then validate without registry or file access."""
     if not isinstance(prepared, PreparedStrategy):
         raise TypeError('create_strategy requires PreparedStrategy')

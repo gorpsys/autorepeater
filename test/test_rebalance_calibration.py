@@ -148,7 +148,7 @@ def test_leaf_unassigned_is_outside_its_control_portfolio():
                                        {'a': 1, 'unknown': 1}, D(0))
     plan = calibration.model_plan(child, snapshot, model)
     assert plan.strategy.decision.mode == calibration.TradeMode.BUY_ONLY
-    assert plan.strategy.positions == ()
+    assert not plan.strategy.positions
     assert plan.strategy.unassigned == {'unknown': D(100)}
     assert not plan.buys and len(plan.sells) == 1
 
