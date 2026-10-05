@@ -14,7 +14,7 @@ from autorepeater.strategy_contract import UnsupportedSourceError
 
 def document(name='GOOD', weights=('0.6', '0.3')):
     """Small compositions keep their declared order and unallocated remainder."""
-    return {'name': name, 'components': [
+    return {'component_drift_limit': '0.20', 'name': name, 'components': [
         {'algoritm': 'INDEX', 'src': f'SOURCE{position}', 'weight': weight}
         for position, weight in enumerate(weights)
     ]}
@@ -103,7 +103,8 @@ def test_invalid_name(name):
 def test_invalid_components(components):
     """Components must be a nonempty list of objects."""
     with pytest.raises(ValueError, match='components'):
-        composite_config.validate_composite_config({'name': 'GOOD', 'components': components})
+        composite_config.validate_composite_config({'component_drift_limit': '0.20',
+            'name': 'GOOD', 'components': components})
 
 
 @pytest.mark.parametrize('field', ['algoritm', 'src', 'weight'])
@@ -115,9 +116,9 @@ def test_missing_component_field(field):
         composite_config.validate_composite_config(payload)
 
 
-@pytest.mark.parametrize('field', ['name', 'components'])
+@pytest.mark.parametrize('field', ['name', 'components', 'component_drift_limit'])
 def test_missing_root_field(field):
-    """Both root fields are required."""
+    """All root fields are required."""
     payload = document()
     del payload[field]
     with pytest.raises(ValueError, match=field):
@@ -383,7 +384,7 @@ def test_import_has_no_io_sdk_strategy_registry_or_foreign_config_dependencies(
          'autorepeater.index_strategy', 'autorepeater.index_config',
          'autorepeater.account_config'), '''
 from autorepeater.composite_config import validate_composite_config
-assert validate_composite_config({'name': '00123', 'components': [
+assert validate_composite_config({'name': '00123', 'component_drift_limit': '0.20', 'components': [
     {'algoritm': 'CUSTOM', 'src': 'opaque', 'weight': '1'}]}).name == '00123'
 ''')
     result = subprocess.run([sys.executable, '-c', script],

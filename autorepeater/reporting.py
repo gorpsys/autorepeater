@@ -1,6 +1,6 @@
 """User-facing portfolio, order, and event output."""
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 import json
 
 from autorepeater.constants import IMPORTANT
@@ -82,28 +82,27 @@ def print_position(client, position):
 
 
 def _strategy_currency_to_string(position):
-    value = (position.current_price * position.quantity).quantize(NANO_QUANT)
-    return f'{position.currency} - {format_decimal(value)}'
+    with localcontext() as context:
+        context.prec = max(
+            28, position.current_price.adjusted() + position.quantity.adjusted() + 14)
+        value = (position.current_price * position.quantity).quantize(NANO_QUANT)
+        return f'{position.currency} - {format_decimal(value)}'
 
 
-def strategy_position_to_string(data, position):
+def strategy_position_to_string(position):
     """Format a strategy-side position without relying on an SDK DTO."""
     if position.instrument_type == InstrumentType.CURRENCY:
         return _strategy_currency_to_string(position)
     if position.instrument_type in (InstrumentType.SHARE, InstrumentType.ETF):
-        instruments = data.find_instruments(position.uid)
-        if len(instruments) != 1:
-            raise GetInstrumentException('error get instrument')
-        instrument = instruments[0]
         quantity = format_decimal(position.quantity)
-        return (no_money_to_string(instrument) + ' - ' + quantity + ' - ' +
+        return (position.uid + ' - ' + quantity + ' - ' +
                 _strategy_currency_to_string(position))
     return position.diagnostic_text
 
 
-def print_strategy_position(data, position):
+def print_strategy_position(position):
     """Report a position from the SDK-independent strategy data model."""
-    logger.log(IMPORTANT, strategy_position_to_string(data, position))
+    logger.info('%s', strategy_position_to_string(position))
 
 
 def print_total(total):
@@ -130,41 +129,9 @@ def print_target(target, budget):
                 format_decimal(budget - total))
 
 
-def print_nontrading_instrument(instrument, side):
-    """Explain the executor's trading-status guard using already loaded metadata."""
-    status = instrument.trading_status
-    logger.info('Skipping %s: %s uid=%s class_code=%s lot=%s trading_status=%s',
-                side, no_money_to_string(instrument), instrument.uid, instrument.class_code,
-                instrument.lot, getattr(status, 'name', status))
-
-
-def print_order_skip(instrument, side, current, target, lots=None):
-    """Report an unchanged target or a delta that did not produce positive lots."""
-    reason = ('target does not require this direction' if lots is None
-              else 'rounded quantity is not positive')
-    logger.info('Skipping %s: %s uid=%s current=%s target=%s lot=%s rounded_lots=%s reason=%s',
-                side, no_money_to_string(instrument), instrument.uid,
-                format_decimal(current), format_decimal(target), instrument.lot, lots, reason)
-
-
 def print_missing_destination(mode):
     """A portfolio-only local launch or an empty destination does not execute trades."""
     logger.info('Skipping trading: destination account is not set; mode=%s', mode)
-
-
-def print_execution_decision(sells, buys, volume=None, threshold_value=None):
-    """None valuation denotes debug, which does not evaluate the submission threshold."""
-    if volume is None:
-        logger.info('Execution: debug mode, sells=%d buys=%d; no orders submitted',
-                    len(sells), len(buys))
-        return
-    logger.info('Execution: sells=%d buys=%d volume=%s threshold_value=%s submit=%s',
-                len(sells), len(buys), format_decimal(volume), format_decimal(threshold_value),
-                volume > threshold_value)
-    if not sells and not buys:
-        logger.info('Skipping trading: no executable orders')
-    elif volume <= threshold_value:
-        logger.info('Skipping trading: order volume does not exceed threshold')
 
 
 def print_portfolio_by_account(client, account):
@@ -187,46 +154,12 @@ def print_all_portfolio(client):
         print_portfolio_by_account(client, account)
 
 
-def print_sell(instrument, quantity):
-    """Report a calculated sale without submitting it."""
-    logger.log(IMPORTANT, 'Продать: %s %d лотов', no_money_to_string(instrument), quantity)
-
-
-def print_buy(instrument, quantity):
-    """Report a calculated purchase without submitting it."""
-    logger.log(IMPORTANT, 'Купить: %s %d лотов', no_money_to_string(instrument), quantity)
-
-
-def print_order(order_params):
-    """Report order parameters before submission."""
-    logger.log(IMPORTANT, order_params)
-
-
-def print_order_result(order_id):
-    """Report the identifier returned by order submission."""
-    logger.log(IMPORTANT, order_id)
-
-
-def print_order_execution(response):
-    """An accepted order identifier alone does not establish that lots were filled."""
-    status = response.execution_report_status
-    logger.info('Order result: id=%s status=%s lots_requested=%s lots_executed=%s',
-                response.order_id, getattr(status, 'name', status),
-                response.lots_requested, response.lots_executed)
-
-
 def print_skipped_strategy_event(event):
     """Report the adapter-provided diagnostic representation of an event."""
     logger.log(IMPORTANT, event.diagnostic_text)
     logger.info('Skipping synchronization: event did not trigger rebalance; '
                 'account=%s has_position=%s securities=%d money=%d',
                 event.account_id, event.has_position, len(event.securities), len(event.money))
-
-
-def print_empty_target(dst_account_id, reason=None):
-    """Explain why a synchronization leaves destination holdings untouched."""
-    logger.info('Skipping synchronization for destination %s: %s',
-               dst_account_id, reason or 'empty target')
 
 
 def _calibration_json_value(value):
@@ -245,3 +178,37 @@ def format_index_calibration(report):
 def print_index_calibration(payload):
     """Display the same public data that can be saved for offline reproduction."""
     logger.log(IMPORTANT, '%s', payload)
+
+def _decimal_map(values):
+    return '{' + ', '.join(f'{key}: {format_decimal(value)}'
+                           for key, value in values.items()) + '}'
+
+
+def print_rebalance_plan(plan, debug):
+    """Report loaded targets, occurrence permissions and actual monetary bounds."""
+    from autorepeater.purchase_plan import nodes  # pylint: disable=import-outside-toplevel
+    print_target(plan.strategy.target, plan.strategy.budget)
+    for node in nodes(plan.strategy):
+        decision = node.decision
+        logger.info('Policy path=%s mode=%s reason=%s metric=%s limit=%s '
+                    'redistribution=%s budget=%s cash_floor=%s',
+                    node.path, decision.mode.value, decision.reason,
+                    None if decision.metric is None else format_decimal(decision.metric),
+                    None if decision.limit is None else format_decimal(decision.limit),
+                    decision.redistribution_allowed, format_decimal(node.budget),
+                    format_decimal(node.cash_floor))
+    logger.info('Execution money=%s scoped_money=%s limits_ready=%s active_orders=%d',
+                _decimal_map(plan.snapshot.available_cash), _decimal_map(plan.money),
+                plan.snapshot.limits_ready,
+                len(plan.snapshot.active_orders))
+    for uid, rule in sorted(plan.rules.items()):
+        logger.info('Rules UID %s lot=%s currency=%s API=%s BESTPRICE=%s '
+                    'buy_money=%s buy_lots=%s sell_lots=%s', uid, rule.lot, rule.currency,
+                    rule.api_trade_available, rule.bestprice_order_available,
+                    format_decimal(rule.buy_money_amount), rule.buy_max_lots, rule.sell_max_lots)
+    for intent in (*plan.sells, *plan.buys):
+        logger.info('Intent UID %s side=%s lots=%s pieces=%s',
+                    intent.uid, intent.side, intent.lots, _decimal_map(intent.pieces))
+    logger.info('Execution: debug=%s sells=%d buys=%d', debug, len(plan.sells), len(plan.buys))
+    if not plan.sells and not plan.buys:
+        logger.info('SKIP: no executable orders')

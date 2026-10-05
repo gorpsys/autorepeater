@@ -17,7 +17,7 @@ class InstrumentType(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class PortfolioEntry:
+class PortfolioEntry:  # pylint: disable=too-many-instance-attributes
     """One portfolio position represented without an SDK object."""
 
     uid: str
@@ -26,6 +26,8 @@ class PortfolioEntry:
     current_price: Decimal
     quantity: Decimal
     diagnostic_text: str
+    blocked: bool | None = None
+    blocked_lots: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -33,8 +33,8 @@ def _decimal_value(value, context):
     if value is None:
         raise ValueError(f'{context} is missing')
 
-    units = value.units
-    nano = value.nano
+    units = getattr(value, 'units', None)
+    nano = getattr(value, 'nano', None)
     converted = []
     for field_name, part in (('units', units), ('nano', nano)):
         if part is None or isinstance(part, bool):
@@ -154,6 +154,13 @@ class TInvestStrategyData:
     @staticmethod
     def _portfolio_entry(position):
         uid = position.instrument_uid
+        blocked = getattr(position, 'blocked', None)
+        blocked_lots = getattr(position, 'blocked_lots', None)
+        # SDK dataclass defaults can be unset sentinels in offline/source fixtures.
+        if type(blocked) is object:  # pylint: disable=unidiomatic-typecheck
+            blocked = None
+        if type(blocked_lots) is object:  # pylint: disable=unidiomatic-typecheck
+            blocked_lots = None
         return PortfolioEntry(
             uid=uid,
             instrument_type=_instrument_type(position.instrument_type),
@@ -165,6 +172,9 @@ class TInvestStrategyData:
                 position.quantity,
                 f'portfolio position {uid} quantity'),
             diagnostic_text=str(position),
+            blocked=blocked,
+            blocked_lots=_decimal_value(blocked_lots, f'portfolio position {uid} blocked_lots')
+            if blocked_lots is not None else None,
         )
 
     @classmethod

@@ -16,9 +16,6 @@ def main():
     parser.add_argument("-s", "--src", type=str, required=True,
                         help="источник выбранного алгоритма")
     parser.add_argument("-d", "--dst", type=str, help="id счёта назначения")
-    parser.add_argument("-t", "--threshold", type=float, help="порог стоимости, ниже "
-                        "которого не выполняется синхронизация - доля стоимости счёта"
-                        " назначения. По умолчанию 0.001")
     args = parser.parse_args()
 
     prepared = prepare_strategy(args.algoritm, args.src)
@@ -29,8 +26,7 @@ def main():
         prepared_strategy=prepared,
         dst=args.dst,
         params=RunnerParams(
-            debug=args.debug,
-            threshold=args.threshold))
+            debug=args.debug))
     runer.run()
 
 if __name__ == "__main__":

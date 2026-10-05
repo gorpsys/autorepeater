@@ -160,19 +160,26 @@ def fixture_application_bundle(tmp_path):
     expected = {source.relative_to(repository).as_posix() for source in sources}
     config_root = project_root / 'autorepeater/configs/new/deep'
     documents = {
-        'composites/first-file.json': {'name': 'ARCHIVE_ROOT', 'components': [
+        'composites/first-file.json': {'component_drift_limit': '0.20',
+            'name': 'ARCHIVE_ROOT', 'components': [
             {'algoritm': 'COMPOSITE', 'src': 'ARCHIVE_MIDDLE', 'weight': '1'}]},
-        'composites/second-file.json': {'name': 'ARCHIVE_MIDDLE', 'components': [
+        'composites/second-file.json': {'component_drift_limit': '0.20',
+            'name': 'ARCHIVE_MIDDLE', 'components': [
             {'algoritm': 'COMPOSITE', 'src': 'ARCHIVE_LEAF', 'weight': '1'}]},
-        'composites/third-file.json': {'name': 'ARCHIVE_LEAF', 'components': [
+        'composites/third-file.json': {'component_drift_limit': '0.20',
+            'name': 'ARCHIVE_LEAF', 'components': [
             {'algoritm': 'INDEX', 'src': 'ARCHIVE_INDEX', 'weight': '0.5'},
             {'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '0.5'}]},
-        'composites/invalid-foreign.json': {'name': 'FOREIGN', 'components': []},
-        'composites/duplicate-one.json': {'name': 'DUPLICATE', 'components': [
+        'composites/invalid-foreign.json': {'component_drift_limit': '0.20',
+            'name': 'FOREIGN', 'components': []},
+        'composites/duplicate-one.json': {'component_drift_limit': '0.20',
+            'name': 'DUPLICATE', 'components': [
             {'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '1'}]},
-        'composites/duplicate-two.json': {'name': 'DUPLICATE', 'components': [
+        'composites/duplicate-two.json': {'component_drift_limit': '0.20',
+            'name': 'DUPLICATE', 'components': [
             {'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '1'}]},
-        'settings/different-name.json': {'reserve': '0.07'},
+        'settings/different-name.json': {'name': '00123', 'source_account_id': '00123',
+                                         'reserve': '0.07', 'allocation_drift_limit': '0.0092'},
     }
     index = json.loads((project_root / 'autorepeater/configs/gold.json').read_text(
         encoding='utf-8'))
@@ -214,11 +221,12 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
     from autorepeater.composite_strategy import CompositeSnapshot, CompositeStrategy
     from autorepeater.index_strategy import IndexQuote
     from autorepeater.strategy_data import InstrumentType, PortfolioEntry
+    from autorepeater.strategy_plan import StrategyContext
     from autorepeater.strategies import create_strategy, prepare_strategy
     assert Path(handler.__file__).resolve() == extracted / 'handler.py'
     assert Path(main.__file__).resolve() == extracted / 'main.py'
 
-    with patch.object(runner.AutoRepeater, 'post_orders',
+    with patch.object(runner.TInvestOrderExecutor, 'submit_order',
                       side_effect=AssertionError('trading forbidden')) as trade:
         # Exercise the actual handler and its saved prepared default, with no SDK lifecycle.
         with patch.object(serverless, 'Runner', autospec=True) as launch:
@@ -237,8 +245,8 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                 ('INDEX', 'GOLD', Decimal('0.105263158'))]
             assert launch.return_value.method_calls == [call.run_sync()]
 
-        account = create_strategy(prepare_strategy('ACCOUNT', '00123'))
-        assert account.src == '00123' and account.config.reserve == Decimal('0.01')
+        account = create_strategy(prepare_strategy('ACCOUNT', '2193248994'))
+        assert account.src == '2193248994' and account.config.reserve == Decimal('0.01')
 
         # Discover by JSON name through configured paths, independently of cwd.
         configs = extracted / 'autorepeater/configs/new/deep'
@@ -268,7 +276,9 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                 leaf_snapshot = CompositeSnapshot((
                     {'GOLD': IndexQuote('gold', Decimal('10'), 1)}, account_snapshot))
                 snapshot = CompositeSnapshot((CompositeSnapshot((leaf_snapshot,)),))
-                target = nested.build_target(snapshot, Decimal('1000'))
+                context = StrategyContext((), Decimal('1000'), Decimal(0), False, (),
+                                          nested.allocation_profile(snapshot).prices)
+                target = nested.build_plan(snapshot, context).target
                 assert target.quantities == {'gold': Decimal('49'), 'share': Decimal('46.50')}
                 assert target.prices == {'gold': Decimal('10'), 'share': Decimal('10')}
                 messages = [item.args[0] for item in warnings.call_args_list]
@@ -288,7 +298,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                 # The saved tree remains usable if files vanish after preparation.
                 for path in configs.rglob('*.json'):
                     path.unlink()
-                assert create_strategy(prepared).build_target(snapshot, Decimal('1000')) == target
+                assert create_strategy(prepared).build_plan(snapshot, context).target == target
             else:
                 expected = {
                     'invalid-composite': ('third-file.json', 'components'),
@@ -332,9 +342,10 @@ def damage_archive_child(project_root, scenario):
     configs = project_root / 'autorepeater/configs/new/deep'
     changes = {
         'invalid-composite': ('composites/third-file.json',
-                              {'name': 'ARCHIVE_LEAF', 'components': []}),
+                              {'component_drift_limit': '0.20',
+                                  'name': 'ARCHIVE_LEAF', 'components': []}),
         'missing-child': ('composites/third-file.json',
-                          {'name': 'ARCHIVE_LEAF', 'components': [
+                          {'component_drift_limit': '0.20', 'name': 'ARCHIVE_LEAF', 'components': [
                               {'algoritm': 'INDEX', 'src': 'ABSENT_CHILD', 'weight': '1'}]}),
         'invalid-index': ('indexes/unrelated-filename.json',
                           {'name': 'ARCHIVE_INDEX', 'reserve': 1}),
@@ -373,3 +384,112 @@ def test_nested_application_archive(application_bundle, tmp_path, scenario, path
         cwd=working, env={}, check=False, capture_output=True, text=True, timeout=30)
     assert probe.returncode == 0, probe.stdout + probe.stderr
     assert probe.stdout.rstrip().endswith('nested archive validation completed')
+
+
+INDEPENDENT_MODULE = '''
+from decimal import Decimal
+from autorepeater.portfolio import TargetPortfolio
+from autorepeater.strategy_plan import AllocationProfile, StrategyDecision, StrategyPlan, TradeMode
+
+def prepare_source(src, context):
+    if src != 'independent-source':
+        raise ValueError('unexpected independent source')
+    return src
+
+class IndependentStrategy:
+    def __init__(self, prepared):
+        self.prepared = prepared
+    def load_snapshot(self, data):
+        return data.get_portfolio('source')
+    def allocation_profile(self, snapshot):
+        return AllocationProfile({'stock': Decimal(1)}, {'stock': Decimal(10)}, Decimal(0))
+    def build_plan(self, snapshot, context):
+        return StrategyPlan(context.path, context.budget,
+            TargetPortfolio({'stock': context.budget / 10}, {'stock': Decimal(10)}),
+            Decimal(0), StrategyDecision(TradeMode.BUY_ONLY, False, 'independent', None, Decimal(0)),
+            (), {}, context.positions)
+    def event_accounts(self, dst_account_id):
+        return (dst_account_id,)
+    def should_rebalance(self, event, dst_account_id):
+        return True
+'''
+
+
+INDEPENDENT_PROBE = '''
+import sys
+from decimal import Decimal
+from unittest.mock import Mock, patch
+sys.path.insert(0, sys.argv[1])
+with patch('socket.socket.connect', side_effect=AssertionError('network forbidden')), \
+        patch('grpc.secure_channel', side_effect=AssertionError('gRPC forbidden')):
+    import main
+    import handler
+    from autorepeater import runner
+    from autorepeater.strategies import prepare_strategy, create_strategy
+    from autorepeater.execution import ExecutionReceipt
+    from autorepeater.execution_data import ExecutionSnapshot, TradeRules
+    from autorepeater.strategy_data import PortfolioSnapshot
+    prepared = prepare_strategy('ARCHIVE_INDEPENDENT', 'independent-source')
+    strategy = create_strategy(prepared)
+    assert strategy.prepared == 'independent-source'
+    data = Mock(spec_set=['get_portfolio', 'position_events'])
+    data.get_portfolio.return_value = PortfolioSnapshot(())
+    data.position_events.side_effect = RuntimeError('finite offline stream')
+    execution = Mock(spec_set=['get_destination', 'get_trade_rules'])
+    execution.get_destination.return_value = ExecutionSnapshot(
+        PortfolioSnapshot(()), Decimal(100), {}, {}, {'rub': Decimal(100)}, {}, (), True)
+    execution.get_trade_rules.return_value = {
+        'stock': TradeRules(1, 'rub', True, True, Decimal(100), 100, 100)}
+    executor = Mock(spec_set=['submit_order'])
+    executor.submit_order.side_effect = lambda account, intent: ExecutionReceipt(
+        intent.uid, intent.side, 'offline', 'FILL', intent.lots, intent.lots, {})
+    with patch.object(runner, 'Client', autospec=True), \
+            patch.object(runner, 'TInvestStrategyData', return_value=data), \
+            patch.object(runner, 'TInvestExecutionData', return_value=execution), \
+            patch.object(runner, 'TInvestOrderExecutor', return_value=executor), \
+            patch.object(runner, 'print_all_portfolio'), \
+            patch.object(runner, 'configure_local_logging'), \
+            patch('autorepeater.serverless.configure_yc_logging'), \
+            patch.dict('os.environ', {'INVEST_TOKEN': 'offline'}):
+        sys.argv = ['main.py', '--algoritm', 'ARCHIVE_INDEPENDENT', '-s', 'independent-source',
+                    '-d', 'dst', '--debug']
+        try:
+            main.main()
+        except RuntimeError as error:
+            assert str(error) == 'finite offline stream'
+        else:
+            raise AssertionError('CLI did not open its event stream')
+        executor.submit_order.assert_not_called()
+        result = handler.handler({'queryStringParameters': {
+            'algoritm': 'ARCHIVE_INDEPENDENT', 'src': 'independent-source', 'dst': 'dst'}}, None)
+        assert result['body'] == 'Success sync, independent-source dst!'
+        executor.submit_order.assert_called_once()
+        assert executor.submit_order.call_args.args[1].lots == 10
+    assert data.get_portfolio.call_count == 2
+print('independent archive launch completed')
+'''
+
+
+def test_independent_algorithm_needs_only_module_and_registration_in_archive(
+        application_bundle, tmp_path):
+    """A new algorithm runs from an extracted bundle without changes to orchestration."""
+    root, expected = application_bundle
+    module = root / 'autorepeater/archive_independent.py'
+    module.write_text(INDEPENDENT_MODULE, encoding='utf-8')
+    registry = root / 'autorepeater/strategies.py'
+    registry.write_text(registry.read_text(encoding='utf-8') + '''
+from autorepeater.archive_independent import prepare_source, IndependentStrategy
+register_algorithm('ARCHIVE_INDEPENDENT', AlgorithmDefinition(prepare_source, IndependentStrategy))
+''', encoding='utf-8')
+    expected.add('autorepeater/archive_independent.py')
+    extracted = tmp_path / 'independent-extracted'
+    with ZipFile(builder.build_archive(root)) as archive:
+        assert set(archive.namelist()) == expected
+        archive.extractall(extracted)
+    working = tmp_path / 'independent-elsewhere'
+    working.mkdir()
+    probe = subprocess.run([sys.executable, '-I', '-c', INDEPENDENT_PROBE, str(extracted)],
+                           cwd=working, env={}, check=False, capture_output=True,
+                           text=True, timeout=30)
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    assert probe.stdout.rstrip().endswith('independent archive launch completed')

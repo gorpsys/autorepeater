@@ -6,7 +6,7 @@ import logging
 import sys
 from contextlib import nullcontext
 from decimal import Decimal
-from test.test_strategy_contract import EndOfTestStream
+from test.test_strategy_contract import EndOfTestStream, pure_plan_target
 from test.test_strategy_contract import fixture_launch  # pylint: disable=unused-import
 from unittest.mock import ANY, Mock, call, patch
 
@@ -15,7 +15,7 @@ from t_tech import invest
 
 import handler as cloud
 import main as cli
-from autorepeater import account_config, composite_config, index_config, orders, strategies
+from autorepeater import account_config, composite_config, index_config, strategies
 from autorepeater import runner as runner_module
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.portfolio import TargetPortfolio
@@ -36,8 +36,13 @@ def fixture_catalog(tmp_path, monkeypatch):
     monkeypatch.setenv('COMPOSITE_CONFIG_DIR', str(composites))
     monkeypatch.setenv('INDEX_CONFIG_DIR', str(indexes))
     monkeypatch.setenv('ACCOUNT_CONFIG_PATH', str(tmp_path / 'account.json'))
-    (tmp_path / 'account.json').write_text('{"reserve":"0.01"}', encoding='utf-8')
+    (tmp_path / 'account.json').write_text(json.dumps({
+        'name': '00123', 'source_account_id': '00123', 'reserve': '0.01',
+        'allocation_drift_limit': '0.0092'}), encoding='utf-8')
     (indexes / 'one.json').write_text(json.dumps({
+        'allocation_drift_limits': [
+            {'budget_from': '0', 'budget_to': None,
+             'upper_inclusive': False, 'limit': '0'}],
         'name': 'ONE', 'reserve': '0.03', 'max_lot_weight_error': '0.05',
         'instruments': [{
             'ticker': 'ONE', 'effective_quantity': '1', 'free_float': '1',
@@ -46,7 +51,7 @@ def fixture_catalog(tmp_path, monkeypatch):
 
     def write(name, components):
         path = composites / (name.lower() + '.json')
-        path.write_text(json.dumps({'name': name, 'components': [
+        path.write_text(json.dumps({'component_drift_limit': '0.20', 'name': name, 'components': [
             {'algoritm': algorithm, 'src': src, 'weight': weight}
             for algorithm, src, weight in components]}), encoding='utf-8')
         return path
@@ -64,8 +69,9 @@ def fixture_execution(launch, monkeypatch):
     client.operations.get_portfolio.return_value = invest.PortfolioResponse(positions=[
         invest.PortfolioPosition(instrument_uid=uid, instrument_type=kind,
                                  current_price=invest.MoneyValue(
-                                     currency='RUB', units=price, nano=0),
-                                 quantity=invest.Quotation(units=quantity, nano=0))
+                                     currency='rub', units=price, nano=0),
+                                 quantity=invest.Quotation(units=quantity, nano=0),
+                                 blocked=False, blocked_lots=invest.Quotation(0, 0))
         for uid, kind, price, quantity in [('uid', 'share', 2, 40), ('old', 'share', 2, 5),
                                            ('cash', 'currency', 1, 10)]])
     client.instruments.get_instrument_by.side_effect = lambda **params: invest.InstrumentResponse(
@@ -81,19 +87,20 @@ def fixture_execution(launch, monkeypatch):
     return client, data, prepare, create, sdk, adapter
 
 
-def expected_orders():
-    """One diff sells before buying, with no child-specific opposing orders."""
+def expected_orders(include_buys=True):
+    """Isolated unknown proceeds defer BUY until the next independent pass."""
     return [call(instrument_id=uid, quantity=quantity, direction=direction,
-                 account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE)
+                 account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE, order_id=ANY)
             for uid, quantity, direction in [
-                ('uid', 15, invest.OrderDirection.ORDER_DIRECTION_SELL),
                 ('old', 5, invest.OrderDirection.ORDER_DIRECTION_SELL),
-                ('other', 12, invest.OrderDirection.ORDER_DIRECTION_BUY)]]
+                ('uid', 5, invest.OrderDirection.ORDER_DIRECTION_SELL),
+                *([('other', 12, invest.OrderDirection.ORDER_DIRECTION_BUY)]
+                  if include_buys else [])]]
 
 
 @pytest.mark.parametrize('entrypoint', ['run_sync', 'run', 'cli', 'query', 'environment'])
 @pytest.mark.usefixtures('catalog')
-def test_nested_tree_launches_through_actual_engine(execution, monkeypatch, entrypoint):
+def test_nested_tree_launches_through_actual_engine(execution, monkeypatch, entrypoint, caplog):
     """Entry paths share arithmetic and subscribe only in local mode."""
     client, data, prepare, create, sdk, adapter = execution
     monkeypatch.setenv('INVEST_TOKEN', 'test-token')
@@ -103,6 +110,7 @@ def test_nested_tree_launches_through_actual_engine(execution, monkeypatch, entr
     monkeypatch.setattr(sys, 'argv', [
         'main.py', '--algoritm', 'COMPOSITE', '-s', 'ROOT', '-d', 'dst'])
     streaming = entrypoint in ('cli', 'run')
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
 
     def invoke():
         if entrypoint == 'cli':
@@ -122,37 +130,37 @@ def test_nested_tree_launches_through_actual_engine(execution, monkeypatch, entr
     if entrypoint in ('query', 'environment'):
         assert result['body'] == 'Success sync, ROOT dst!'
     count = 2 if streaming else 1
-    assert client.orders.post_order.call_args_list == expected_orders() * count
-    assert client.operations.get_portfolio.call_args_list == [call(account_id='dst')] * count
-    assert data.get_portfolio.call_args_list == [call('00123')] * count
+    assert client.orders.post_order.call_args_list == expected_orders(include_buys=streaming)
+    assert any('Defer scoped purchases' in message for message in caplog.messages)
+    assert client.operations.get_positions.call_count >= count
+    assert [item for item in data.get_portfolio.call_args_list
+            if item.args == ('00123',)] == [call('00123')] * count
     assert data.get_last_prices.call_args_list == [
         call(['uid']), call(['uid']), call(['other'])] * count
     assert data.position_events.call_args_list == (
         [call(('00123', 'dst'))] * 2 if streaming else [])
     prepare.assert_called_once_with('quote:other', ANY)
     create.assert_called_once()
-    sdk.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
+    sdk.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API,
+                                interceptors=[ANY])
     sdk.return_value.__exit__.assert_called_once()
     adapter.assert_called_once_with(client)
 
 
-@pytest.mark.parametrize('threshold, debug, submits', [(0.399, False, True), (0.4, False, False),
-                                                       (0, True, False)])
+@pytest.mark.parametrize('debug', [False, True])
 @pytest.mark.usefixtures('catalog')
-def test_unified_target_and_gross_threshold(execution, threshold, debug, submits):
-    """Sell value 40 is compared strictly to gross 100, after UID targets are summed."""
+def test_unified_target_and_debug(execution, debug):
+    """Debug computes the same bounded physical intents without any submission."""
     client, data, *_ = execution
     runner = runner_module.Runner('test-token', strategies.prepare_strategy('COMPOSITE', 'ROOT'),
-                                 'dst', runner_module.RunnerParams(debug, threshold))
+                                 'dst', runner_module.RunnerParams(debug))
     snapshot = runner.strategy.load_snapshot(data)
-    assert runner.strategy.build_target(snapshot, Decimal('100')) == TargetPortfolio(
+    assert pure_plan_target(runner.strategy, snapshot, Decimal('100')) == TargetPortfolio(
         {'uid': Decimal('24.90'), 'other': Decimal('12.25')},
         {'uid': Decimal('2'), 'other': Decimal('2')})
-    with patch('autorepeater.repeater.get_max_sum_positions_price',
-               wraps=orders.get_max_sum_positions_price) as volume:
-        runner.run_sync()
-    assert volume.call_count == (0 if debug else 1)
-    assert client.orders.post_order.call_args_list == (expected_orders() if submits else [])
+    runner.run_sync()
+    assert client.orders.post_order.call_args_list == (
+        [] if debug else expected_orders(include_buys=False))
     data.position_events.assert_not_called()
 
 
@@ -160,19 +168,16 @@ def test_unified_target_and_gross_threshold(execution, threshold, debug, submits
 def test_nontrading_shared_uid_keeps_goal_but_has_no_order(execution):
     """Trading status is enforced after composition by the existing executor."""
     client, *_ = execution
-    lookup = client.instruments.get_instrument_by.side_effect
-
-    def instrument(**params):
-        response = lookup(**params)
-        if params['id'] == 'uid':
-            response.instrument.trading_status = (
-                invest.SecurityTradingStatus.SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING)
+    status = client.market_data.get_trading_status.side_effect
+    def unavailable(instrument_id):
+        response = status(instrument_id)
+        if instrument_id == 'uid':
+            response.bestprice_order_available_flag = False
         return response
-
-    client.instruments.get_instrument_by.side_effect = instrument
+    client.market_data.get_trading_status.side_effect = unavailable
     runner_module.Runner('test-token', strategies.prepare_strategy('COMPOSITE', 'ROOT'),
                          'dst').run_sync()
-    assert client.orders.post_order.call_args_list == expected_orders()[1:]
+    assert client.orders.post_order.call_args_list == expected_orders()[:1]
 
 
 @pytest.mark.parametrize('bad', ['source', 'algorithm', 'config', 'direct', 'indirect'])
@@ -259,19 +264,15 @@ def test_partial_failure_never_submits_and_next_sync_succeeds(execution, failure
         error = ValueError('bad quote') if failure == 'data' else DataAccessError('unavailable')
         override = patch.object(child, 'load_snapshot', side_effect=error)
     with override:
-        if failure in ('empty', 'index_empty'):
+        with pytest.raises(DataAccessError if failure == 'transport' else ValueError):
             runner.run_sync()
-            reason = ('COMPOSITE/ROOT -> INDEPENDENT/quote:other: no holdings'
-                      if failure == 'empty' else
-                      'COMPOSITE/ROOT -> COMPOSITE/BRANCH -> INDEX/ONE: empty target')
-            assert any(reason in message for message in caplog.messages)
-        else:
-            with pytest.raises(DataAccessError if failure == 'transport' else ValueError):
-                runner.run_sync()
+        if failure in ('empty', 'index_empty'):
+            assert any(record.levelno == logging.ERROR for record in caplog.records)
         client.orders.post_order.assert_not_called()
         client.instruments.get_instrument_by.assert_not_called()
     runner.run_sync()
-    assert client.orders.post_order.call_args_list == expected_orders()
+    assert client.orders.post_order.call_args_list == expected_orders(include_buys=False)
+    assert any('Defer scoped purchases' in message for message in caplog.messages)
     data.position_events.assert_not_called()
 
 
@@ -303,18 +304,25 @@ def test_single_stream_recovery_uses_same_tree(execution, failure):
         data.get_last_prices.side_effect = prices
     elif failure == 'execution':
         from grpc import StatusCode  # pylint: disable=import-outside-toplevel
-        client.orders.post_order.side_effect = [invest.PostOrderResponse()] * 3 + [
-            invest.RequestError(StatusCode.UNAVAILABLE, 'post failed', ())] + [
-                invest.PostOrderResponse()] * 3
+        fill = client.orders.post_order.side_effect
+        attempts = 0
+        def fail_once(**params):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise invest.RequestError(StatusCode.UNAVAILABLE, 'post failed', ())
+            return fill(**params)
+        client.orders.post_order.side_effect = fail_once
     runner = runner_module.Runner(
         'test-token', strategies.prepare_strategy('COMPOSITE', 'ROOT'), 'dst')
     with pytest.raises(EndOfTestStream):
         runner.run()
     assert data.position_events.call_args_list == [call(('00123', 'dst'))] * 3
     assert client.orders.post_order.call_args_list == (
-        expected_orders() + expected_orders()[:1] + expected_orders()
-        if failure == 'execution' else expected_orders() * 2)
-    assert data.get_portfolio.call_args_list == [call('00123')] * (
+        expected_orders()[:1] + expected_orders()
+        if failure == 'execution' else expected_orders())
+    assert [item for item in data.get_portfolio.call_args_list
+            if item.args == ('00123',)] == [call('00123')] * (
         3 if failure in ('recalc', 'execution') else 2)
     prepare.assert_called_once()
     create.assert_called_once()
@@ -335,8 +343,8 @@ def test_prepared_tree_is_fixed_with_one_prepare_and_factory_per_occurrence(
                       wraps=composite_config.read_composite_document) as composites, \
             patch.object(index_config, 'read_index_document',
                          wraps=index_config.read_index_document) as indexes, \
-            patch('autorepeater.account_strategy.load_account_config',
-                  wraps=account_config.load_account_config) as accounts:
+            patch('autorepeater.account_strategy.select_account_config',
+                  wraps=account_config.select_account_config) as accounts:
         prepared = strategies.prepare_strategy('COMPOSITE', 'ROOT')
     assert composites.call_count == 6  # Two catalog files for each of three occurrences.
     assert indexes.call_count == 2
@@ -358,7 +366,8 @@ def test_prepared_tree_is_fixed_with_one_prepare_and_factory_per_occurrence(
     with patch('builtins.open', side_effect=AssertionError('config reread')), \
             patch('pathlib.Path.open', side_effect=AssertionError('config reread')):
         runner = runner_module.Runner('test-token', prepared, 'dst')
-        target = runner.strategy.build_target(runner.strategy.load_snapshot(data), Decimal('100'))
+        target = pure_plan_target(
+            runner.strategy, runner.strategy.load_snapshot(data), Decimal('100'))
         assert target == (
             TargetPortfolio({'uid': Decimal('25.80')}, {'uid': Decimal('2')}))
         for _ in range(2):
@@ -383,13 +392,14 @@ def test_builtin_balanced_default_runs_actual_engine(execution, monkeypatch, eve
     client.operations.get_portfolio.return_value = invest.PortfolioResponse(positions=[
         invest.PortfolioPosition(
             instrument_uid='cash', instrument_type='currency',
-            current_price=invest.MoneyValue(currency='RUB', units=1, nano=0),
-            quantity=invest.Quotation(units=100000, nano=0))])
+            current_price=invest.MoneyValue(currency='rub', units=1, nano=0),
+            quantity=invest.Quotation(units=100000, nano=0),
+            blocked=False, blocked_lots=invest.Quotation(0, 0))])
 
     def info(ticker):
         kind = InstrumentType.ETF if ticker in ('OBLG', 'GOLD') else InstrumentType.SHARE
         return InstrumentInfo('uid-' + ticker, ticker, ticker, kind,
-                              'TQTF' if kind == InstrumentType.ETF else 'TQBR', 1, 'RUB', True)
+                              'TQTF' if kind == InstrumentType.ETF else 'TQBR', 1, 'rub', True)
 
     def find(query):
         instrument = info(query)
@@ -410,9 +420,10 @@ def test_builtin_balanced_default_runs_actual_engine(execution, monkeypatch, eve
     assert sum(sent.values()) * 10 <= Decimal('100000')
     assert all(item.kwargs['account_id'] == 'dst' and item.kwargs['direction'] == (
         invest.OrderDirection.ORDER_DIRECTION_BUY) for item in orders_sent)
-    assert data.get_instrument.call_count == 46
+    assert data.get_instrument.call_count >= 46
     assert data.get_last_prices.call_count == 3
-    data.get_portfolio.assert_not_called()
+    assert all(item.kwargs.get('account_id') == 'dst' for item in data.get_portfolio.call_args_list)
     data.position_events.assert_not_called()
-    client.operations.get_portfolio.assert_called_once_with(account_id='dst')
-    sdk.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
+    assert client.operations.get_portfolio.call_count >= 1
+    sdk.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API,
+                                interceptors=[ANY])

@@ -32,7 +32,8 @@ class TreePreparation:  # pylint: disable=too-few-public-methods
 def create_tree(children):
     """Construct children using only saved definitions and the neutral helper."""
     strategy = Mock(spec_set=[
-        'children', 'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'])
+        'children', 'load_snapshot', 'allocation_profile', 'build_plan',
+        'event_accounts', 'should_rebalance'])
     strategy.children = tuple(strategy_contract.create_strategy(child) for child in children)
     return strategy
 
@@ -221,6 +222,9 @@ def test_nested_index_reuse_reads_each_occurrence_only_during_preparation(tree, 
     nodes['root'] = (('INDEX', 'ONLY'), ('INDEX', 'ONLY'))
     path = tmp_path / 'only.json'
     payload = {
+        'allocation_drift_limits': [
+            {'budget_from': '0', 'budget_to': None,
+             'upper_inclusive': False, 'limit': '0'}],
         'name': 'ONLY', 'max_lot_weight_error': '0.05', 'reserve': '0.01',
         'instruments': [{
             'ticker': 'ONE', 'effective_quantity': '1', 'free_float': '1',

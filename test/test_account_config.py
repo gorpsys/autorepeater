@@ -12,6 +12,12 @@ from autorepeater.strategy_contract import PreparationContext
 import main as cli
 
 
+def document(reserve='0.01'):
+    """An explicit named source for every account-settings scenario."""
+    return {'name': '00123', 'source_account_id': '00123', 'reserve': reserve,
+            'allocation_drift_limit': '0.0092'}
+
+
 @pytest.fixture(autouse=True)
 def account_environment(monkeypatch):
     """Use the bundled settings unless a test supplies its own path."""
@@ -21,7 +27,7 @@ def account_environment(monkeypatch):
 @pytest.mark.parametrize('reserve', ['0', '0.01', '0.999999999'])
 def test_valid_account_config(reserve):
     """A finite fraction, including zero, is preserved exactly."""
-    config = account_config.validate_account_config({'reserve': reserve})
+    config = account_config.validate_account_config(document(reserve))
     assert config.reserve == Decimal(reserve)
 
 
@@ -39,27 +45,29 @@ def test_invalid_account_root(payload):
 def test_invalid_account_reserve(reserve):
     """Numbers, non-finite strings and fractions outside [0, 1) fail."""
     with pytest.raises(ValueError, match='reserve'):
-        account_config.validate_account_config({'reserve': reserve})
+        account_config.validate_account_config(document(reserve))
 
 
 def test_missing_account_reserve():
     """No constant supplies an omitted setting."""
+    payload = document()
+    del payload['reserve']
     with pytest.raises(ValueError, match='reserve'):
-        account_config.validate_account_config({})
+        account_config.validate_account_config(payload)
 
 
 def test_bundled_account_config_from_other_cwd(tmp_path, monkeypatch):
     """The default file belongs to the module, independent of cwd."""
     monkeypatch.chdir(tmp_path)
     context = create_autospec(PreparationContext, instance=True, spec_set=True)
-    prepared = prepare_account_source('00123', context)
+    prepared = prepare_account_source('2193248994', context)
     context.prepare.assert_not_called()
-    assert prepared.src == '00123'
+    assert prepared.src == '2193248994'
     assert prepared.config.reserve == Decimal('0.01')
     with patch('builtins.open', side_effect=AssertionError('constructor I/O')), \
             patch.object(Path, 'open', side_effect=AssertionError('constructor I/O')):
         strategy = AccountStrategy(prepared)
-    assert strategy.src == '00123'
+    assert strategy.src == '2193248994'
     assert strategy.config is prepared.config
     assert strategy.config.reserve == Decimal('0.01')
 
@@ -69,11 +77,11 @@ def test_relative_account_path_is_frozen(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv('ACCOUNT_CONFIG_PATH', 'settings.json')
     path = tmp_path / 'settings.json'
-    path.write_text('{"reserve":"0"}', encoding='utf-8')
+    path.write_text(json.dumps(document('0')), encoding='utf-8')
     with patch('builtins.open', wraps=open) as read:
         prepared = strategies.prepare_strategy('ACCOUNT', '00123')
     assert read.call_count == 1
-    path.write_text('{"reserve":"0.03"}', encoding='utf-8')
+    path.write_text(json.dumps(document('0.03')), encoding='utf-8')
     with patch('builtins.open', side_effect=AssertionError('creation I/O')), \
             patch.object(Path, 'open', side_effect=AssertionError('creation I/O')):
         strategy = strategies.create_strategy(prepared)
@@ -91,8 +99,8 @@ def test_account_does_not_read_foreign_configs(tmp_path, monkeypatch):
     monkeypatch.setenv('COMPOSITE_CONFIG_DIR', str(broken))
     with patch('autorepeater.index_config.read_index_document',
                side_effect=AssertionError('foreign config read')):
-        strategy = strategies.create_strategy(strategies.prepare_strategy('ACCOUNT', '00123'))
-    assert strategy.src == '00123'
+        strategy = strategies.create_strategy(strategies.prepare_strategy('ACCOUNT', '2193248994'))
+    assert strategy.src == '2193248994'
     assert strategy.config.reserve == Decimal('0.01')
 
 
@@ -101,7 +109,7 @@ def test_invalid_account_path(tmp_path, monkeypatch, path):
     """Empty, missing and directory paths fail with a useful path diagnostic."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv('ACCOUNT_CONFIG_PATH', path)
-    with pytest.raises(ValueError, match='account config'):
+    with pytest.raises(ValueError, match='config|problematic files'):
         prepare_account_source('00123', create_autospec(
             PreparationContext, instance=True, spec_set=True))
 
@@ -134,29 +142,32 @@ def test_invalid_settings_before_client(tmp_path, monkeypatch, payload, entrypoi
     cloud.assert_not_called()
 
 
-def test_unreadable_account_config(tmp_path, monkeypatch):
-    """Read errors retain the path and original cause."""
+def test_unreadable_account_config(tmp_path, monkeypatch, caplog):
+    """An unidentified read error reports its path and cause without inferring a name."""
     path = tmp_path / 'account.json'
     monkeypatch.setenv('ACCOUNT_CONFIG_PATH', str(path))
     with patch('builtins.open', side_effect=PermissionError('cannot read')):
-        with pytest.raises(ValueError, match='cannot read') as error:
+        with pytest.raises(ValueError, match='problematic files') as error:
             prepare_account_source('00123', create_autospec(
                 PreparationContext, instance=True, spec_set=True))
     assert str(path) in str(error.value)
-    assert isinstance(error.value.__cause__, PermissionError)
+    assert 'cannot read' in caplog.text
 
 
-def test_invalid_account_source_does_not_read_settings():
-    """Validate the source before loading even the algorithm's own config."""
-    with patch('builtins.open', side_effect=AssertionError('config read')):
+def test_invalid_account_source_has_no_numeric_fallback():
+    """Exact name selection reads the catalog rather than interpreting a source number."""
+    with patch.object(account_config, 'read_account_document',
+                      wraps=account_config.read_account_document) as read:
         with pytest.raises(ValueError, match='unsupported src'):
             prepare_account_source('IMOEX', create_autospec(
                 PreparationContext, instance=True, spec_set=True))
+    assert read.call_count == 1
 
 
 def test_absolute_account_path(tmp_path, monkeypatch):
     """An explicit absolute path selects only the requested settings."""
     path = tmp_path / 'account.json'
-    path.write_text(json.dumps({'reserve': '0.02'}), encoding='utf-8')
+    path.write_text(json.dumps(document('0.02')), encoding='utf-8')
     monkeypatch.setenv('ACCOUNT_CONFIG_PATH', str(path))
-    assert account_config.load_account_config().reserve == Decimal('0.02')
+    assert account_config.select_account_config('00123').reserve == Decimal('0.02')
+    assert account_config.load_account_config(path).reserve == Decimal('0.02')

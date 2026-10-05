@@ -208,9 +208,13 @@ socket.socket = blocked_io
 socket.create_connection = blocked_io
 
 import autorepeater.strategy_data as strategy_data
+import autorepeater.strategy_plan as strategy_plan
+import autorepeater.strategy_allocation as strategy_allocation
 
 assert strategy_data.InstrumentType.SHARE.value == 'share'
 assert len(strategy_data.StrategyData.__dict__) > 0
+assert strategy_plan.AllocationProfile({}, {}, __import__('decimal').Decimal(0))
+assert strategy_allocation.build_marks((), ()) == {}
 print('isolated import ok')
 '''
 

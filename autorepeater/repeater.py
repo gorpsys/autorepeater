@@ -1,216 +1,107 @@
-"""Account synchronization logic."""
+"""Neutral orchestration of fresh strategy checks and finite execution passes."""
+from dataclasses import replace
 from decimal import Decimal
 
-from t_tech.invest import InstrumentIdType
-from t_tech.invest import OrderDirection
-from t_tech.invest import OrderType
-from t_tech.invest import RequestError
-from t_tech.invest import SecurityTradingStatus
-
-from autorepeater.constants import THRESHOLD
+from autorepeater.execution import OrderExecutionError, execute_plan
+from autorepeater.execution_data import ExecutionDataError
 from autorepeater.logging_config import logger
-from autorepeater.money import currency_to_decimal
-from autorepeater.money import currency_to_decimal_price
-from autorepeater.money import get_quantity_position
-from autorepeater.orders import OrderParams
-from autorepeater.orders import get_max_sum_positions_price
-from autorepeater.portfolio import get_portfolio
-from autorepeater.portfolio import validate_target
-from autorepeater.strategy_contract import validate_event_accounts
-from autorepeater.strategy_contract import validate_strategy
-from autorepeater.strategy_data import DataAccessError
+from autorepeater.order_plan import build_order_plan
+from autorepeater.purchase_plan import nodes
+from autorepeater.strategy_allocation import build_marks, recovered_capital
+from autorepeater.strategy_contract import validate_event_accounts, validate_strategy
+from autorepeater.strategy_data import DataAccessError, InstrumentType
+from autorepeater.strategy_plan import StrategyContext, exact_sum, validate_plan
 from autorepeater import reporting
 
 
-class AutoRepeater:
-    """Rebalance a destination using a strategy's targets and synchronization events."""
+def plan_ownership(plan):
+    """Read fixed occurrence holdings, never reconstruct them from target weights."""
+    result = {}
+    for node in nodes(plan):
+        if not node.children:
+            result[node.path] = {entry.uid: entry.quantity for entry in node.positions}
+        if node.unassigned:
+            area = result.setdefault(node.path, {})
+            for uid, quantity in node.unassigned.items():
+                if uid in area:
+                    raise ValueError(f'ownership overlaps unassigned UID {uid}')
+                area[uid] = quantity
+    return result
 
-    def __init__(self, client, strategy, data):
-        self.client = client
+
+def destination_positions(destination):
+    """Aggregate compatible duplicate DTOs without changing the adapter's nano budget."""
+    positions = {}
+    for entry in destination.portfolio.positions:
+        if entry.instrument_type == InstrumentType.CURRENCY:
+            continue
+        if entry.uid in positions:
+            previous = positions[entry.uid]
+            if (entry.current_price, entry.currency, entry.instrument_type) != (
+                    previous.current_price, previous.currency, previous.instrument_type):
+                raise ValueError(f'incompatible destination duplicate UID {entry.uid}')
+            entry = replace(entry, quantity=exact_sum((previous.quantity, entry.quantity)))
+        positions[entry.uid] = entry
+    return tuple(positions.values())
+
+
+class AutoRepeater:
+    """Check strategy policy from neutral reads, then execute its bounded plan."""
+
+    def __init__(self, strategy, data, execution_data, executor):
         self.strategy = validate_strategy(strategy)
         self.data = data
+        self.execution_data = execution_data
+        self.executor = executor
         self.debug = False
-        self.threshold = Decimal(THRESHOLD)
 
     def set_debug(self, debug):
-        """set debug flag"""
+        """Debug still validates the whole financial and physical plan."""
         if not isinstance(debug, bool):
             raise TypeError("Debug flag must be boolean")
         self.debug = debug
 
-    def set_threshold(self, threshold):
-        """set threshod"""
-        if threshold is not None:
-            if threshold < 0 or threshold > 1:
-                raise ValueError("Threshold must be between 0 and 1")
-            # Оставляем преобразование здесь, так как входной параметр float
-            self.threshold = Decimal(str(threshold))
-
-    def calc_sell_positions(self, dst_positions, target_positions):
-        """calc extra positions from dst accounts for sell"""
-        result = []
-        for item_id, item_value in dst_positions.items():
-            instrument = self.client.instruments.get_instrument_by(
-                id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
-                id=item_id).instrument
-            if (instrument.trading_status != SecurityTradingStatus.
-                    SECURITY_TRADING_STATUS_NORMAL_TRADING):
-                reporting.print_nontrading_instrument(instrument, 'sell')
-                continue
-            if item_id not in target_positions:
-                quantity = round(get_quantity_position(
-                    item_value) / Decimal(str(instrument.lot)))
-                if quantity > 0:
-                    reporting.print_sell(instrument, quantity)
-                    result.append(
-                        OrderParams(
-                            instrument_id=item_id,
-                            quantity=quantity,
-                            direction=OrderDirection.ORDER_DIRECTION_SELL,
-                            order_type=OrderType.ORDER_TYPE_BESTPRICE))
-                else:
-                    reporting.print_order_skip(
-                        instrument, 'sell', get_quantity_position(item_value),
-                        Decimal('0'), quantity)
-            elif target_positions[item_id] < get_quantity_position(item_value):
-                quantity = round((get_quantity_position(
-                    item_value) - target_positions[item_id]) / Decimal(str(instrument.lot)))
-                if quantity > 0:
-                    reporting.print_sell(instrument, quantity)
-                    result.append(
-                        OrderParams(
-                            instrument_id=item_id,
-                            quantity=quantity,
-                            direction=OrderDirection.ORDER_DIRECTION_SELL,
-                            order_type=OrderType.ORDER_TYPE_BESTPRICE))
-                else:
-                    reporting.print_order_skip(
-                        instrument, 'sell', get_quantity_position(item_value),
-                        target_positions[item_id], quantity)
-            else:
-                reporting.print_order_skip(
-                    instrument, 'sell', get_quantity_position(item_value),
-                    target_positions[item_id])
-        return result
-
-    def calc_buy_positions(self, dst_positions, target_positions):
-        """calc missing positions from dst account for buy"""
-        result = []
-        for item_id, item_value in target_positions.items():
-            instrument = self.client.instruments.get_instrument_by(
-                id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
-                id=item_id).instrument
-            if (instrument.trading_status != SecurityTradingStatus.
-                    SECURITY_TRADING_STATUS_NORMAL_TRADING):
-                reporting.print_nontrading_instrument(instrument, 'buy')
-                continue
-            if item_id not in dst_positions:
-                quantity = round(item_value / Decimal(str(instrument.lot)))
-                if quantity > 0:
-                    reporting.print_buy(instrument, quantity)
-                    result.append(
-                        OrderParams(
-                            instrument_id=item_id,
-                            quantity=quantity,
-                            direction=OrderDirection.ORDER_DIRECTION_BUY,
-                            order_type=OrderType.ORDER_TYPE_BESTPRICE))
-                else:
-                    reporting.print_order_skip(
-                        instrument, 'buy', Decimal('0'), item_value, quantity)
-            elif item_value > get_quantity_position(dst_positions[item_id]):
-                position = dst_positions[item_id]
-                quantity = round((item_value -
-                                  get_quantity_position(position)) /
-                                 Decimal(str(instrument.lot)))
-                if quantity > 0:
-                    reporting.print_buy(instrument, quantity)
-                    result.append(
-                        OrderParams(
-                            instrument_id=item_id,
-                            quantity=quantity,
-                            direction=OrderDirection.ORDER_DIRECTION_BUY,
-                            order_type=OrderType.ORDER_TYPE_BESTPRICE))
-                else:
-                    reporting.print_order_skip(
-                        instrument, 'buy', get_quantity_position(position), item_value, quantity)
-            else:
-                reporting.print_order_skip(
-                    instrument, 'buy', get_quantity_position(dst_positions[item_id]), item_value)
-        return result
-
-    def post_orders(self, dst_account_id, orders_params_sell,
-                    orders_params_buy):
-        """post all orders"""
-        for order_params in orders_params_sell:
-            reporting.print_order(order_params)
-            response = self.client.orders.post_order(
-                instrument_id=order_params.instrument_id,
-                quantity=order_params.quantity,
-                direction=order_params.direction,
-                account_id=dst_account_id,
-                order_type=order_params.order_type)
-            reporting.print_order_result(response.order_id)
-            reporting.print_order_execution(response)
-        for order_params in orders_params_buy:
-            reporting.print_order(order_params)
-            response = self.client.orders.post_order(
-                instrument_id=order_params.instrument_id,
-                quantity=order_params.quantity,
-                direction=order_params.direction,
-                account_id=dst_account_id,
-                order_type=order_params.order_type)
-            reporting.print_order_result(response.order_id)
-            reporting.print_order_execution(response)
-
     def sync_accounts(self, dst_account_id):
-        """Build and validate a fresh target before calculating any orders."""
-        snapshot = self.strategy.load_snapshot(self.data)
-        reporting.print_account_header('dst')
-        portfolio_dst = get_portfolio(self.client, dst_account_id)
-        total_dst = Decimal('0')
-        dst_positions = {}
-        for position in portfolio_dst.positions:
-            reporting.print_position(self.client, position)
-            if position.instrument_type != 'currency':
-                dst_positions[position.instrument_uid] = position
-            total_dst += currency_to_decimal(position)
-        reporting.print_total(total_dst)
-
-        target = self.strategy.build_target(snapshot, total_dst)
-        validate_target(target)
-        if not target.quantities:
-            reporting.print_empty_target(dst_account_id, target.empty_reason)
-            return
-        reporting.print_target(target, total_dst)
-
-        orders_params_sell = self.calc_sell_positions(
-            dst_positions, target.quantities)
-        orders_params_buy = self.calc_buy_positions(
-            dst_positions, target.quantities)
-
+        """Validate every main target before reading rules or sending any order."""
+        try:
+            snapshot = self.strategy.load_snapshot(self.data)
+            destination = self.execution_data.get_destination(dst_account_id)
+            profile = self.strategy.allocation_profile(snapshot)
+            positions = destination_positions(destination)
+            marks = build_marks(positions, (profile,))
+            recognized = tuple(entry for entry in positions
+                               if profile.exposures.get(entry.uid, Decimal(0)) > 0)
+            unassigned = {entry.uid: entry.quantity for entry in positions
+                          if profile.exposures.get(entry.uid, Decimal(0)) == 0}
+            context = StrategyContext(
+                (), destination.budget, recovered_capital(recognized, profile, marks),
+                False, recognized, marks)
+            plan = self.strategy.build_plan(snapshot, context)
+            validate_plan(plan, context)
+            plan = replace(plan, unassigned={**plan.unassigned, **unassigned})
+            uids = sorted(set(destination.quantities) | {
+                uid for node in nodes(plan) for uid in node.target.quantities})
+            ownership = plan_ownership(plan)
+            orders = build_order_plan(
+                plan, destination, ownership, marks,
+                self.execution_data.get_trade_rules(dst_account_id, uids))
+        except ValueError as error:
+            logger.error('Rebalance rejected for destination %s: %s', dst_account_id, error)
+            raise
+        reporting.print_rebalance_plan(orders, self.debug)
         if self.debug:
-            reporting.print_execution_decision(orders_params_sell, orders_params_buy)
-            return
-        volume = get_max_sum_positions_price(
-            orders_params_sell, orders_params_buy,
-            {uid: currency_to_decimal_price(position) for uid, position in dst_positions.items()},
-            target.prices)
-        threshold_value = total_dst * self.threshold
-        reporting.print_execution_decision(
-            orders_params_sell, orders_params_buy, volume, threshold_value)
-        if volume > threshold_value:
-            self.post_orders(
-                dst_account_id,
-                orders_params_sell,
-                orders_params_buy)
+            return ()
+        return execute_plan(dst_account_id, orders, self.execution_data, self.executor)
 
-    def mainflow(self, dst):
-        """sync accounts when changing"""
+    def _local_pass(self, dst):
         try:
             self.sync_accounts(dst)
-        except (DataAccessError, RequestError) as err:
-            logger.error(err)
+        except (DataAccessError, ExecutionDataError, OrderExecutionError) as error:
+            logger.error('Current pass stopped for destination %s: %s', dst, error)
 
+    def mainflow(self, dst):
+        """Initial pass and events only; a submission stop does not end the stream."""
+        self._local_pass(dst)
         while True:
             try:
                 accounts = validate_event_accounts(self.strategy.event_accounts(dst))
@@ -219,8 +110,8 @@ class AutoRepeater:
                     if not isinstance(triggered, bool):
                         raise ValueError('strategy should_rebalance must return bool')
                     if triggered:
-                        self.sync_accounts(dst)
+                        self._local_pass(dst)
                     else:
                         reporting.print_skipped_strategy_event(event)
-            except (DataAccessError, RequestError) as err:
-                logger.error(err)
+            except DataAccessError as error:
+                logger.error('Position stream stopped for destination %s: %s', dst, error)

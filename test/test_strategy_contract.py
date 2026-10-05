@@ -8,11 +8,13 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import ANY, Mock, call, create_autospec, patch
 
 import pytest
 
 from autorepeater import strategy_contract
+from autorepeater.index_config import AllocationDriftRange
 from autorepeater.account_strategy import AccountStrategy
 from autorepeater.account_strategy import PreparedAccountSource
 from autorepeater.account_config import AccountConfig
@@ -24,6 +26,9 @@ from autorepeater.index_strategy import IndexStrategy
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.portfolio import TargetPortfolio, validate_target
 from autorepeater.strategy_budget import available_budget
+from autorepeater.strategy_plan import (
+    AllocationProfile, StrategyContext, StrategyPlan, StrategyDecision, TradeMode,
+)
 from autorepeater.strategy_contract import (
     AlgorithmDefinition, PreparationContext, PreparedStrategy, Strategy, create_strategy,
     validate_strategy,
@@ -102,6 +107,19 @@ class IndependentStrategy:
         return TargetPortfolio({snapshot.uid: budget / snapshot.unit_price},
                                {snapshot.uid: snapshot.unit_price})
 
+    def allocation_profile(self, snapshot):
+        """Pure ideal composition from the same quote."""
+        return AllocationProfile({snapshot.uid: Decimal(1) - self.reserve},
+                                 {snapshot.uid: snapshot.unit_price}, self.reserve)
+
+    def build_plan(self, snapshot, context):
+        """Explicit financial permissions without requiring engine special cases."""
+        return StrategyPlan(context.path, context.budget,
+                            self.build_target(snapshot, context.budget),
+                            context.budget * self.reserve,
+                            StrategyDecision(TradeMode.BUY_ONLY, False, 'independent', None, None),
+                            (), {}, context.positions)
+
     def event_accounts(self, dst_account_id):
         """Declare the destination without reading data."""
         return (dst_account_id,)
@@ -133,18 +151,21 @@ def contract_case(algoritm):
         PositionEvent(True, 'dst', (), (MoneyBlocking(Decimal('1')),), 'blocked'),
     ))
     if algoritm == 'ACCOUNT':
-        strategy = AccountStrategy(PreparedAccountSource('00123', AccountConfig(Decimal('0.01'))))
+        strategy = AccountStrategy(PreparedAccountSource('00123', AccountConfig(
+            '00123', '00123', Decimal('0.01'), Decimal('0.0092'))))
     elif algoritm == 'INDEX':
         config = IndexConfig('CONTRACT', Decimal('0.05'), [IndexInstrument(
             'ONE', Decimal('1'), Decimal('1'), Decimal('1'), Decimal('2'),
-            Decimal('100'), Decimal('12'))], reserve=Decimal('0.03'))
+            Decimal('100'), Decimal('12'))], reserve=Decimal('0.03'),
+                allocation_drift_limits=(
+                    AllocationDriftRange(Decimal('0'), None, False, Decimal('0')),))
         strategy = IndexStrategy(config)
     elif algoritm == 'COMPOSITE':
         source = PreparedCompositeSource('CONTRACT', tuple(
             PreparedCompositeComponent('INDEPENDENT', 'quote:uid', Decimal('0.5'),
                                        PreparedStrategy(IndependentStrategy,
                                                         IndependentSource('uid'), 'quote:uid'))
-            for _ in range(2)))
+            for _ in range(2)), component_drift_limit=Decimal('0.20'))
         strategy = CompositeStrategy(source)
     else:
         context = create_autospec(PreparationContext, instance=True, spec_set=True)
@@ -182,7 +203,8 @@ def assert_own_values(value):
 def test_signatures_and_runtime_surface(case):
     """All implementations match Protocol parameter names, kinds and defaults."""
     _, strategy, _ = case
-    for method in ('load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'):
+    for method in ('load_snapshot', 'allocation_profile', 'build_plan',
+                   'event_accounts', 'should_rebalance'):
         actual = inspect.signature(getattr(type(strategy), method)).parameters.values()
         expected = inspect.signature(getattr(Strategy, method)).parameters.values()
         assert [(item.name, item.kind, item.default) for item in actual] == [
@@ -196,12 +218,15 @@ def test_validation_never_invokes_strategy_methods(case):
     """Contract validation neither loads a snapshot nor opens or consumes a stream."""
     _, strategy, data = case
     with patch.object(strategy, 'load_snapshot', wraps=strategy.load_snapshot) as load, \
-            patch.object(strategy, 'build_target', wraps=strategy.build_target) as build, \
+            patch.object(strategy, 'build_plan', wraps=strategy.build_plan) as build, \
+            patch.object(strategy, 'allocation_profile',
+                         wraps=strategy.allocation_profile) as profile, \
             patch.object(strategy, 'event_accounts', wraps=strategy.event_accounts) as accounts, \
             patch.object(strategy, 'should_rebalance', wraps=strategy.should_rebalance) as decision:
         assert validate_strategy(strategy) is strategy
         load.assert_not_called()
         build.assert_not_called()
+        profile.assert_not_called()
         accounts.assert_not_called()
         decision.assert_not_called()
     assert data.mock_calls == []
@@ -222,7 +247,7 @@ def test_snapshots_and_pure_targets_use_only_own_data(case):
     assert snapshot is not next_snapshot
     assert_own_values(snapshot)
     expected_reads = {
-        'ACCOUNT': [call.get_portfolio('00123'), call.find_instruments('uid')],
+        'ACCOUNT': [call.get_portfolio('00123')],
         'INDEX': [call.find_instruments('ONE'), call.get_instrument('uid'),
                   call.get_last_prices(['uid'])],
         'INDEPENDENT': [call.get_last_prices(['uid'])],
@@ -230,7 +255,7 @@ def test_snapshots_and_pure_targets_use_only_own_data(case):
     }
     assert data.mock_calls == expected_reads[algoritm] * 2
     data.reset_mock()
-    target = strategy.build_target(snapshot, Decimal('60'))
+    target = pure_plan_target(strategy, snapshot, Decimal('60'))
     assert isinstance(target, TargetPortfolio)
     validate_target(target)
     assert target.quantities == {'uid': {
@@ -241,6 +266,13 @@ def test_snapshots_and_pure_targets_use_only_own_data(case):
     assert target.prices == {'uid': Decimal('2')}
     assert_own_values(target)
     assert data.mock_calls == []
+
+
+def pure_plan_target(strategy, snapshot, budget):
+    """A first-fill context uses only the profile's already loaded marks."""
+    profile = strategy.allocation_profile(snapshot)
+    return strategy.build_plan(snapshot, StrategyContext(
+        (), budget, Decimal(0), False, (), profile.prices)).target
 
 
 def test_event_methods_are_pure_and_return_exact_accounts_and_bools(case, caplog):
@@ -260,12 +292,12 @@ def test_event_methods_are_pure_and_return_exact_accounts_and_bools(case, caplog
 
 
 @pytest.mark.parametrize('money, account_decision, index_decision', [
-    ((MoneyBlocking(Decimal('0')), MoneyBlocking(Decimal('1'))), True, False),
+    ((MoneyBlocking(Decimal('0')), MoneyBlocking(Decimal('1'))), False, False),
     ((MoneyBlocking(Decimal('1')), MoneyBlocking(Decimal('0'))), False, False),
     ((MoneyBlocking(Decimal('0')), MoneyBlocking(Decimal('0'))), True, True),
 ])
 def test_destination_money_predicates_remain_distinct(money, account_decision, index_decision):
-    """ACCOUNT uses the first money blocking; INDEX requires every money to be clear."""
+    """Both algorithms require every destination money blocking to be clear."""
     account, account_data = contract_case('ACCOUNT')
     index, index_data = contract_case('INDEX')
     event = PositionEvent(True, 'dst', (), money, 'money')
@@ -299,23 +331,28 @@ def fixture_launch(monkeypatch):
     from t_tech.invest import services
     from autorepeater import runner as runner_module, strategies
 
-    client = Mock(spec_set=['instruments', 'operations', 'orders', 'users'])
+    client = Mock(spec_set=['instruments', 'operations', 'orders', 'users', 'market_data'])
     for name, service in [('instruments', services.InstrumentsService),
                           ('operations', services.OperationsService),
-                          ('orders', services.OrdersService), ('users', services.UsersService)]:
+                          ('orders', services.OrdersService), ('users', services.UsersService),
+                          ('market_data', services.MarketDataService)]:
         setattr(client, name, create_autospec(
             inspect.unwrap(service), instance=True, spec_set=True))
     client.operations.get_portfolio.return_value = invest.PortfolioResponse(positions=[
         invest.PortfolioPosition(instrument_uid='cash', instrument_type='currency',
-                                 current_price=invest.MoneyValue(currency='RUB', units=1, nano=0),
-                                 quantity=invest.Quotation(units=100, nano=0))])
+                                 current_price=invest.MoneyValue(currency='rub', units=1, nano=0),
+                                 quantity=invest.Quotation(units=100, nano=0),
+                                 blocked=False, blocked_lots=invest.Quotation(0, 0))])
     client.instruments.get_instrument_by.return_value = invest.InstrumentResponse(
         instrument=invest.Instrument(
-        uid='uid', ticker='ONE', name='One', lot=1,
+        uid='uid', ticker='ONE', name='One', lot=1, currency='RUB',
+        api_trade_available_flag=True,
         trading_status=invest.SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING))
     client.users.get_accounts.return_value = invest.GetAccountsResponse(accounts=[])
     client.orders.post_order.return_value = invest.PostOrderResponse(order_id='test-order')
-    _, data = contract_case('INDEPENDENT')
+    data = contract_case('INDEPENDENT')[1]
+    configure_strategy_port(client, data)
+    configure_filled_sdk(client)
     data.position_events.side_effect = [
         iter((PositionEvent(False, '', (), (), 'ping'),
               PositionEvent(True, 'dst', (), (MoneyBlocking(Decimal('0')),), 'ready'))),
@@ -331,6 +368,62 @@ def fixture_launch(monkeypatch):
             patch('autorepeater.serverless.configure_yc_logging'):
         sdk_client.return_value.__enter__.return_value = client
         yield client, data, prepare, create, sdk_client, adapter
+
+
+def configure_strategy_port(client, data):
+    """Source fixtures stay independent; destination reads use the real DTO adapter."""
+    from autorepeater.tinvest_strategy_data import TInvestStrategyData
+
+    source_portfolio = data.get_portfolio.return_value
+    destination_data = TInvestStrategyData(client)
+    data.get_portfolio.side_effect = lambda account_id: (
+        destination_data.get_portfolio(account_id) if account_id == 'dst' else source_portfolio)
+    data.get_instrument.side_effect = lambda uid: InstrumentInfo(
+        uid, 'ONE', 'One', InstrumentType.SHARE, 'TQBR', 3 if uid == 'uid' else 1, 'rub', True)
+
+
+def configure_filled_sdk(client):
+    """Offline SDK holdings and cash change only after a completely filled order."""
+    from t_tech import invest
+
+    def cash_position():
+        return next(item for item in client.operations.get_portfolio.return_value.positions
+                    if item.instrument_type == 'currency')
+    def cash():
+        item = cash_position()
+        return item.quantity.units + Decimal(item.quantity.nano) / 1_000_000_000
+    client.operations.get_positions.side_effect = lambda **_: invest.PositionsResponse(
+        money=[invest.MoneyValue('rub', int(cash()), int((cash() % 1) * 1_000_000_000))],
+        blocked=[], securities=[], futures=[], options=[], limits_loading_in_progress=False)
+    client.orders.get_orders.return_value = invest.GetOrdersResponse(orders=[])
+    client.market_data.get_trading_status.side_effect = lambda instrument_id: (
+        invest.GetTradingStatusResponse(instrument_uid=instrument_id,
+                                       api_trade_available_flag=True,
+                                       bestprice_order_available_flag=True))
+    client.orders.get_max_lots.side_effect = lambda request: invest.GetMaxLotsResponse(
+        currency='rub', buy_limits=SimpleNamespace(
+            buy_money_amount=invest.Quotation(int(cash()), int((cash() % 1) * 1_000_000_000)),
+            buy_max_lots=1000000), sell_limits=SimpleNamespace(sell_max_lots=1000000))
+    def fill(**params):
+        uid = params['instrument_id']
+        lots = params['quantity']
+        amount = lots * (3 if uid == 'uid' else 1)
+        price = 10 if uid.startswith('uid-') else 2
+        direction = 1 if params['direction'] == invest.OrderDirection.ORDER_DIRECTION_BUY else -1
+        positions = client.operations.get_portfolio.return_value.positions
+        held = next((item for item in positions if item.instrument_uid == uid), None)
+        if held is None:
+            held = invest.PortfolioPosition(instrument_uid=uid, instrument_type='share',
+                                           current_price=invest.MoneyValue('rub', price, 0),
+                                           quantity=invest.Quotation(0, 0), blocked=False,
+                                           blocked_lots=invest.Quotation(0, 0))
+            positions.append(held)
+        held.quantity.units += direction * amount
+        cash_position().quantity.units -= direction * amount * price
+        return invest.PostOrderResponse(order_id='offline', lots_requested=lots, lots_executed=lots,
+                                       execution_report_status=invest.OrderExecutionReportStatus.
+                                       EXECUTION_REPORT_STATUS_FILL)
+    client.orders.post_order.side_effect = fill
 
 
 @pytest.mark.parametrize('invalid_config', ['missing', 'malformed', 'conflicting_paths'])
@@ -391,22 +484,23 @@ def assert_launch_execution(launch, streaming):
     client, data, prepare, create, sdk_client, adapter = launch
     prepare.assert_called_once_with('quote:uid', ANY)
     create.assert_called_once_with(IndependentSource('uid'))
-    sdk_client.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API)
+    sdk_client.assert_called_once_with(token='test-token', target=runner_module.INVEST_GRPC_API,
+                                       interceptors=[ANY])
     sdk_client.return_value.__enter__.assert_called_once_with()
     sdk_client.return_value.__exit__.assert_called_once()
     adapter.assert_called_once_with(client)
-    reads = [call.get_last_prices(['uid'])]
-    assert data.mock_calls == (reads + [call.position_events(('dst',))] + reads
-                               + [call.position_events(('dst',))] if streaming else reads)
     count = 2 if streaming else 1
-    assert client.operations.get_portfolio.call_args_list == [call(account_id='dst')] * count
+    assert data.get_last_prices.call_args_list == [call(['uid'])] * count
+    assert data.position_events.call_args_list == ([call(('dst',))] * 2 if streaming else [])
     assert client.users.get_accounts.call_args_list == ([call()] if streaming else [])
-    assert client.instruments.get_instrument_by.call_args_list == [call(
-        id_type=invest.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid')] * count
     client.instruments.find_instrument.assert_not_called()
-    assert client.orders.post_order.call_args_list == [call(
-        instrument_id='uid', quantity=49, direction=invest.OrderDirection.ORDER_DIRECTION_BUY,
-        account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE)] * count
+    client.orders.post_order.assert_called_once_with(
+        instrument_id='uid', quantity=16, direction=invest.OrderDirection.ORDER_DIRECTION_BUY,
+        account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE, order_id=ANY)
+    assert client.operations.get_positions.call_count >= count
+    assert client.orders.get_orders.call_count == client.operations.get_positions.call_count
+    assert all(item.kwargs['request'].account_id == 'dst'
+               for item in client.orders.get_max_lots.call_args_list)
 
 
 def test_strategies_execute_in_sdk_blocked_subprocess():
@@ -424,7 +518,7 @@ class NoSDK(importlib.abc.MetaPathFinder):
 assert not any(name.split('.')[0] in ('t_tech', 'grpc') for name in sys.modules)
 sys.meta_path.insert(0, NoSDK())
 from autorepeater import reporting
-from test.test_strategy_contract import contract_case, assert_own_values
+from test.test_strategy_contract import contract_case, assert_own_values, pure_plan_target
 from autorepeater.strategy_contract import validate_strategy
 from autorepeater.portfolio import validate_target
 from autorepeater.strategy_data import DataAccessError
@@ -464,7 +558,7 @@ for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT', 'COMPOSITE'):
     snapshot = strategy.load_snapshot(data)
     assert_own_values(snapshot)
     data.reset_mock()
-    target = strategy.build_target(snapshot, Decimal('60'))
+    target = pure_plan_target(strategy, snapshot, Decimal('60'))
     validate_target(target)
     assert target.quantities == {'uid': {
         'ACCOUNT': Decimal('29.70'), 'INDEX': Decimal('27'),
@@ -492,7 +586,7 @@ for algorithm in ('ACCOUNT', 'INDEX', 'INDEPENDENT', 'COMPOSITE'):
 
 _, data = contract_case('ACCOUNT')
 position = data.get_portfolio.return_value.positions[0]
-assert reporting.strategy_position_to_string(data, position) == 'One(ONE) - 6.0 - RUB - 12.0'
+assert reporting.strategy_position_to_string(position) == 'uid - 6.0 - RUB - 12.0'
 data.get_portfolio.assert_not_called()
 assert not any(name.split('.')[0] in ('t_tech', 'grpc') for name in sys.modules)
 print('SDK-independent strategies and reporting ok')

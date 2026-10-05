@@ -23,6 +23,7 @@ from autorepeater.strategy_contract import AlgorithmDefinition
 from scripts import check_imoex_strategy as calibration
 import main as cli
 
+pytestmark = pytest.mark.usefixtures('named_accounts')
 
 @pytest.fixture(autouse=True)
 def selection_environment(monkeypatch):
@@ -43,6 +44,9 @@ def fixture_documents(tmp_path, monkeypatch):
 
     def write(filename, name='GOOD', **changes):
         payload = {
+            'allocation_drift_limits': [
+                {'budget_from': '0', 'budget_to': None,
+                 'upper_inclusive': False, 'limit': '0'}],
             'name': name, 'max_lot_weight_error': '0.05', 'reserve': '0.01',
             'instruments': [{
                 'ticker': 'ONE', 'effective_quantity': '1', 'free_float': '1',
@@ -69,7 +73,7 @@ def test_registration_prepares_once_without_creating(monkeypatch):
     """The saved factory and opaque input survive later registry changes."""
     opaque = object()
     strategy = Mock(spec_set=[
-        'load_snapshot', 'build_target', 'event_accounts', 'should_rebalance'])
+        'load_snapshot', 'allocation_profile', 'build_plan', 'event_accounts', 'should_rebalance'])
     prepare = Mock(side_effect=lambda src, context: opaque)
     create = Mock(return_value=strategy)
     strategies.register_algorithm('CUSTOM', AlgorithmDefinition(prepare, create))
@@ -199,7 +203,7 @@ def test_independent_algorithm_never_reads_index_settings(algoritm, src):
         prepared = strategies.prepare_strategy(algoritm, src)
     if algoritm == 'ACCOUNT':
         assert prepared.prepared_source == PreparedAccountSource(
-            src, AccountConfig(Decimal('0.01')))
+            src, AccountConfig(src, src, Decimal('0.01'), Decimal('0.0092')))
     else:
         assert prepared.prepared_source == src
     paths.assert_not_called()

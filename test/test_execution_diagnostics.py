@@ -1,113 +1,80 @@
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 """Execution diagnostics distinguish incomplete selection from skipped trading."""
 from decimal import Decimal
+from dataclasses import replace
 import json
 import logging
 import subprocess
 import sys
 from test.test_autorepeater import client_tinvest  # pylint: disable=unused-import
-from unittest.mock import call, create_autospec, patch
+from test.test_runtime_policy import fixture_runtime  # pylint: disable=unused-import
+from test.test_order_plan import destination, leaf, rules
+from unittest.mock import patch
 
 import pytest
-from t_tech import invest
 
 from autorepeater import logging_config, reporting, runner as runner_module, serverless, strategies
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.strategy_data import PositionEvent
+from autorepeater.execution import ExecutionReceipt, OrderExecutionError
 from autorepeater.repeater import AutoRepeater
-from autorepeater.strategy_contract import Strategy
-from autorepeater.strategy_data import PositionEvent, StrategyData
+from autorepeater.order_plan import build_order_plan
 
 
 @pytest.fixture(name='execution')
 def fixture_execution(client):
-    """Shares are tradable; funds remain in the target but are closed for trading."""
-    strategy = create_autospec(Strategy, instance=True, spec_set=True)
-    strategy.load_snapshot.return_value = object()
-    strategy.build_target.return_value = TargetPortfolio(
-        {'stock': Decimal('6'), 'bond': Decimal('2'), 'gold': Decimal('1')},
-        {uid: Decimal('10') for uid in ('stock', 'bond', 'gold')})
-    data = create_autospec(StrategyData, instance=True, spec_set=True)
-    client.operations.get_portfolio.side_effect = None
-    client.operations.get_portfolio.return_value = invest.PortfolioResponse(positions=[
-        invest.PortfolioPosition(instrument_type='currency',
-                                 current_price=invest.MoneyValue('RUB', 1, 0),
-                                 quantity=invest.Quotation(100, 0))])
-    normal = invest.SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING
-    closed = invest.SecurityTradingStatus.SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING
-    client.instruments.get_instrument_by.side_effect = lambda **params: invest.InstrumentResponse(
-        instrument=invest.Instrument(
-            uid=params['id'], ticker=params['id'].upper(), name=params['id'], lot=1,
-            class_code='TQBR' if params['id'] == 'stock' else 'TQTF',
-            trading_status=normal if params['id'] == 'stock' else closed))
-    return AutoRepeater(client, strategy, data), client, data
+    """SDK client is used only by the explicit browse lifecycle test."""
+    return None, client, None
 
 
-def test_nontrading_funds_are_reported_without_changing_orders(execution, caplog):
-    """Reproduce shares bought and fund budgets left in cash, without real API calls."""
-    engine, client, data = execution
+def test_policy_money_rules_and_debug_are_info(runtime, caplog):
+    """Debug retains every validated financial and physical explanation without I/O for labels."""
+    strategy, data, execution, executor = runtime
+    engine = AutoRepeater(strategy, data, execution, executor)
+    engine.set_debug(True)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         engine.sync_accounts('dst')
-    for uid in ('bond', 'gold'):
-        assert any(f'Target position: uid={uid}' in message for message in caplog.messages)
-        assert any(f'Skipping buy: {uid}({uid.upper()})' in message
-                   and 'SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING' in message
-                   and 'class_code=TQTF' in message for message in caplog.messages)
-    assert ('Target: instruments=3 estimated_value=90.0 budget=100.0 '
-            'estimated_cash=10.0') in caplog.messages
-    assert ('Execution: sells=0 buys=1 volume=60.0 '
-            'threshold_value=0.4 submit=True') in caplog.messages
-    assert all(record.levelno == logging.INFO for record in caplog.records
-               if record.message.startswith(('Target', 'Skipping', 'Execution', 'Order result')))
-    client.orders.post_order.assert_called_once_with(
-        instrument_id='stock', quantity=6, direction=invest.OrderDirection.ORDER_DIRECTION_BUY,
-        account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE)
-    client.operations.get_portfolio.assert_called_once_with(account_id='dst')
-    assert client.instruments.get_instrument_by.call_args_list == [
-        call(id_type=invest.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
-        for uid in ('stock', 'bond', 'gold')]
-    assert data.mock_calls == []
+    for fragment in ('Target position', 'mode=BUY_ONLY', 'metric=None', 'cash_floor=0',
+                     'scoped_money', 'Rules UID stock', 'Intent UID stock', 'debug=True'):
+        assert any(fragment in message for message in caplog.messages)
+    assert all(record.levelno == logging.INFO for record in caplog.records)
+    executor.submit_order.assert_not_called()
+    data.find_instruments.assert_not_called()
 
 
-@pytest.mark.parametrize('debug, threshold, message', [
-    (True, Decimal('0'), 'Execution: debug mode, sells=0 buys=1; no orders submitted'),
-    (False, Decimal('0.6'),
-     'Execution: sells=0 buys=1 volume=60.0 threshold_value=60.0 submit=False'),
-])
-def test_suppressed_execution_explains_why(execution, caplog, debug, threshold, message):
-    """Debug keeps its no-valuation contract; equality still suppresses trading."""
-    engine, client, _ = execution
-    engine.set_debug(debug)
-    engine.set_threshold(threshold)
-    with patch('autorepeater.repeater.get_max_sum_positions_price',
-               return_value=Decimal('60')) as volume, \
-            caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        engine.sync_accounts('dst')
-    assert message in caplog.messages
-    assert volume.call_count == (0 if debug else 1)
-    client.orders.post_order.assert_not_called()
+def test_partial_result_is_error_and_stops(runtime, caplog):
+    """An order identifier with NEW or a partial fill cannot yield a successful pass."""
+    strategy, data, execution, executor = runtime
+    executor.submit_order.return_value = ExecutionReceipt(
+        'stock', 'BUY', 'pending', 'NEW', 10, 0, {})
+    executor.submit_order.side_effect = None
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME), pytest.raises(OrderExecutionError):
+        AutoRepeater(strategy, data, execution, executor).sync_accounts('dst')
+    assert any(record.levelno == logging.ERROR and 'status NEW' in record.message
+               for record in caplog.records)
 
 
-def test_order_execution_status_is_not_mistaken_for_filled_order(execution, caplog):
-    """An order ID alone does not prove execution; log the returned broker status."""
-    engine, client, _ = execution
-    client.orders.post_order.return_value = invest.PostOrderResponse(
-        order_id='test-order', lots_requested=6, lots_executed=0,
-        execution_report_status=invest.OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_NEW)
+def test_unavailable_bestprice_is_info_skip(runtime, caplog):
+    """Closed instruments remain in main; current permissions defer physical orders."""
+    strategy, data, execution, executor = runtime
+    execution.get_trade_rules.return_value['stock'] = replace(
+        execution.get_trade_rules.return_value['stock'], bestprice_order_available=False)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        engine.sync_accounts('dst')
-    assert ('Order result: id=test-order status=EXECUTION_REPORT_STATUS_NEW '
-            'lots_requested=6 lots_executed=0') in caplog.messages
+        AutoRepeater(strategy, data, execution, executor).sync_accounts('dst')
+    assert any('SKIP' in message for message in caplog.messages)
+    assert any('BESTPRICE=False' in message for message in caplog.messages)
+    executor.submit_order.assert_not_called()
 
 
-def test_nontrading_sale_reports_same_guard(execution, caplog):
-    """The sell guard is unchanged and does not silently discard an instrument."""
-    engine, client, _ = execution
-    position = invest.PortfolioPosition(quantity=invest.Quotation(2, 0))
-    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        assert engine.calc_sell_positions({'bond': position}, {}) == []
-    assert any('Skipping sell: bond(BOND)' in message for message in caplog.messages)
-    client.orders.post_order.assert_not_called()
+
+
+
+
+
+
+
+
 
 
 @pytest.mark.parametrize('algoritm, src', [('COMPOSITE', 'BALANCED'), ('INDEX', 'IMOEX')])
@@ -137,54 +104,26 @@ def test_target_diagnostics_handle_zero_signed_and_extra_prices(caplog):
     ]
 
 
-@pytest.mark.parametrize('side, held, target, reason', [
-    ('buy', None, '0.4', 'rounded quantity is not positive'),
-    ('buy', None, '0', 'rounded quantity is not positive'),
-    ('buy', None, '-1', 'rounded quantity is not positive'),
-    ('buy', '1', '1.4', 'rounded quantity is not positive'),
-    ('buy', '1', '1', 'target does not require this direction'),
-    ('buy', '2', '1', 'target does not require this direction'),
-    ('sell', '0.4', None, 'rounded quantity is not positive'),
-    ('sell', '-1', None, 'rounded quantity is not positive'),
-    ('sell', '1.4', '1', 'rounded quantity is not positive'),
-    ('sell', '1', '1', 'target does not require this direction'),
-    ('sell', '1', '2', 'target does not require this direction'),
-])
-def test_every_no_order_quantity_branch_reports_info(execution, caplog, side, held, target, reason):
-    """Cover both missing-position branches and every unchanged/rounded delta branch."""
-    engine, client, _ = execution
-    positions = {}
-    if held is not None:
-        quantity = Decimal(held)
-        units = int(quantity)
-        positions['stock'] = invest.PortfolioPosition(
-            quantity=invest.Quotation(units, int((quantity - units) * 1_000_000_000)))
-    targets = {} if target is None else {'stock': Decimal(target)}
+def test_rebalance_diagnostics_format_all_decimal_values(caplog):
+    """Money and ownership maps use ordinary decimal text, including nano and integers."""
+    node = leaf(target={'X': Decimal(1)}, budget='1', floor='0.000000001')
+    node = replace(node, decision=replace(node.decision, metric=Decimal('1E-9'),
+                                         limit=Decimal(0)))
+    plan = build_order_plan(node, destination(cash='1'), {(): {}},
+                            {'X': Decimal('1E-9')}, rules('X'))
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        assert getattr(engine, f'calc_{side}_positions')(positions, targets) == []
-    assert len(caplog.records) == 1
-    record = caplog.records[0]
-    assert record.levelno == logging.INFO
-    assert f'Skipping {side}: stock(STOCK)' in record.message
-    assert f'reason={reason}' in record.message
-    assert f'target={target or "0"}' in record.message
-    client.orders.post_order.assert_not_called()
+        reporting.print_rebalance_plan(plan, True)
+    messages = '\n'.join(caplog.messages)
+    assert 'metric=0.000000001 limit=0.0' in messages
+    assert 'budget=1.0 cash_floor=0.000000001' in messages
+    assert 'money={rub: 1.0} scoped_money={(): 0.999999999}' in messages
+    assert 'buy_money=100000000000000000000.0' in messages
+    assert 'pieces={(): 1.0}' in messages
+    assert 'Decimal(' not in messages and 'E-' not in messages and 'E+' not in messages
 
 
-def test_empty_target_and_no_executable_orders_report_info(execution, caplog):
-    """A deliberate empty target and an achieved target are different skip reasons."""
-    engine, client, _ = execution
-    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        engine.strategy.build_target.return_value = TargetPortfolio({}, {}, 'test empty component')
-        engine.sync_accounts('dst')
-        engine.strategy.build_target.return_value = TargetPortfolio(
-            {'stock': Decimal('0')}, {'stock': Decimal('10')})
-        engine.sync_accounts('dst')
-    assert 'Skipping synchronization for destination dst: test empty component' in caplog.messages
-    assert 'Skipping trading: no executable orders' in caplog.messages
-    assert all(record.levelno == logging.INFO for record in caplog.records
-               if record.message.startswith('Skipping'))
-    client.orders.post_order.assert_not_called()
+
+
 
 
 def test_untriggered_event_reports_info(caplog):

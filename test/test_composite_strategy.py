@@ -1,7 +1,9 @@
 """Ordered composition, pure arithmetic and all-or-nothing target validation."""
 from copy import deepcopy
 from decimal import Decimal
-from test.test_strategy_contract import IndependentSource, IndependentStrategy, contract_case
+from test.test_strategy_contract import (
+    IndependentSource, IndependentStrategy, contract_case, pure_plan_target,
+)
 from unittest.mock import Mock, call, create_autospec, patch
 
 import pytest
@@ -17,6 +19,8 @@ from autorepeater.strategy_contract import (
     AlgorithmDefinition, PreparationContext, PreparedStrategy, Strategy, create_strategy,
 )
 from autorepeater.strategy_data import DataAccessError, PositionEvent, StrategyData
+from autorepeater.strategy_plan import (AllocationProfile, StrategyContext, StrategyDecision,
+                                       StrategyPlan, TradeMode)
 
 
 def make_composite(children, weights=None, name='root', algorithms=None, sources=None):
@@ -27,7 +31,8 @@ def make_composite(children, weights=None, name='root', algorithms=None, sources
     prepared = PreparedCompositeSource(name, tuple(
         PreparedCompositeComponent(algorithm, src, Decimal(weight),
                                    PreparedStrategy(lambda value: value, child, src))
-        for child, weight, algorithm, src in zip(children, weights, algorithms, sources)))
+        for child, weight, algorithm, src in zip(children, weights, algorithms, sources)),
+            component_drift_limit=Decimal('0.20'))
     return CompositeStrategy(prepared)
 
 
@@ -35,9 +40,14 @@ def mock_child(target=None):
     """Strict contract mock with an opaque snapshot and a complete target."""
     child = create_autospec(Strategy, instance=True, spec_set=True)
     child.load_snapshot.side_effect = lambda data: object()
-    child.build_target.return_value = (target if target is not None else
-                                       TargetPortfolio({'uid': Decimal('1')},
-                                                       {'uid': Decimal('2')}))
+    target = target if target is not None else TargetPortfolio(
+        {'uid': Decimal('1')}, {'uid': Decimal('2')})
+    child.allocation_profile.return_value = AllocationProfile(
+        {'uid': Decimal(1)}, {'uid': Decimal(2)}, Decimal(0))
+    child.build_plan.side_effect = lambda _snapshot, context: StrategyPlan(
+        context.path, context.budget, target, Decimal(0),
+        StrategyDecision(TradeMode.BUY_ONLY, False, 'test leaf', None, None),
+        (), {}, context.positions)
     child.event_accounts.return_value = ('dst',)
     child.should_rebalance.return_value = False
     return child
@@ -49,7 +59,8 @@ def test_preparer_uses_context_in_order_and_keeps_saved_factories():
     config = CompositeConfig('chosen', (
         CompositeComponent('LEAF', 'repeat', Decimal('0.4')),
         CompositeComponent('LEAF', 'repeat', Decimal('0.3')),
-        CompositeComponent('OTHER', 'opaque source', Decimal('0.1'))))
+        CompositeComponent('OTHER', 'opaque source', Decimal('0.1'))),
+            component_drift_limit=Decimal('0.20'))
     factories = [Mock(return_value=child) for child in children]
     prepared_children = [PreparedStrategy(factory, object(), component.src)
                          for factory, component in zip(factories, config.components)]
@@ -82,9 +93,11 @@ def test_real_preparation_tree_repeats_siblings_without_rereading_at_creation(mo
     catalog = {
         'root': CompositeConfig('root', (
             CompositeComponent('COMPOSITE', 'branch', Decimal('0.5')),
-            CompositeComponent('COMPOSITE', 'branch', Decimal('0.5')))),
+            CompositeComponent('COMPOSITE', 'branch', Decimal('0.5'))),
+                component_drift_limit=Decimal('0.20')),
         'branch': CompositeConfig('branch', (
-            CompositeComponent('LEAF', 'quote:uid', Decimal('1')),)),
+            CompositeComponent('LEAF', 'quote:uid', Decimal('1')),),
+                component_drift_limit=Decimal('0.20')),
     }
     with patch('autorepeater.composite_strategy.select_composite_config',
                side_effect=catalog.__getitem__) as select:
@@ -105,7 +118,7 @@ def test_composite_preparation_errors_propagate_before_factories():
     """A failed child leaves every preceding saved factory uncalled."""
     config = CompositeConfig('root', (
         CompositeComponent('LEAF', 'ok', Decimal('0.5')),
-        CompositeComponent('LEAF', 'bad', Decimal('0.5'))))
+        CompositeComponent('LEAF', 'bad', Decimal('0.5'))), component_drift_limit=Decimal('0.20'))
     factory = Mock()
     context = create_autospec(PreparationContext, instance=True, spec_set=True)
     error = ValueError('bad child source')
@@ -134,9 +147,10 @@ def test_snapshots_are_fresh_ordered_and_opaque():
     timeline.reset_mock()
     with patch('builtins.open', side_effect=AssertionError('build I/O')), \
             patch('pathlib.Path.open', side_effect=AssertionError('build I/O')):
-        strategy.build_target(first, Decimal('100'))
-    assert timeline.mock_calls == [call.child0.build_target(first.children[0], Decimal('40')),
-                                   call.child1.build_target(first.children[1], Decimal('20'))]
+        pure_plan_target(strategy, first, Decimal('100'))
+    calls = [item for item in timeline.mock_calls if item[0].endswith('build_plan')]
+    assert [item.args[0] for item in calls] == list(first.children)
+    assert [item.args[1].budget for item in calls] == [Decimal(40), Decimal(20)]
     assert data.mock_calls == []
 
 
@@ -152,7 +166,7 @@ def test_nested_allocations_and_leaf_reserves_leave_unallocated_cash():
     with patch.object(account, 'build_target', wraps=account.build_target) as account_build, \
             patch.object(index, 'build_target', wraps=index.build_target) as index_build, \
             patch.object(leaf, 'build_target', wraps=leaf.build_target) as leaf_build:
-        target = root.build_target(snapshot, Decimal('100'))
+        target = pure_plan_target(root, snapshot, Decimal('100'))
     account_build.assert_called_once_with(snapshot.children[0].children[0], Decimal('20'))
     index_build.assert_called_once_with(snapshot.children[0].children[1], Decimal('10'))
     leaf_build.assert_called_once_with(snapshot.children[1], Decimal('25'))
@@ -161,30 +175,21 @@ def test_nested_allocations_and_leaf_reserves_leave_unallocated_cash():
     assert data.mock_calls == []
 
 
-def test_uid_sums_signed_fractional_zero_and_prices_only_from_contributors():
-    """Preserve zero keys and input maps, even with higher or invalid unrelated prices."""
+def test_uid_sums_fractional_zero_and_prices_only_from_contributors():
+    """Keep independent contributions and ignore spare estimates in financial plans."""
     targets = [
-        TargetPortfolio({'same': Decimal('-1.25'), 'zero': Decimal('0'), 'cancel': Decimal('2')},
-                        {'same': Decimal('-3'), 'zero': Decimal('0'), 'cancel': Decimal('1'),
-                         'other': Decimal('999')}),
-        TargetPortfolio({'same': Decimal('0.5'), 'other': Decimal('0.125'),
-                         'cancel': Decimal('-2')},
-                        {'same': Decimal('-1'), 'other': Decimal('2'), 'cancel': Decimal('0'),
-                         'zero': Decimal('999'), 'unused': None}),
+        TargetPortfolio({'uid': Decimal('1.25'), 'zero': Decimal(0)},
+                        {'uid': Decimal(2), 'zero': Decimal(0), 'unused': Decimal(999)}),
+        TargetPortfolio({'uid': Decimal('.5')}, {'uid': Decimal(3), 'zero': Decimal(999)}),
     ]
     originals = deepcopy(targets)
     strategy = make_composite([mock_child(target) for target in targets])
     snapshot = strategy.load_snapshot(create_autospec(StrategyData, instance=True, spec_set=True))
-    result = strategy.build_target(snapshot, Decimal('100'))
-    assert result == TargetPortfolio(
-        {'same': Decimal('-0.75'), 'zero': Decimal('0'), 'cancel': Decimal('0'),
-         'other': Decimal('0.125')},
-        {'same': Decimal('-1'), 'zero': Decimal('0'), 'cancel': Decimal('1'),
-         'other': Decimal('2')})
+    result = pure_plan_target(strategy, snapshot, Decimal(100))
+    assert result == TargetPortfolio({'uid': Decimal('1.75'), 'zero': Decimal(0)},
+                                     {'uid': Decimal(3), 'zero': Decimal(0)})
     validate_target(result)
-    assert targets == originals
-    result.quantities['same'] = Decimal('99')
-    result.prices['other'] = Decimal('99')
+    result.quantities['uid'] = Decimal(99)
     assert targets == originals
 
 
@@ -196,9 +201,10 @@ def test_invalid_composite_budget_never_calls_child_build(budget):
     child = mock_child()
     strategy = make_composite([child])
     snapshot = strategy.load_snapshot(create_autospec(StrategyData, instance=True, spec_set=True))
-    with pytest.raises(ValueError, match='composite budget.*positive finite Decimal'):
-        strategy.build_target(snapshot, budget)
-    child.build_target.assert_not_called()
+    with pytest.raises(ValueError, match='budget'):
+        strategy.build_plan(
+            snapshot, StrategyContext((), budget, Decimal(0), False, (), {'uid': Decimal(2)}))
+    child.build_plan.assert_not_called()
 
 
 @pytest.mark.parametrize('empty_index', [0, 1, 2])
@@ -206,7 +212,9 @@ def test_invalid_composite_budget_never_calls_child_build(budget):
 def test_empty_child_skips_whole_target_after_building_every_child(empty_index, nested):
     """Empty leaves at any level abort composition with their full source path."""
     children = [mock_child() for _ in range(3)]
-    children[empty_index].build_target.return_value = TargetPortfolio({}, {})
+    original = children[empty_index].build_plan.side_effect
+    children[empty_index].build_plan.side_effect = lambda snapshot, context: __import__(
+        'dataclasses').replace(original(snapshot, context), target=TargetPortfolio({}, {}))
     strategy = make_composite(children, name='branch')
     expected = f'COMPOSITE/branch -> LEAF/{empty_index}: empty target'
     if nested:
@@ -215,13 +223,9 @@ def test_empty_child_skips_whole_target_after_building_every_child(empty_index, 
                                   algorithms=['LEAF', 'COMPOSITE'], sources=['ok', 'branch'])
         expected = 'COMPOSITE/root -> ' + expected
     snapshot = strategy.load_snapshot(create_autospec(StrategyData, instance=True, spec_set=True))
-    target = strategy.build_target(snapshot, Decimal('100'))
-    assert target == TargetPortfolio({}, {}, expected)
-    validate_target(target)
-    for child in children:
-        assert child.build_target.call_count == 1
-    if nested:
-        assert sibling.build_target.call_count == 1
+    with pytest.raises(ValueError, match='positive quantity'):
+        pure_plan_target(strategy, snapshot, Decimal('100'))
+    assert children[empty_index].build_plan.called
 
 
 @pytest.mark.parametrize('bad_target, message', [
@@ -232,21 +236,21 @@ def test_empty_child_skips_whole_target_after_building_every_child(empty_index, 
 ])
 def test_late_invalid_target_is_not_hidden_by_early_empty(bad_target, message):
     """All child target validation precedes the empty-target decision."""
-    early = mock_child(TargetPortfolio({}, {}))
+    early = mock_child()
     late = mock_child(bad_target)
     strategy = make_composite([early, late])
     snapshot = strategy.load_snapshot(create_autospec(StrategyData, instance=True, spec_set=True))
     with pytest.raises(ValueError, match=message):
-        strategy.build_target(snapshot, Decimal('100'))
-    assert early.build_target.call_count == late.build_target.call_count == 1
+        pure_plan_target(strategy, snapshot, Decimal('100'))
+    assert early.build_plan.call_count == late.build_plan.call_count == 1
 
 
-@pytest.mark.parametrize('phase', ['load_snapshot', 'build_target'])
+@pytest.mark.parametrize('phase', ['load_snapshot', 'build_plan'])
 @pytest.mark.parametrize('error', [DataAccessError('read failed'), ValueError('bad data'),
                                   RuntimeError('programming error')])
 def test_child_errors_propagate_without_empty_fallback(phase, error):
     """Transport, data and programming failures retain identity and cause."""
-    early, late = mock_child(TargetPortfolio({}, {})), mock_child()
+    early, late = mock_child(), mock_child()
     strategy = make_composite([early, late])
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     snapshot = strategy.load_snapshot(data)
@@ -255,7 +259,7 @@ def test_child_errors_propagate_without_empty_fallback(phase, error):
         if phase == 'load_snapshot':
             strategy.load_snapshot(data)
         else:
-            strategy.build_target(snapshot, Decimal('100'))
+            pure_plan_target(strategy, snapshot, Decimal('100'))
     assert caught.value is error
     assert data.mock_calls == []
 

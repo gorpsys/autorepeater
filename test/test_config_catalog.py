@@ -2,11 +2,13 @@
 import subprocess
 import sys
 from pathlib import Path
+from decimal import Decimal
 from unittest.mock import Mock, call, patch
 
 import pytest
 
 from autorepeater import composite_config, index_config, reporting
+from autorepeater.index_config import AllocationDriftRange
 from autorepeater.config_catalog import Candidate, discover_candidates
 from autorepeater.strategy_contract import UnsupportedSourceError
 
@@ -76,7 +78,9 @@ def test_public_selection_keeps_exact_warnings_and_fatal_errors(schema):
 
 def test_index_implicit_selection_and_strict_load_are_unchanged():
     """Implicit calibration rejects ambiguity; load-all stays fatal without warnings."""
-    config = index_config.IndexConfig('GOOD', None, [], None)
+    config = index_config.IndexConfig('GOOD', None, [], None,
+        allocation_drift_limits=(
+            AllocationDriftRange(Decimal('0'), None, False, Decimal('0')),))
     paths = [Path('first.json'), Path('second.json')]
     with patch.object(index_config, '_discover_candidates', return_value=[
             Candidate(paths[0], 'GOOD', config, None)]):

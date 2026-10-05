@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+from autorepeater.index_config import AllocationDriftRange
 from autorepeater.account_config import AccountConfig
 from autorepeater.account_strategy import AccountStrategy, PreparedAccountSource
 from autorepeater.index_config import IndexConfig, IndexInstrument
@@ -24,7 +25,8 @@ def test_available_budget_preserves_sign(gross, reserve, expected):
 @pytest.mark.parametrize('gross, expected', [('170', '7.875'), ('0', '0'), ('-170', '-7.875')])
 def test_account_reserve_before_ratio(gross, expected):
     """ACCOUNT reserves gross value once, then divides before scaling quantities."""
-    strategy = AccountStrategy(PreparedAccountSource('00123', AccountConfig(Decimal('0.1'))))
+    strategy = AccountStrategy(PreparedAccountSource('00123', AccountConfig(
+        '00123', '00123', Decimal('0.1'), Decimal('0.0092'))))
     entry = PortfolioEntry('uid', InstrumentType.SHARE, 'RUB', Decimal('4'), Decimal('10.5'), 'one')
     snapshot = ({'uid': entry}, Decimal('204'))
     target = strategy.build_target(snapshot, Decimal(gross))
@@ -34,7 +36,8 @@ def test_account_reserve_before_ratio(gross, expected):
 
 def test_account_reserve_decimal_operation_order():
     """Moving reserve after division or multiplying by source weights changes the last digit."""
-    strategy = AccountStrategy(PreparedAccountSource('00123', AccountConfig(Decimal('0.01'))))
+    strategy = AccountStrategy(PreparedAccountSource('00123', AccountConfig(
+        '00123', '00123', Decimal('0.01'), Decimal('0.0092'))))
     entry = PortfolioEntry('uid', InstrumentType.SHARE, 'RUB', Decimal('1'), Decimal('3'), 'one')
     target = strategy.build_target(({'uid': entry}, Decimal('7')), Decimal('1'))
     assert target.quantities == {'uid': Decimal('0.4242857142857142857142857142')}
@@ -44,7 +47,9 @@ def single_index(reserve):
     """One instrument exposes double reserving at an exact lot boundary."""
     config = IndexConfig('ONE', Decimal('0.05'), [IndexInstrument(
         'ONE', Decimal('1'), Decimal('1'), Decimal('1'), Decimal('10'),
-        Decimal('100'), Decimal('100'))], reserve=Decimal(reserve))
+        Decimal('100'), Decimal('100'))], reserve=Decimal(reserve),
+            allocation_drift_limits=(
+                AllocationDriftRange(Decimal('0'), None, False, Decimal('0')),))
     return config, {'ONE': IndexQuote('uid', Decimal('10'), 1)}
 
 

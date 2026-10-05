@@ -152,15 +152,28 @@ def test_closed_tqtf_fund_is_replaced_by_api_available_tqbr(client, src):
     client.operations.get_portfolio.return_value = invest.PortfolioResponse(positions=[
         invest.PortfolioPosition(instrument_type='currency', quantity=invest.Quotation(100, 0),
                                  current_price=invest.MoneyValue('RUB', 1, 0))])
-    engine = AutoRepeater(client, strategy, TInvestStrategyData(client))
+    from autorepeater.execution_data import ExecutionSnapshot, TradeRules  # pylint: disable=import-outside-toplevel
+    from autorepeater.order_execution import TInvestOrderExecutor  # pylint: disable=import-outside-toplevel
+    from autorepeater.strategy_data import PortfolioSnapshot  # pylint: disable=import-outside-toplevel
+    from unittest.mock import Mock, ANY  # pylint: disable=import-outside-toplevel
+    execution = Mock(spec_set=['get_destination', 'get_trade_rules'])
+    execution.get_destination.return_value = ExecutionSnapshot(
+        PortfolioSnapshot(()), Decimal(100), {}, {}, {'rub': Decimal(100)}, {}, (), True)
+    execution.get_trade_rules.return_value = {
+        'new': TradeRules(1, 'rub', True, True, Decimal(100), 100, 0)}
+    client.orders.post_order.return_value = invest.PostOrderResponse(
+        order_id='offline', lots_requested=9, lots_executed=9,
+        execution_report_status=invest.OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL)
+    engine = AutoRepeater(
+        strategy, TInvestStrategyData(client), execution, TInvestOrderExecutor(client))
     engine.sync_accounts('dst')
     client.market_data.get_last_prices.assert_called_once_with(instrument_id=['new'])
     assert client.instruments.get_instrument_by.call_args_list == [
         call(id_type=invest.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
-        for uid in ('old', 'new', 'new')]
+        for uid in ('old', 'new')]
     client.orders.post_order.assert_called_once_with(
         instrument_id='new', quantity=9, direction=invest.OrderDirection.ORDER_DIRECTION_BUY,
-        account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE)
+        account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE, order_id=ANY)
 
 
 @pytest.mark.parametrize('available', [True, False])

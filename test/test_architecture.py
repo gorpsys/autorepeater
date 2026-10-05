@@ -10,10 +10,13 @@ import pytest
 PACKAGE = Path(__file__).resolve().parents[1] / 'autorepeater'
 STRATEGIES = {f'autorepeater.{path.stem}' for path in PACKAGE.glob('*_strategy.py')}
 ASSEMBLY = {'autorepeater.strategies', 'autorepeater.runner',
-            'autorepeater.repeater', 'autorepeater.tinvest_strategy_data'}
+            'autorepeater.repeater', 'autorepeater.tinvest_strategy_data',
+            'autorepeater.tinvest_execution_data', 'autorepeater.order_execution'}
 NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
            'strategy_contract', 'strategy_data', 'triggers', 'index_config', 'account_config',
-           'strategy_budget', 'composite_config', 'config_catalog'}
+           'strategy_budget', 'composite_config', 'config_catalog',
+           'strategy_plan', 'strategy_allocation', 'rebalance_policy',
+           'execution_data', 'execution', 'order_plan', 'purchase_plan'}
 
 
 def forbidden_imports(source, module):
@@ -36,7 +39,9 @@ def forbidden_imports(source, module):
                                   'autorepeater.tinvest_strategy_data',
                                   'autorepeater.index_config', 'autorepeater.account_config',
                                   'autorepeater.composite_config',
-                                  'autorepeater.triggers'}
+                                  'autorepeater.triggers', 't_tech', 'grpc',
+                                  'autorepeater.tinvest_execution_data',
+                                  'autorepeater.order_execution'}
 
     violations = []
     for node in ast.walk(ast.parse(source)):
@@ -58,6 +63,9 @@ def forbidden_imports(source, module):
 
 
 @pytest.mark.parametrize('module, source, dependency', [
+    ('rebalance_policy', 'from .index_strategy import IndexStrategy',
+     'autorepeater.index_strategy'),
+    ('rebalance_policy', 'import t_tech.invest', 't_tech.invest'),
     ('config_catalog', 'import t_tech.invest', 't_tech.invest'),
     ('config_catalog', 'from .strategies import ALGORITHMS', 'autorepeater.strategies'),
     ('config_catalog', 'from .index_config import IndexConfig', 'autorepeater.index_config'),
@@ -116,6 +124,12 @@ def forbidden_imports(source, module):
     ('repeater', 'from .composite_config import CompositeConfig',
      'autorepeater.composite_config'),
     ('repeater', 'from .triggers import check_triggers', 'autorepeater.triggers'),
+    ('repeater', 'import t_tech.invest', 't_tech.invest'),
+    ('repeater', 'import grpc', 'grpc'),
+    ('repeater', 'from .tinvest_execution_data import TInvestExecutionData',
+     'autorepeater.tinvest_execution_data'),
+    ('repeater', 'from .order_execution import TInvestOrderExecutor',
+     'autorepeater.order_execution'),
     ('index_strategy', 'def helper():\n    import grpc', 'grpc'),
     ('account_strategy', 'from .composite_strategy import CompositeStrategy',
      'autorepeater.composite_strategy'),
@@ -134,6 +148,18 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
     """Every import spelling resolves to the forbidden module, including aliases."""
     assert forbidden_imports(source, f'autorepeater.{module}') == [
         (2 if source.startswith('def ') else 1, dependency)]
+
+
+@pytest.mark.parametrize('module', ['strategy_plan', 'strategy_allocation', 'execution',
+                                   'execution_data', 'order_plan', 'purchase_plan'])
+@pytest.mark.parametrize('dependency', ['t_tech.invest', 'grpc', 'autorepeater.strategies',
+                                       'autorepeater.account_strategy',
+                                       'autorepeater.index_strategy',
+                                       'autorepeater.composite_strategy'])
+def test_financial_models_are_neutral(module, dependency):
+    """Future policy DTOs and attribution must not depend on concrete strategies."""
+    assert forbidden_imports(f'import {dependency}', f'autorepeater.{module}') == [
+        (1, dependency)]
 
 
 @pytest.mark.parametrize('module, source', [
@@ -161,7 +187,7 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
     ('composite_strategy', 'from .strategy_contract import create_strategy, PreparationContext'),
     ('strategies', 'from .strategy_contract import create_strategy'),
     ('reporting', 'from .portfolio import get_portfolio'),
-    ('repeater', 'from t_tech.invest import RequestError'),
+    ('repeater', 'from .execution import OrderExecutionError'),
     ('repeater', 'from .strategy_contract import validate_strategy'),
     ('repeater', 'from .strategy_data import DataAccessError'),
     ('runner', 'from .tinvest_strategy_data import TInvestStrategyData'),
@@ -217,3 +243,54 @@ def test_event_methods_do_not_own_subscriptions_or_skip_reporting(module):
                     'get_portfolio', 'find_instruments', 'get_instrument', 'get_last_prices',
                     'position_events', 'print_skipped_strategy_event',
                 }
+
+
+@pytest.mark.parametrize('module', sorted(STRATEGIES))
+def test_profiles_do_not_load_data_or_build_rounded_targets(module):
+    """Pure profiles precede budget choice, file reads and lot cuts."""
+    tree = ast.parse((PACKAGE / f'{module.rsplit(".", 1)[-1]}.py').read_text(encoding='utf-8'))
+    methods = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    for node in ast.walk(methods['allocation_profile']):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            assert node.func.attr not in {
+                'load_snapshot', 'build_target', 'build_plan', 'get_portfolio',
+                'find_instruments', 'get_instrument', 'get_last_prices', 'position_events',
+                'read_text', 'open',
+            }
+
+
+def test_calculation_reporting_does_not_read_instruments():
+    """Only explicit user browsing may use the client display lookup."""
+    tree = ast.parse((PACKAGE / 'reporting.py').read_text(encoding='utf-8'))
+    methods = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    for name in ('strategy_position_to_string', 'print_strategy_position', 'print_rebalance_plan'):
+        for node in ast.walk(methods[name]):
+            if isinstance(node, ast.Call):
+                function = node.func
+                assert not (isinstance(function, ast.Attribute) and function.attr in {
+                    'find_instruments', 'get_instrument', 'get_portfolio', 'get_last_prices'})
+                assert not (isinstance(function, ast.Name) and function.id == 'get_instrument')
+
+
+def test_repeater_has_only_neutral_dependencies_with_sdk_imports_blocked():
+    """Import the real engine and execution controller with SDK/grpc unavailable."""
+    import subprocess  # pylint: disable=import-outside-toplevel
+    script = '''
+import importlib.abc
+import sys
+class BlockSDK(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in ('t_tech', 'grpc'):
+            raise AssertionError(fullname)
+        return None
+sys.meta_path.insert(0, BlockSDK())
+from autorepeater.repeater import AutoRepeater
+from autorepeater.execution import execute_plan
+from autorepeater.strategy_contract import Strategy
+assert 'build_target' not in Strategy.__dict__
+assert 'set_threshold' not in AutoRepeater.__dict__
+assert not any(name.split('.')[0] in ('t_tech', 'grpc') for name in sys.modules)
+'''
+    result = subprocess.run([sys.executable, '-c', script], check=False, capture_output=True,
+                            text=True, timeout=30, cwd=PACKAGE.parent)
+    assert result.returncode == 0, result.stdout + result.stderr

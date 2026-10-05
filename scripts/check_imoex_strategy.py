@@ -12,6 +12,7 @@ from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 
 from autorepeater import reporting
 from autorepeater.constants import IMPORTANT
+from autorepeater.grpc_deadline import UnaryDeadlineInterceptor
 from autorepeater.index_config import select_index_config
 from autorepeater.index_strategy import IndexStrategy, calculate_index_target
 from autorepeater.strategy_budget import available_budget
@@ -110,7 +111,8 @@ def main(argv=None):
     strategy = IndexStrategy(config)
     started = datetime.now(timezone.utc)
     with Client(token, target=(
-            INVEST_GRPC_API_SANDBOX if args.sandbox else INVEST_GRPC_API)) as client:
+            INVEST_GRPC_API_SANDBOX if args.sandbox else INVEST_GRPC_API),
+            interceptors=[UnaryDeadlineInterceptor()]) as client:
         snapshot = strategy.load_snapshot(TInvestStrategyData(client))
     received = datetime.now(timezone.utc)
     reserve = config.reserve

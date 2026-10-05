@@ -5,8 +5,11 @@ from decimal import Decimal, ROUND_FLOOR
 
 from autorepeater.index_config import select_index_config
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.rebalance_policy import leaf_decision
 from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_data import InstrumentType
+from autorepeater.strategy_allocation import normalize_profile, position_value
+from autorepeater.strategy_plan import StrategyPlan, validate_context, validate_plan
 from autorepeater import reporting
 
 
@@ -114,6 +117,35 @@ class IndexStrategy:
     def event_accounts(self, dst_account_id):
         """Watch only destination positions; prices do not trigger synchronization."""
         return (dst_account_id,)
+
+    def build_plan(self, snapshot, context):
+        """Choose the main-budget interval independently of invested-value control."""
+        validate_context(context)
+        self.allocation_profile(snapshot)
+        target = self.build_target(snapshot, context.budget)
+        invested = position_value(context.positions, context.marks)
+        control = self.build_target(snapshot, invested) if invested > 0 else TargetPortfolio({}, {})
+        limit = next(row.limit for row in self.config.allocation_drift_limits
+                     if row.budget_from <= context.budget
+                     and (row.budget_to is None or context.budget < row.budget_to))
+        plan = StrategyPlan(
+            context.path, context.budget, target, context.budget * self.config.reserve,
+            leaf_decision(context, control, limit), (), {}, context.positions)
+        validate_plan(plan, context)
+        return plan
+
+    def allocation_profile(self, snapshot):
+        """Reuse current capitalizations before all minimum-position and lot cuts."""
+        if not isinstance(snapshot, dict):
+            raise ValueError('index profile snapshot: expected a dict')
+        for ticker, quote in snapshot.items():
+            if not isinstance(quote, IndexQuote):
+                raise ValueError(f'index profile snapshot: invalid quote for {ticker}')
+        capitalizations = _capitalizations(self.config, snapshot)
+        return normalize_profile(
+            {snapshot[ticker].uid: value for ticker, value in capitalizations.items()},
+            {snapshot[ticker].uid: snapshot[ticker].price for ticker in capitalizations},
+            self.config.reserve)
 
     def should_rebalance(self, event, dst_account_id):
         """Recalculate populated destinations only when every blocking is zero."""

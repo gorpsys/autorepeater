@@ -22,12 +22,22 @@ class IndexInstrument:
 
 
 @dataclass
+class AllocationDriftRange:
+    """One half-open full-budget interval, including an unbounded final endpoint."""
+    budget_from: Decimal
+    budget_to: Decimal | None
+    upper_inclusive: bool
+    limit: Decimal
+
+
+@dataclass
 class IndexConfig:
     """Composition, error limit for ideal lots < 1, and minimum target value."""
     name: str
     max_lot_weight_error: Decimal
     instruments: list[IndexInstrument]
     reserve: Decimal
+    allocation_drift_limits: tuple[AllocationDriftRange, ...]
     min_position_value: Decimal = Decimal(0)
 
 
@@ -69,6 +79,40 @@ def _load_instrument(data, position):
     return IndexInstrument(ticker=ticker, **values)
 
 
+def _load_drift_ranges(data):
+    records = data.get('allocation_drift_limits')
+    if not isinstance(records, list) or not records:
+        raise ValueError('allocation_drift_limits: expected a nonempty array')
+    ranges = []
+    previous_to = Decimal(0)
+    for position, record in enumerate(records):
+        context = f'allocation_drift_limits[{position}]'
+        if not isinstance(record, dict):
+            raise ValueError(f'{context}: expected an object')
+        fields = {'budget_from', 'budget_to', 'upper_inclusive', 'limit'}
+        if record.keys() != fields:
+            changed = ', '.join(sorted(record.keys() ^ fields))
+            raise ValueError(f'{context}: missing or unknown fields: {changed}')
+        lower = _decimal_field(record, 'budget_from', context, lambda value: value >= 0)
+        if lower != previous_to:
+            raise ValueError(
+                f'{context}.budget_from: intervals must start at zero and meet exactly')
+        if position == len(records) - 1:
+            if record['budget_to'] is not None:
+                raise ValueError(f'{context}.budget_to: final endpoint must be null')
+            upper = None
+        else:
+            upper = _decimal_field(record, 'budget_to', context, lambda value: value >= 0)
+            if upper <= lower:
+                raise ValueError(f'{context}.budget_to: endpoint must exceed budget_from')
+        if record['upper_inclusive'] is not False:
+            raise ValueError(f'{context}.upper_inclusive: expected false')
+        limit = _decimal_field(record, 'limit', context, lambda value: 0 <= value < 1)
+        ranges.append(AllocationDriftRange(lower, upper, False, limit))
+        previous_to = upper
+    return tuple(ranges)
+
+
 def validate_index_config(data):
     """Validate an already parsed document without filesystem access."""
     if not isinstance(data, dict):
@@ -94,7 +138,8 @@ def validate_index_config(data):
             raise ValueError(f'duplicate ticker: {instrument.ticker}')
         tickers.add(instrument.ticker)
         instruments.append(instrument)
-    return IndexConfig(data['name'], max_error, instruments, reserve, minimum)
+    return IndexConfig(
+        data['name'], max_error, instruments, reserve, _load_drift_ranges(data), minimum)
 
 
 def read_index_document(path):

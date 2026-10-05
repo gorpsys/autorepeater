@@ -22,6 +22,7 @@ class CompositeConfig:
     """A named composition in declared preparation and calculation order."""
     name: str
     components: tuple[CompositeComponent, ...]
+    component_drift_limit: Decimal
 
 
 def _check_keys(data, allowed, context):
@@ -61,7 +62,7 @@ def validate_composite_config(data):
     """Validate a parsed document without filesystem or registry access."""
     if not isinstance(data, dict):
         raise ValueError('composite config: expected an object')
-    _check_keys(data, {'name', 'components'}, 'composite config')
+    _check_keys(data, {'name', 'components', 'component_drift_limit'}, 'composite config')
     name = _name(data.get('name'), 'name')
     records = data.get('components')
     if not isinstance(records, list) or not records:
@@ -72,7 +73,16 @@ def validate_composite_config(data):
         total = sum((component.weight for component in components), Decimal(0))
     if total > 1:
         raise ValueError('components: sum of weights must not exceed 1')
-    return CompositeConfig(name, components)
+    raw_limit = data.get('component_drift_limit')
+    if not isinstance(raw_limit, str):
+        raise ValueError('component_drift_limit: expected a decimal string')
+    try:
+        limit = Decimal(raw_limit)
+    except InvalidOperation as error:
+        raise ValueError('component_drift_limit: invalid decimal string') from error
+    if not limit.is_finite() or not 0 <= limit < 1:
+        raise ValueError('component_drift_limit: non-finite or out-of-range value')
+    return CompositeConfig(name, components, limit)
 
 
 def read_composite_document(path):

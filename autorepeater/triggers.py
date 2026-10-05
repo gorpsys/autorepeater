@@ -11,13 +11,12 @@ def check_triggers(event, src_account, dst_account):
         all(sec.blocked == 0 for sec in event.securities)
     )
 
-    # Проверяем, что нет ценных бумаг и деньги разблокированы
-    no_securities_and_money_unblocked = (
+    destination_unblocked = (
         event.has_position and
         event.account_id == dst_account and
-        len(event.securities) == 0 and
-        len(event.money) > 0 and
-        event.money[0].blocked_value == 0
+        bool(event.securities or event.money) and
+        all(sec.blocked == 0 for sec in event.securities) and
+        all(money.blocked_value == 0 for money in event.money)
     )
 
-    return all_securities_unblocked or no_securities_and_money_unblocked
+    return all_securities_unblocked or destination_unblocked

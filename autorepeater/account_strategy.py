@@ -3,11 +3,15 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from autorepeater import reporting
-from autorepeater.account_config import AccountConfig, load_account_config
+from autorepeater.account_config import AccountConfig, select_account_config
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.rebalance_policy import leaf_decision
 from autorepeater.strategy_budget import available_budget
-from autorepeater.strategy_data import InstrumentType
-from autorepeater.strategy_contract import UnsupportedSourceError
+from autorepeater.strategy_data import InstrumentType, PortfolioEntry
+from autorepeater.strategy_allocation import normalize_profile, position_value
+from autorepeater.strategy_plan import (
+    StrategyPlan, finite_decimal, validate_context, validate_plan, validate_positions,
+)
 from autorepeater.triggers import check_triggers
 
 
@@ -22,10 +26,9 @@ class PreparedAccountSource:
 
 
 def prepare_account_source(src, context):  # pylint: disable=unused-argument
-    """Validate an ASCII account ID, then load only its own settings."""
-    if not isinstance(src, str) or not src.isascii() or not src.isdecimal():
-        raise UnsupportedSourceError(f'unsupported src: {src}')
-    return PreparedAccountSource(src, load_account_config())
+    """Resolve an exact config name; the source ID belongs only to its document."""
+    config = select_account_config(src)
+    return PreparedAccountSource(config.source_account_id, config)
 
 
 def _position_value(position):
@@ -37,7 +40,7 @@ class AccountStrategy:
     """Repeat one account using fresh snapshots and pure event predicates."""
 
     def __init__(self, prepared):
-        self.src = prepared.src
+        self.src = prepared.config.source_account_id
         self.config = prepared.config
 
     def load_snapshot(self, data):
@@ -47,7 +50,7 @@ class AccountStrategy:
         total = Decimal('0')
         positions = {}
         for position in portfolio.positions:
-            reporting.print_strategy_position(data, position)
+            reporting.print_strategy_position(position)
             if position.instrument_type != InstrumentType.CURRENCY:
                 positions[position.uid] = position
                 total += _position_value(position)
@@ -70,6 +73,41 @@ class AccountStrategy:
         """Watch source then destination, keeping a shared account only once."""
         return tuple(dict.fromkeys((self.src, dst_account_id)))
 
+    def build_plan(self, snapshot, context):
+        """Build main and invested-value control from one source, without data reads."""
+        validate_context(context)
+        self.allocation_profile(snapshot)
+        target = self.build_target(snapshot, context.budget)
+        cash_floor = context.budget * self.config.reserve
+        invested = position_value(context.positions, context.marks)
+        control = self.build_target(snapshot, invested) if invested > 0 else TargetPortfolio({}, {})
+        plan = StrategyPlan(
+            context.path, context.budget, target, cash_floor,
+            leaf_decision(context, control, self.config.allocation_drift_limit), (), {},
+            context.positions)
+        validate_plan(plan, context)
+        return plan
+
+    def allocation_profile(self, snapshot):
+        """Expose full source weights with the original per-position nano valuation."""
+        if not isinstance(snapshot, tuple) or len(snapshot) != 2:
+            raise ValueError('account profile snapshot: expected positions and total')
+        positions, total = snapshot
+        finite_decimal(total, 'account source total', positive=True)
+        if not isinstance(positions, dict):
+            raise ValueError('account profile snapshot positions: expected a dict')
+        for uid, position in positions.items():
+            if not isinstance(position, PortfolioEntry) or uid != position.uid:
+                raise ValueError(f'account profile snapshot: invalid position for UID {uid}')
+        securities = tuple(position for position in positions.values()
+                           if position.instrument_type != InstrumentType.CURRENCY)
+        validate_positions(securities)
+        values = {position.uid: _position_value(position) for position in securities}
+        if sum(values.values(), Decimal(0)) != total:
+            raise ValueError('account profile snapshot: source total mismatch')
+        prices = {position.uid: position.current_price for position in securities}
+        return normalize_profile(values, prices, self.config.reserve)
+
     def should_rebalance(self, event, dst_account_id):
-        """Preserve the source-securities and first destination-money conditions."""
+        """Source changes and unblocked populated destinations initiate a check."""
         return check_triggers(event, self.src, dst_account_id)
