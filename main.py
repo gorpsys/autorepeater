@@ -7,7 +7,7 @@ from autorepeater.runner import RunnerParams
 from autorepeater.runner import Runner
 from autorepeater.strategies import prepare_strategy
 
-def main():
+def main() -> None:
     """main function"""
     parser = argparse.ArgumentParser(description="autorepeater")
 
@@ -16,12 +16,6 @@ def main():
     parser.add_argument("-s", "--src", type=str, required=True,
                         help="источник выбранного алгоритма")
     parser.add_argument("-d", "--dst", type=str, help="id счёта назначения")
-    parser.add_argument("-t", "--threshold", type=float, help="порог стоимости, ниже "
-                        "которого не выполняется синхронизация - доля стоимости счёта"
-                        " назначения. По умолчанию 0.001")
-    parser.add_argument("-r", "--reserve", type=float, help="переопределить резерв"
-                        " для округлений и комиссий (доля стоимости счёта назначения). "
-                        "По умолчанию из конфига стратегии; для повторения счёта 0.01")
     args = parser.parse_args()
 
     prepared = prepare_strategy(args.algoritm, args.src)
@@ -32,9 +26,7 @@ def main():
         prepared_strategy=prepared,
         dst=args.dst,
         params=RunnerParams(
-            debug=args.debug,
-            threshold=args.threshold,
-            reserve=args.reserve))
+            debug=args.debug))
     runer.run()
 
 if __name__ == "__main__":

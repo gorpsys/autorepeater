@@ -17,7 +17,7 @@ class InstrumentType(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class PortfolioEntry:
+class PortfolioEntry:  # pylint: disable=too-many-instance-attributes
     """One portfolio position represented without an SDK object."""
 
     uid: str
@@ -26,6 +26,8 @@ class PortfolioEntry:
     current_price: Decimal
     quantity: Decimal
     diagnostic_text: str
+    blocked: bool | None = None
+    blocked_lots: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,8 +49,8 @@ class InstrumentMatch:
 
 
 @dataclass(frozen=True, slots=True)
-class InstrumentInfo:
-    """Full instrument metadata loaded after selecting one UID."""
+class InstrumentInfo:  # pylint: disable=too-many-instance-attributes
+    """Full instrument metadata, including API permission, loaded for one UID."""
 
     uid: str
     ticker: str
@@ -57,6 +59,7 @@ class InstrumentInfo:
     class_code: str
     lot: int
     currency: str
+    api_trade_available: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +102,9 @@ class DataAccessError(Exception):
 
 class StrategyData(Protocol):
     """Minimal read-only data port available to every strategy."""
+
+    def begin_snapshot(self) -> None:
+        """Discard metadata caches before a new calculation; no market I/O required."""
 
     def get_portfolio(self, account_id: str) -> PortfolioSnapshot:
         """Return an ordered snapshot for one account."""

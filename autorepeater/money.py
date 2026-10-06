@@ -1,5 +1,9 @@
 """Helpers for money, quantities, and portfolio position formatting."""
+from collections.abc import Mapping
 from decimal import Decimal
+from typing import TypeVar
+
+KeyT = TypeVar('KeyT')
 
 
 def format_decimal(value):
@@ -23,6 +27,12 @@ def format_decimal(value):
         return integer_part + '.' + fractional_part
     # Если число целое, добавляем .0
     return formatted + '.0'
+
+
+def format_decimal_map(values: Mapping[KeyT, Decimal]) -> str:
+    """Format diagnostic money/quantity maps without Decimal repr or exponents."""
+    return '{' + ', '.join(f'{key}: {format_decimal(value)}'
+                          for key, value in values.items()) + '}'
 
 
 def money_to_string(money):

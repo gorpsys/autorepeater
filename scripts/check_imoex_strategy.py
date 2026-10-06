@@ -1,5 +1,6 @@
 """Compare index allocations on one public market snapshot, without trading."""
 import argparse
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -12,12 +13,16 @@ from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 
 from autorepeater import reporting
 from autorepeater.constants import IMPORTANT
-from autorepeater.index_config import select_index_config
-from autorepeater.index_strategy import IndexStrategy, calculate_index_target
+from autorepeater.grpc_deadline import UnaryDeadlineInterceptor
+from autorepeater.index_config import IndexConfig, select_index_config
+from autorepeater.index_strategy import (
+    IndexCalculation, IndexQuote, IndexStrategy, calculate_index_target,
+)
+from autorepeater.strategy_budget import available_budget
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
 
 
-def _decimal(value):
+def _decimal(value: str) -> Decimal:
     try:
         result = Decimal(value)
     except InvalidOperation as error:
@@ -27,7 +32,8 @@ def _decimal(value):
     return result
 
 
-def parse_args(argv=None):
+def parse_args(argv: Sequence[str] | None = None
+               ) -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     """Validate comparison inputs before opening an SDK client."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--src', help='name from an index config; required if several exist')
@@ -36,20 +42,19 @@ def parse_args(argv=None):
     parser.add_argument('--gross-values', nargs='+', type=_decimal,
                         default=list(map(Decimal, ['100000', '154000', '300000'])))
     parser.add_argument('--budgets', nargs='+', type=_decimal, default=[Decimal('154000')])
-    parser.add_argument('--reserve', type=_decimal, help='override the config reserve')
     parser.add_argument('--thresholds', nargs='+', type=_decimal,
                         default=list(map(Decimal, ['0.03', '0.05', '0.1'])))
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
     if any(value <= 0 for value in args.gross_values + args.budgets):
         parser.error('gross values and budgets must be positive')
-    if any(value is not None and not 0 <= value < 1
-           for value in [args.reserve] + args.thresholds):
-        parser.error('reserve and thresholds must be in [0, 1)')
+    if any(not 0 <= value < 1 for value in args.thresholds):
+        parser.error('thresholds must be in [0, 1)')
     return parser, args
 
 
-def _comparison_rows(calculation, snapshot, budget):
+def _comparison_rows(calculation: IndexCalculation, snapshot: dict[str, IndexQuote],
+                     budget: Decimal) -> list[dict[str, object]]:
     last = {}
     for number, allocations in enumerate(calculation.passes, 1):
         last.update({ticker: (number, allocation) for ticker, allocation in allocations.items()})
@@ -78,7 +83,8 @@ def _comparison_rows(calculation, snapshot, budget):
     return rows
 
 
-def compare_target(config, snapshot, scenario, threshold):
+def compare_target(config: IndexConfig, snapshot: dict[str, IndexQuote],
+                   scenario: dict[str, Decimal | None], threshold: Decimal) -> dict[str, object]:
     """Describe final holdings and each ticker's last allocation or exclusion."""
     budget = scenario['budget']
     calculation = calculate_index_target(
@@ -98,7 +104,13 @@ def compare_target(config, snapshot, scenario, threshold):
     }
 
 
-def main(argv=None):
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def main(argv: Sequence[str] | None = None, *,
+         clock: Callable[[], datetime] = _utc_now) -> None:
+    # pylint: disable=too-many-locals
     """Read the explicitly supplied token only when invoked; never query accounts."""
     parser, args = parse_args(argv)
     token = os.environ.get('READ_ONLY_INVEST_TOKEN')
@@ -109,14 +121,17 @@ def main(argv=None):
     except ValueError as error:
         parser.error(f'--src must name a configured index strategy: {error}')
     strategy = IndexStrategy(config)
-    started = datetime.now(timezone.utc)
+    started = clock()
     with Client(token, target=(
-            INVEST_GRPC_API_SANDBOX if args.sandbox else INVEST_GRPC_API)) as client:
-        snapshot = strategy.load_snapshot(TInvestStrategyData(client))
-    received = datetime.now(timezone.utc)
-    reserve = strategy.default_reserve if args.reserve is None else args.reserve
+            INVEST_GRPC_API_SANDBOX if args.sandbox else INVEST_GRPC_API),
+            interceptors=[UnaryDeadlineInterceptor()]) as client:
+        data = TInvestStrategyData(client)
+        data.begin_snapshot()
+        snapshot = strategy.load_snapshot(data)
+    received = clock()
+    reserve = config.reserve
     scenarios = [
-        {'gross_value': value, 'reserve': reserve, 'budget': value * (1 - reserve)}
+        {'gross_value': value, 'reserve': reserve, 'budget': available_budget(value, reserve)}
         for value in args.gross_values
     ] + [{'gross_value': None, 'reserve': Decimal(0), 'budget': value} for value in args.budgets]
     report = {

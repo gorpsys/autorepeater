@@ -3,6 +3,578 @@
   "reserve": "0.01",
   "max_lot_weight_error": "0.05",
   "min_position_value": "3000",
+  "allocation_drift_limits": [
+    {
+      "budget_from": "0",
+      "budget_to": "60000",
+      "upper_inclusive": false,
+      "limit": "0.287867327"
+    },
+    {
+      "budget_from": "60000",
+      "budget_to": "70000",
+      "upper_inclusive": false,
+      "limit": "0.281344855"
+    },
+    {
+      "budget_from": "70000",
+      "budget_to": "80000",
+      "upper_inclusive": false,
+      "limit": "0.238154114"
+    },
+    {
+      "budget_from": "80000",
+      "budget_to": "90000",
+      "upper_inclusive": false,
+      "limit": "0.073388623"
+    },
+    {
+      "budget_from": "90000",
+      "budget_to": "100000",
+      "upper_inclusive": false,
+      "limit": "0.100406438"
+    },
+    {
+      "budget_from": "100000",
+      "budget_to": "110000",
+      "upper_inclusive": false,
+      "limit": "0.116623441"
+    },
+    {
+      "budget_from": "110000",
+      "budget_to": "120000",
+      "upper_inclusive": false,
+      "limit": "0.145540384"
+    },
+    {
+      "budget_from": "120000",
+      "budget_to": "130000",
+      "upper_inclusive": false,
+      "limit": "0.145540351"
+    },
+    {
+      "budget_from": "130000",
+      "budget_to": "140000",
+      "upper_inclusive": false,
+      "limit": "0.100249677"
+    },
+    {
+      "budget_from": "140000",
+      "budget_to": "150000",
+      "upper_inclusive": false,
+      "limit": "0.094967851"
+    },
+    {
+      "budget_from": "150000",
+      "budget_to": "160000",
+      "upper_inclusive": false,
+      "limit": "0.059242183"
+    },
+    {
+      "budget_from": "160000",
+      "budget_to": "170000",
+      "upper_inclusive": false,
+      "limit": "0.052455282"
+    },
+    {
+      "budget_from": "170000",
+      "budget_to": "180000",
+      "upper_inclusive": false,
+      "limit": "0.046959462"
+    },
+    {
+      "budget_from": "180000",
+      "budget_to": "190000",
+      "upper_inclusive": false,
+      "limit": "0.030623175"
+    },
+    {
+      "budget_from": "190000",
+      "budget_to": "200000",
+      "upper_inclusive": false,
+      "limit": "0.030623065"
+    },
+    {
+      "budget_from": "200000",
+      "budget_to": "210000",
+      "upper_inclusive": false,
+      "limit": "0.030039108"
+    },
+    {
+      "budget_from": "210000",
+      "budget_to": "220000",
+      "upper_inclusive": false,
+      "limit": "0.035226114"
+    },
+    {
+      "budget_from": "220000",
+      "budget_to": "230000",
+      "upper_inclusive": false,
+      "limit": "0.035226026"
+    },
+    {
+      "budget_from": "230000",
+      "budget_to": "240000",
+      "upper_inclusive": false,
+      "limit": "0.035225916"
+    },
+    {
+      "budget_from": "240000",
+      "budget_to": "250000",
+      "upper_inclusive": false,
+      "limit": "0.044918225"
+    },
+    {
+      "budget_from": "250000",
+      "budget_to": "260000",
+      "upper_inclusive": false,
+      "limit": "0.042729236"
+    },
+    {
+      "budget_from": "260000",
+      "budget_to": "270000",
+      "upper_inclusive": false,
+      "limit": "0.039985825"
+    },
+    {
+      "budget_from": "270000",
+      "budget_to": "280000",
+      "upper_inclusive": false,
+      "limit": "0.037516556"
+    },
+    {
+      "budget_from": "280000",
+      "budget_to": "290000",
+      "upper_inclusive": false,
+      "limit": "0.036676310"
+    },
+    {
+      "budget_from": "290000",
+      "budget_to": "300000",
+      "upper_inclusive": false,
+      "limit": "0.036676200"
+    },
+    {
+      "budget_from": "300000",
+      "budget_to": "310000",
+      "upper_inclusive": false,
+      "limit": "0.036508450"
+    },
+    {
+      "budget_from": "310000",
+      "budget_to": "320000",
+      "upper_inclusive": false,
+      "limit": "0.036161554"
+    },
+    {
+      "budget_from": "320000",
+      "budget_to": "330000",
+      "upper_inclusive": false,
+      "limit": "0.034818960"
+    },
+    {
+      "budget_from": "330000",
+      "budget_to": "340000",
+      "upper_inclusive": false,
+      "limit": "0.033584837"
+    },
+    {
+      "budget_from": "340000",
+      "budget_to": "350000",
+      "upper_inclusive": false,
+      "limit": "0.032666469"
+    },
+    {
+      "budget_from": "350000",
+      "budget_to": "360000",
+      "upper_inclusive": false,
+      "limit": "0.034650132"
+    },
+    {
+      "budget_from": "360000",
+      "budget_to": "370000",
+      "upper_inclusive": false,
+      "limit": "0.034650033"
+    },
+    {
+      "budget_from": "370000",
+      "budget_to": "380000",
+      "upper_inclusive": false,
+      "limit": "0.034649923"
+    },
+    {
+      "budget_from": "380000",
+      "budget_to": "390000",
+      "upper_inclusive": false,
+      "limit": "0.034649813"
+    },
+    {
+      "budget_from": "390000",
+      "budget_to": "400000",
+      "upper_inclusive": false,
+      "limit": "0.034649703"
+    },
+    {
+      "budget_from": "400000",
+      "budget_to": "410000",
+      "upper_inclusive": false,
+      "limit": "0.034649593"
+    },
+    {
+      "budget_from": "410000",
+      "budget_to": "420000",
+      "upper_inclusive": false,
+      "limit": "0.034649483"
+    },
+    {
+      "budget_from": "420000",
+      "budget_to": "430000",
+      "upper_inclusive": false,
+      "limit": "0.034649373"
+    },
+    {
+      "budget_from": "430000",
+      "budget_to": "440000",
+      "upper_inclusive": false,
+      "limit": "0.034649263"
+    },
+    {
+      "budget_from": "440000",
+      "budget_to": "450000",
+      "upper_inclusive": false,
+      "limit": "0.034649153"
+    },
+    {
+      "budget_from": "450000",
+      "budget_to": "460000",
+      "upper_inclusive": false,
+      "limit": "0.034649043"
+    },
+    {
+      "budget_from": "460000",
+      "budget_to": "470000",
+      "upper_inclusive": false,
+      "limit": "0.034648933"
+    },
+    {
+      "budget_from": "470000",
+      "budget_to": "480000",
+      "upper_inclusive": false,
+      "limit": "0.034648823"
+    },
+    {
+      "budget_from": "480000",
+      "budget_to": "490000",
+      "upper_inclusive": false,
+      "limit": "0.034648713"
+    },
+    {
+      "budget_from": "490000",
+      "budget_to": "500000",
+      "upper_inclusive": false,
+      "limit": "0.034648603"
+    },
+    {
+      "budget_from": "500000",
+      "budget_to": "510000",
+      "upper_inclusive": false,
+      "limit": "0.034648493"
+    },
+    {
+      "budget_from": "510000",
+      "budget_to": "520000",
+      "upper_inclusive": false,
+      "limit": "0.034648383"
+    },
+    {
+      "budget_from": "520000",
+      "budget_to": "530000",
+      "upper_inclusive": false,
+      "limit": "0.034648273"
+    },
+    {
+      "budget_from": "530000",
+      "budget_to": "540000",
+      "upper_inclusive": false,
+      "limit": "0.034648163"
+    },
+    {
+      "budget_from": "540000",
+      "budget_to": "550000",
+      "upper_inclusive": false,
+      "limit": "0.034648053"
+    },
+    {
+      "budget_from": "550000",
+      "budget_to": "560000",
+      "upper_inclusive": false,
+      "limit": "0.034647943"
+    },
+    {
+      "budget_from": "560000",
+      "budget_to": "570000",
+      "upper_inclusive": false,
+      "limit": "0.034647833"
+    },
+    {
+      "budget_from": "570000",
+      "budget_to": "580000",
+      "upper_inclusive": false,
+      "limit": "0.034647723"
+    },
+    {
+      "budget_from": "580000",
+      "budget_to": "590000",
+      "upper_inclusive": false,
+      "limit": "0.034647613"
+    },
+    {
+      "budget_from": "590000",
+      "budget_to": "600000",
+      "upper_inclusive": false,
+      "limit": "0.034647503"
+    },
+    {
+      "budget_from": "600000",
+      "budget_to": "610000",
+      "upper_inclusive": false,
+      "limit": "0.034647393"
+    },
+    {
+      "budget_from": "610000",
+      "budget_to": "620000",
+      "upper_inclusive": false,
+      "limit": "0.034647283"
+    },
+    {
+      "budget_from": "620000",
+      "budget_to": "630000",
+      "upper_inclusive": false,
+      "limit": "0.034647173"
+    },
+    {
+      "budget_from": "630000",
+      "budget_to": "640000",
+      "upper_inclusive": false,
+      "limit": "0.034647063"
+    },
+    {
+      "budget_from": "640000",
+      "budget_to": "650000",
+      "upper_inclusive": false,
+      "limit": "0.034646953"
+    },
+    {
+      "budget_from": "650000",
+      "budget_to": "660000",
+      "upper_inclusive": false,
+      "limit": "0.034646843"
+    },
+    {
+      "budget_from": "660000",
+      "budget_to": "670000",
+      "upper_inclusive": false,
+      "limit": "0.077904827"
+    },
+    {
+      "budget_from": "670000",
+      "budget_to": "680000",
+      "upper_inclusive": false,
+      "limit": "0.077904816"
+    },
+    {
+      "budget_from": "680000",
+      "budget_to": "690000",
+      "upper_inclusive": false,
+      "limit": "0.077586080"
+    },
+    {
+      "budget_from": "690000",
+      "budget_to": "700000",
+      "upper_inclusive": false,
+      "limit": "0.075287729"
+    },
+    {
+      "budget_from": "700000",
+      "budget_to": "710000",
+      "upper_inclusive": false,
+      "limit": "0.070610859"
+    },
+    {
+      "budget_from": "710000",
+      "budget_to": "720000",
+      "upper_inclusive": false,
+      "limit": "0.068060718"
+    },
+    {
+      "budget_from": "720000",
+      "budget_to": "730000",
+      "upper_inclusive": false,
+      "limit": "0.068060608"
+    },
+    {
+      "budget_from": "730000",
+      "budget_to": "740000",
+      "upper_inclusive": false,
+      "limit": "0.068060498"
+    },
+    {
+      "budget_from": "740000",
+      "budget_to": "750000",
+      "upper_inclusive": false,
+      "limit": "0.068060388"
+    },
+    {
+      "budget_from": "750000",
+      "budget_to": "760000",
+      "upper_inclusive": false,
+      "limit": "0.015903481"
+    },
+    {
+      "budget_from": "760000",
+      "budget_to": "770000",
+      "upper_inclusive": false,
+      "limit": "0.015398570"
+    },
+    {
+      "budget_from": "770000",
+      "budget_to": "780000",
+      "upper_inclusive": false,
+      "limit": "0.015398460"
+    },
+    {
+      "budget_from": "780000",
+      "budget_to": "790000",
+      "upper_inclusive": false,
+      "limit": "0.014954863"
+    },
+    {
+      "budget_from": "790000",
+      "budget_to": "800000",
+      "upper_inclusive": false,
+      "limit": "0.014954753"
+    },
+    {
+      "budget_from": "800000",
+      "budget_to": "810000",
+      "upper_inclusive": false,
+      "limit": "0.014954643"
+    },
+    {
+      "budget_from": "810000",
+      "budget_to": "820000",
+      "upper_inclusive": false,
+      "limit": "0.014715371"
+    },
+    {
+      "budget_from": "820000",
+      "budget_to": "830000",
+      "upper_inclusive": false,
+      "limit": "0.014715261"
+    },
+    {
+      "budget_from": "830000",
+      "budget_to": "840000",
+      "upper_inclusive": false,
+      "limit": "0.014715151"
+    },
+    {
+      "budget_from": "840000",
+      "budget_to": "850000",
+      "upper_inclusive": false,
+      "limit": "0.014715041"
+    },
+    {
+      "budget_from": "850000",
+      "budget_to": "860000",
+      "upper_inclusive": false,
+      "limit": "0.014753596"
+    },
+    {
+      "budget_from": "860000",
+      "budget_to": "870000",
+      "upper_inclusive": false,
+      "limit": "0.014753563"
+    },
+    {
+      "budget_from": "870000",
+      "budget_to": "880000",
+      "upper_inclusive": false,
+      "limit": "0.014753453"
+    },
+    {
+      "budget_from": "880000",
+      "budget_to": "890000",
+      "upper_inclusive": false,
+      "limit": "0.014753343"
+    },
+    {
+      "budget_from": "890000",
+      "budget_to": "900000",
+      "upper_inclusive": false,
+      "limit": "0.014714491"
+    },
+    {
+      "budget_from": "900000",
+      "budget_to": "910000",
+      "upper_inclusive": false,
+      "limit": "0.014324343"
+    },
+    {
+      "budget_from": "910000",
+      "budget_to": "920000",
+      "upper_inclusive": false,
+      "limit": "0.014202067"
+    },
+    {
+      "budget_from": "920000",
+      "budget_to": "930000",
+      "upper_inclusive": false,
+      "limit": "0.014201957"
+    },
+    {
+      "budget_from": "930000",
+      "budget_to": "940000",
+      "upper_inclusive": false,
+      "limit": "0.014201847"
+    },
+    {
+      "budget_from": "940000",
+      "budget_to": "950000",
+      "upper_inclusive": false,
+      "limit": "0.014030456"
+    },
+    {
+      "budget_from": "950000",
+      "budget_to": "960000",
+      "upper_inclusive": false,
+      "limit": "0.014030346"
+    },
+    {
+      "budget_from": "960000",
+      "budget_to": "970000",
+      "upper_inclusive": false,
+      "limit": "0.012073567"
+    },
+    {
+      "budget_from": "970000",
+      "budget_to": "980000",
+      "upper_inclusive": false,
+      "limit": "0.011624283"
+    },
+    {
+      "budget_from": "980000",
+      "budget_to": "990000",
+      "upper_inclusive": false,
+      "limit": "0.011624173"
+    },
+    {
+      "budget_from": "990000",
+      "budget_to": null,
+      "upper_inclusive": false,
+      "limit": "0.011624063"
+    }
+  ],
   "instruments": [
     {
       "ticker": "AFKS",

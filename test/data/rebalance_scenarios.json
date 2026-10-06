@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "description": "Synthetic accounts; saved public market quotes, no real account positions",
+  "capture": "imoex_snapshot.json",
+  "capture_sha256": "9d82c99bad7e4ddb642663a5c8bb54f8c43254c9230a920eb427925411521283",
+  "training_seed_historical": 20261002,
+  "validation_seed": 20261003,
+  "price_seed": 20261005,
+  "reserve": "0.01",
+  "account_limit": "0.0092",
+  "commission_rate": "0.0005",
+  "budgets": [50000, 63000, 100000, 154000, 300000, 650000, 1000000, 3000000],
+  "amplitudes_per_mille": [0, 1, 2, 4, 8, 16, 32, 64, 128, 256],
+  "price_change_per_mille": [-100, 100],
+  "repetitions": 100,
+  "monthly_deposit": "2000",
+  "months": 12,
+  "index_budgets": [10000, 49999, 50000, 50555, 63000, 100000, 154000, 159000, 160000, 161000, 300123, 650000, 999999, 1000000, 1000555, 3000000],
+  "historical_validation_counts": {"tp": 13540, "tn": 8381, "fp": 1355, "fn": 724}
+}

@@ -1,12 +1,13 @@
 """Local index composition and validation, without SDK access."""
 import json
+from collections.abc import Callable
 import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from autorepeater.constants import DST_MONEY_RESERVED
 from autorepeater import reporting
+from autorepeater.config_catalog import Candidate, discover_candidates, select_candidate
 from autorepeater.strategy_contract import UnsupportedSourceError
 
 @dataclass
@@ -22,13 +23,23 @@ class IndexInstrument:
 
 
 @dataclass
+class AllocationDriftRange:
+    """One half-open full-budget interval, including an unbounded final endpoint."""
+    budget_from: Decimal
+    budget_to: Decimal | None
+    upper_inclusive: bool
+    limit: Decimal
+
+
+@dataclass
 class IndexConfig:
     """Composition, error limit for ideal lots < 1, and minimum target value."""
     name: str
     max_lot_weight_error: Decimal
     instruments: list[IndexInstrument]
+    reserve: Decimal
+    allocation_drift_limits: tuple[AllocationDriftRange, ...]
     min_position_value: Decimal = Decimal(0)
-    reserve: Decimal = Decimal(DST_MONEY_RESERVED)
 
 
 _INSTRUMENT_RANGES = {
@@ -41,7 +52,8 @@ _INSTRUMENT_RANGES = {
 }
 
 
-def _decimal_field(data, field, context, valid_range):
+def _decimal_field(data: dict[str, object], field: str, context: str,
+                   valid_range: Callable[[Decimal], bool]) -> Decimal:
     raw = data.get(field)
     label = f'{context}.{field}'
     if not isinstance(raw, str):
@@ -55,7 +67,7 @@ def _decimal_field(data, field, context, valid_range):
     return value
 
 
-def _load_instrument(data, position):
+def _load_instrument(data: object, position: int) -> IndexInstrument:
     context = f'instruments[{position}]'
     if not isinstance(data, dict):
         raise ValueError(f'{context}: expected an object')
@@ -69,7 +81,41 @@ def _load_instrument(data, position):
     return IndexInstrument(ticker=ticker, **values)
 
 
-def validate_index_config(data):
+def _load_drift_ranges(data: dict[str, object]) -> tuple[AllocationDriftRange, ...]:
+    records = data.get('allocation_drift_limits')
+    if not isinstance(records, list) or not records:
+        raise ValueError('allocation_drift_limits: expected a nonempty array')
+    ranges = []
+    previous_to = Decimal(0)
+    for position, record in enumerate(records):
+        context = f'allocation_drift_limits[{position}]'
+        if not isinstance(record, dict):
+            raise ValueError(f'{context}: expected an object')
+        fields = {'budget_from', 'budget_to', 'upper_inclusive', 'limit'}
+        if record.keys() != fields:
+            changed = ', '.join(sorted(record.keys() ^ fields))
+            raise ValueError(f'{context}: missing or unknown fields: {changed}')
+        lower = _decimal_field(record, 'budget_from', context, lambda value: value >= 0)
+        if lower != previous_to:
+            raise ValueError(
+                f'{context}.budget_from: intervals must start at zero and meet exactly')
+        if position == len(records) - 1:
+            if record['budget_to'] is not None:
+                raise ValueError(f'{context}.budget_to: final endpoint must be null')
+            upper = None
+        else:
+            upper = _decimal_field(record, 'budget_to', context, lambda value: value >= 0)
+            if upper <= lower:
+                raise ValueError(f'{context}.budget_to: endpoint must exceed budget_from')
+        if record['upper_inclusive'] is not False:
+            raise ValueError(f'{context}.upper_inclusive: expected false')
+        limit = _decimal_field(record, 'limit', context, lambda value: 0 <= value < 1)
+        ranges.append(AllocationDriftRange(lower, upper, False, limit))
+        previous_to = upper
+    return tuple(ranges)
+
+
+def validate_index_config(data: object) -> IndexConfig:
     """Validate an already parsed document without filesystem access."""
     if not isinstance(data, dict):
         raise ValueError('index config: expected an object')
@@ -82,8 +128,7 @@ def validate_index_config(data):
         {'min_position_value': data.get('min_position_value', '0')},
         'min_position_value', 'index config', lambda value: value >= 0)
     reserve = _decimal_field(
-        {'reserve': data.get('reserve', DST_MONEY_RESERVED)},
-        'reserve', 'index config', lambda value: 0 <= value < 1)
+        data, 'reserve', 'index config', lambda value: 0 <= value < 1)
     records = data.get('instruments')
     if not isinstance(records, list) or not records:
         raise ValueError('instruments: expected a nonempty array')
@@ -95,21 +140,22 @@ def validate_index_config(data):
             raise ValueError(f'duplicate ticker: {instrument.ticker}')
         tickers.add(instrument.ticker)
         instruments.append(instrument)
-    return IndexConfig(data['name'], max_error, instruments, minimum, reserve)
+    return IndexConfig(
+        data['name'], max_error, instruments, reserve, _load_drift_ranges(data), minimum)
 
 
-def read_index_document(path):
+def read_index_document(path: str | Path) -> object:
     """Parse one JSON document without applying schema validation."""
     with open(path, encoding='utf-8') as config_file:
         return json.load(config_file)
 
 
-def load_index_config(path):
+def load_index_config(path: str | Path) -> IndexConfig:
     """Read and strictly validate one named index document."""
     return validate_index_config(read_index_document(path))
 
 
-def _index_paths():
+def _index_paths() -> list[Path]:
     single_path = os.environ.get('IMOEX_CONFIG_PATH')
     directory = os.environ.get('INDEX_CONFIG_DIR')
     if single_path is not None and directory is not None:
@@ -128,76 +174,21 @@ def _index_paths():
     return paths
 
 
-@dataclass
-class _Candidate:
-    path: Path
-    name: str | None
-    config: IndexConfig | None
-    error: ValueError | None
+def _discover_candidates() -> list[Candidate[IndexConfig]]:
+    return discover_candidates(_index_paths(), read_index_document, validate_index_config)
 
 
-def _discover_candidates():
-    candidates = []
-    for path in _index_paths():
-        name = None
-        config = None
-        error = None
-        try:
-            document = read_index_document(path)
-            if isinstance(document, dict) and isinstance(document.get('name'), str):
-                name = document['name']
-            config = validate_index_config(document)
-        except (OSError, ValueError) as cause:
-            label = f'{path} ({name})' if name is not None else str(path)
-            error = ValueError(f'{label}: {cause}')
-        candidates.append(_Candidate(path, name, config, error))
-    return candidates
-
-
-def _catalog(candidates):
-    catalog = {}
-    for candidate in candidates:
-        if candidate.name is not None:
-            catalog.setdefault(candidate.name, []).append(candidate)
-    return catalog
-
-
-def _duplicate_message(name, candidates):
-    paths = ', '.join(str(candidate.path) for candidate in candidates)
-    return f'duplicate strategy name: {name} ({paths})'
-
-
-def _warn_foreign_candidates(candidates, catalog, selected):
-    for candidate in candidates:
-        if candidate.error is not None and candidate.name != selected:
-            reporting.print_index_config_warning(str(candidate.error))
-    for name, matches in catalog.items():
-        if name != selected and len(matches) > 1:
-            reporting.print_index_config_warning(_duplicate_message(name, matches))
-
-
-def select_index_config(name=None):
+def select_index_config(name: str | None = None) -> IndexConfig:
     """Select one exact JSON name; isolate foreign errors and read each file once."""
     candidates = _discover_candidates()
-    catalog = _catalog(candidates)
     if name is None:
         if len(candidates) != 1 or candidates[0].error is not None:
             raise UnsupportedSourceError('--src must name a configured index strategy')
         return candidates[0].config
-    _warn_foreign_candidates(candidates, catalog, name)
-    matches = catalog.get(name, []) if isinstance(name, str) else []
-    if not matches:
-        problems = ', '.join(str(item.path) for item in candidates if item.error is not None)
-        detail = f'; problematic files: {problems}' if problems else ''
-        raise UnsupportedSourceError(f'unsupported src: {name}{detail}')
-    if len(matches) != 1:
-        raise ValueError(_duplicate_message(name, matches))
-    if matches[0].error is not None:
-        raise matches[0].error
-    return matches[0].config
+    return select_candidate(candidates, name, reporting.print_index_config_warning)
 
 
-def load_index_configs():
+def load_index_configs() -> dict[str, IndexConfig]:
     """Strictly validate the complete set, reusing the parser and pure validator."""
     configs = {}
     paths = _index_paths()

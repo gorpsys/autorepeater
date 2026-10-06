@@ -1,0 +1,196 @@
+{
+  "method": "minimize sale-decision disagreement; exact Decimal fit; conservative ties",
+  "disclaimer": "real saved quotes; synthetic ACCOUNT compositions, not a source-account snapshot",
+  "threshold": "0.004",
+  "reserve": "0.01",
+  "seeds": [
+    20261002,
+    20261003
+  ],
+  "budgets": [
+    50000,
+    63000,
+    100000,
+    154000,
+    300000,
+    650000,
+    1000000,
+    3000000
+  ],
+  "source_quantity_amplitudes_per_mille": [
+    0,
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256
+  ],
+  "price_change_per_mille": [
+    -100,
+    100
+  ],
+  "repetitions": 100,
+  "train_count": 24000,
+  "validation_count": 24000,
+  "fitted_limit": "0.00923135090710188633709617736",
+  "rounded_limit": "0.0092",
+  "train": {
+    "tn": 8460,
+    "fp": 1282,
+    "tp": 13550,
+    "fn": 708
+  },
+  "validation": {
+    "fp": 1355,
+    "tn": 8381,
+    "tp": 13540,
+    "fn": 724
+  },
+  "by_basket": {
+    "top12_capitalization": {
+      "own_fit": "0.005259093378223682969845738765",
+      "validation": {
+        "fp": 341,
+        "tn": 3916,
+        "tp": 3333,
+        "fn": 410
+      }
+    },
+    "all44_capitalization": {
+      "own_fit": "0.00931498783646718632785842493",
+      "validation": {
+        "tp": 5085,
+        "tn": 2245,
+        "fp": 480,
+        "fn": 190
+      }
+    },
+    "all44_equal": {
+      "own_fit": "0.01053967581908158578969083265",
+      "validation": {
+        "tp": 5122,
+        "fp": 534,
+        "tn": 2220,
+        "fn": 124
+      }
+    }
+  },
+  "by_budget": {
+    "50000": {
+      "fp": 82,
+      "tn": 721,
+      "tp": 2197
+    },
+    "63000": {
+      "tn": 499,
+      "tp": 2430,
+      "fp": 71
+    },
+    "100000": {
+      "tn": 238,
+      "tp": 2593,
+      "fp": 169
+    },
+    "154000": {
+      "tn": 1488,
+      "fp": 261,
+      "tp": 1249,
+      "fn": 2
+    },
+    "300000": {
+      "tn": 588,
+      "fn": 60,
+      "fp": 501,
+      "tp": 1851
+    },
+    "650000": {
+      "tn": 1475,
+      "fn": 127,
+      "tp": 1161,
+      "fp": 237
+    },
+    "1000000": {
+      "tn": 1617,
+      "fn": 243,
+      "tp": 1106,
+      "fp": 34
+    },
+    "3000000": {
+      "tn": 1755,
+      "fn": 292,
+      "tp": 953
+    }
+  },
+  "zero_perturbation": {
+    "fp": 139,
+    "tn": 1430,
+    "tp": 810,
+    "fn": 21
+  },
+  "candidate_limits": {
+    "0.004": {
+      "fp": 3060,
+      "tn": 6676,
+      "tp": 14238,
+      "fn": 26
+    },
+    "0.005": {
+      "fp": 2784,
+      "tn": 6952,
+      "tp": 14181,
+      "fn": 83
+    },
+    "0.006": {
+      "fp": 2536,
+      "tn": 7200,
+      "tp": 14106,
+      "fn": 158
+    },
+    "0.008": {
+      "fp": 1701,
+      "tn": 8035,
+      "tp": 13798,
+      "fn": 466
+    },
+    "0.01": {
+      "fp": 1196,
+      "tn": 8540,
+      "tp": 13382,
+      "fn": 882
+    },
+    "0.015": {
+      "fp": 977,
+      "tn": 8759,
+      "tp": 12624,
+      "fn": 1640
+    },
+    "0.02": {
+      "fp": 883,
+      "tn": 8853,
+      "tp": 11822,
+      "fn": 2442
+    },
+    "0.03": {
+      "fp": 398,
+      "tn": 9338,
+      "tp": 9931,
+      "fn": 4333
+    },
+    "0.05": {
+      "tn": 9608,
+      "fn": 6458,
+      "tp": 7806,
+      "fp": 128
+    }
+  },
+  "sha256": {
+    "test/data/imoex_snapshot.json": "9d82c99bad7e4ddb642663a5c8bb54f8c43254c9230a920eb427925411521283",
+    "autorepeater/configs/imoex.json": "a12c9efab490e43269a5a9d5d0166fa5d72bf59fd7048f99f12d9f037f8ea74e",
+    "autorepeater/account_strategy.py": "fbb4ac2a2df02676ad4897fa085a16f80dfe2ff5d8d01a56fceae64bf30ff995",
+    "autorepeater/orders.py": "aa9fa7398968697af1647a2454bc8c8d07bce05d9ca5a232adce8c0d660e74c0"
+  }
+}

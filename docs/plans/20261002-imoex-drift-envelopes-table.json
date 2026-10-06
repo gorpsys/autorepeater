@@ -1,0 +1,696 @@
+{
+  "strategy": "IMOEX",
+  "status": "calibration_only_not_active_in_trading",
+  "metric": "half_l1_distance_of_normalized_security_weights",
+  "budget_basis": "gross_budget_allocated_to_IMOEX_before_its_reserve",
+  "error_units": "fraction",
+  "strict_decrease_per_1000_rub": "1E-8",
+  "rounding": "ceiling_to_strict_decrease_quantum",
+  "source_sha256": "b2190b93ba82878b8fcd8d693060d063756f15a1f59ce111f36b2fd2df82375e",
+  "calibration": {
+    "seed": 20261002,
+    "scenarios": 1001,
+    "price_changes": "independent uniform discrete per ticker; same scenarios for all budgets",
+    "price_shift_step_percent": 1,
+    "start_rub": 50000,
+    "stop_rub": 1000000,
+    "step_rub": 1000,
+    "grouping": "number of instruments in achieved main target",
+    "cases": 951951,
+    "empty_cases": 0,
+    "previous_95_bucket_maxima_verified": true,
+    "source_sha256": {
+      "test/data/imoex_snapshot.json": "9d82c99bad7e4ddb642663a5c8bb54f8c43254c9230a920eb427925411521283",
+      "autorepeater/configs/imoex.json": "3dda226fe8b466113b0616d8c30e5f655917b358e0bf1977adb2fbcd5eaec821",
+      "autorepeater/index_strategy.py": "365552ed0dfbb83ae989fa6b45972c5cc6f3233c7be2547e156cfcedbdd21b22",
+      "autorepeater/strategy_budget.py": "779a45fd396c5775dcaaf15d44ad6c1760db4e48dee4cfd127885ea1e7eda2e2"
+    }
+  },
+  "ranges": [
+    {
+      "budget_from_rub": "50000",
+      "budget_to_rub": "60000",
+      "upper_inclusive": false,
+      "max_deviation": "0.26169757",
+      "max_deviation_percent": "26.16975700"
+    },
+    {
+      "budget_from_rub": "60000",
+      "budget_to_rub": "70000",
+      "upper_inclusive": false,
+      "max_deviation": "0.25576805",
+      "max_deviation_percent": "25.57680500"
+    },
+    {
+      "budget_from_rub": "70000",
+      "budget_to_rub": "80000",
+      "upper_inclusive": false,
+      "max_deviation": "0.21650374",
+      "max_deviation_percent": "21.65037400"
+    },
+    {
+      "budget_from_rub": "80000",
+      "budget_to_rub": "90000",
+      "upper_inclusive": false,
+      "max_deviation": "0.06671693",
+      "max_deviation_percent": "6.67169300"
+    },
+    {
+      "budget_from_rub": "90000",
+      "budget_to_rub": "100000",
+      "upper_inclusive": false,
+      "max_deviation": "0.09127858",
+      "max_deviation_percent": "9.12785800"
+    },
+    {
+      "budget_from_rub": "100000",
+      "budget_to_rub": "110000",
+      "upper_inclusive": false,
+      "max_deviation": "0.10602131",
+      "max_deviation_percent": "10.60213100"
+    },
+    {
+      "budget_from_rub": "110000",
+      "budget_to_rub": "120000",
+      "upper_inclusive": false,
+      "max_deviation": "0.13230944",
+      "max_deviation_percent": "13.23094400"
+    },
+    {
+      "budget_from_rub": "120000",
+      "budget_to_rub": "130000",
+      "upper_inclusive": false,
+      "max_deviation": "0.13230941",
+      "max_deviation_percent": "13.23094100"
+    },
+    {
+      "budget_from_rub": "130000",
+      "budget_to_rub": "140000",
+      "upper_inclusive": false,
+      "max_deviation": "0.09113607",
+      "max_deviation_percent": "9.11360700"
+    },
+    {
+      "budget_from_rub": "140000",
+      "budget_to_rub": "150000",
+      "upper_inclusive": false,
+      "max_deviation": "0.08633441",
+      "max_deviation_percent": "8.63344100"
+    },
+    {
+      "budget_from_rub": "150000",
+      "budget_to_rub": "160000",
+      "upper_inclusive": false,
+      "max_deviation": "0.05385653",
+      "max_deviation_percent": "5.38565300"
+    },
+    {
+      "budget_from_rub": "160000",
+      "budget_to_rub": "170000",
+      "upper_inclusive": false,
+      "max_deviation": "0.04768662",
+      "max_deviation_percent": "4.76866200"
+    },
+    {
+      "budget_from_rub": "170000",
+      "budget_to_rub": "180000",
+      "upper_inclusive": false,
+      "max_deviation": "0.04269042",
+      "max_deviation_percent": "4.26904200"
+    },
+    {
+      "budget_from_rub": "180000",
+      "budget_to_rub": "190000",
+      "upper_inclusive": false,
+      "max_deviation": "0.02783925",
+      "max_deviation_percent": "2.78392500"
+    },
+    {
+      "budget_from_rub": "190000",
+      "budget_to_rub": "200000",
+      "upper_inclusive": false,
+      "max_deviation": "0.02783915",
+      "max_deviation_percent": "2.78391500"
+    },
+    {
+      "budget_from_rub": "200000",
+      "budget_to_rub": "210000",
+      "upper_inclusive": false,
+      "max_deviation": "0.02730828",
+      "max_deviation_percent": "2.73082800"
+    },
+    {
+      "budget_from_rub": "210000",
+      "budget_to_rub": "220000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03202374",
+      "max_deviation_percent": "3.20237400"
+    },
+    {
+      "budget_from_rub": "220000",
+      "budget_to_rub": "230000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03202366",
+      "max_deviation_percent": "3.20236600"
+    },
+    {
+      "budget_from_rub": "230000",
+      "budget_to_rub": "240000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03202356",
+      "max_deviation_percent": "3.20235600"
+    },
+    {
+      "budget_from_rub": "240000",
+      "budget_to_rub": "250000",
+      "upper_inclusive": false,
+      "max_deviation": "0.04083475",
+      "max_deviation_percent": "4.08347500"
+    },
+    {
+      "budget_from_rub": "250000",
+      "budget_to_rub": "260000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03884476",
+      "max_deviation_percent": "3.88447600"
+    },
+    {
+      "budget_from_rub": "260000",
+      "budget_to_rub": "270000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03635075",
+      "max_deviation_percent": "3.63507500"
+    },
+    {
+      "budget_from_rub": "270000",
+      "budget_to_rub": "280000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03410596",
+      "max_deviation_percent": "3.41059600"
+    },
+    {
+      "budget_from_rub": "280000",
+      "budget_to_rub": "290000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03334210",
+      "max_deviation_percent": "3.33421000"
+    },
+    {
+      "budget_from_rub": "290000",
+      "budget_to_rub": "300000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03334200",
+      "max_deviation_percent": "3.33420000"
+    },
+    {
+      "budget_from_rub": "300000",
+      "budget_to_rub": "310000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03318950",
+      "max_deviation_percent": "3.31895000"
+    },
+    {
+      "budget_from_rub": "310000",
+      "budget_to_rub": "320000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03287414",
+      "max_deviation_percent": "3.28741400"
+    },
+    {
+      "budget_from_rub": "320000",
+      "budget_to_rub": "330000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03165360",
+      "max_deviation_percent": "3.16536000"
+    },
+    {
+      "budget_from_rub": "330000",
+      "budget_to_rub": "340000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03053167",
+      "max_deviation_percent": "3.05316700"
+    },
+    {
+      "budget_from_rub": "340000",
+      "budget_to_rub": "350000",
+      "upper_inclusive": false,
+      "max_deviation": "0.02969679",
+      "max_deviation_percent": "2.96967900"
+    },
+    {
+      "budget_from_rub": "350000",
+      "budget_to_rub": "360000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03150012",
+      "max_deviation_percent": "3.15001200"
+    },
+    {
+      "budget_from_rub": "360000",
+      "budget_to_rub": "370000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03150003",
+      "max_deviation_percent": "3.15000300"
+    },
+    {
+      "budget_from_rub": "370000",
+      "budget_to_rub": "380000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149993",
+      "max_deviation_percent": "3.14999300"
+    },
+    {
+      "budget_from_rub": "380000",
+      "budget_to_rub": "390000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149983",
+      "max_deviation_percent": "3.14998300"
+    },
+    {
+      "budget_from_rub": "390000",
+      "budget_to_rub": "400000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149973",
+      "max_deviation_percent": "3.14997300"
+    },
+    {
+      "budget_from_rub": "400000",
+      "budget_to_rub": "410000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149963",
+      "max_deviation_percent": "3.14996300"
+    },
+    {
+      "budget_from_rub": "410000",
+      "budget_to_rub": "420000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149953",
+      "max_deviation_percent": "3.14995300"
+    },
+    {
+      "budget_from_rub": "420000",
+      "budget_to_rub": "430000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149943",
+      "max_deviation_percent": "3.14994300"
+    },
+    {
+      "budget_from_rub": "430000",
+      "budget_to_rub": "440000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149933",
+      "max_deviation_percent": "3.14993300"
+    },
+    {
+      "budget_from_rub": "440000",
+      "budget_to_rub": "450000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149923",
+      "max_deviation_percent": "3.14992300"
+    },
+    {
+      "budget_from_rub": "450000",
+      "budget_to_rub": "460000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149913",
+      "max_deviation_percent": "3.14991300"
+    },
+    {
+      "budget_from_rub": "460000",
+      "budget_to_rub": "470000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149903",
+      "max_deviation_percent": "3.14990300"
+    },
+    {
+      "budget_from_rub": "470000",
+      "budget_to_rub": "480000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149893",
+      "max_deviation_percent": "3.14989300"
+    },
+    {
+      "budget_from_rub": "480000",
+      "budget_to_rub": "490000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149883",
+      "max_deviation_percent": "3.14988300"
+    },
+    {
+      "budget_from_rub": "490000",
+      "budget_to_rub": "500000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149873",
+      "max_deviation_percent": "3.14987300"
+    },
+    {
+      "budget_from_rub": "500000",
+      "budget_to_rub": "510000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149863",
+      "max_deviation_percent": "3.14986300"
+    },
+    {
+      "budget_from_rub": "510000",
+      "budget_to_rub": "520000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149853",
+      "max_deviation_percent": "3.14985300"
+    },
+    {
+      "budget_from_rub": "520000",
+      "budget_to_rub": "530000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149843",
+      "max_deviation_percent": "3.14984300"
+    },
+    {
+      "budget_from_rub": "530000",
+      "budget_to_rub": "540000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149833",
+      "max_deviation_percent": "3.14983300"
+    },
+    {
+      "budget_from_rub": "540000",
+      "budget_to_rub": "550000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149823",
+      "max_deviation_percent": "3.14982300"
+    },
+    {
+      "budget_from_rub": "550000",
+      "budget_to_rub": "560000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149813",
+      "max_deviation_percent": "3.14981300"
+    },
+    {
+      "budget_from_rub": "560000",
+      "budget_to_rub": "570000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149803",
+      "max_deviation_percent": "3.14980300"
+    },
+    {
+      "budget_from_rub": "570000",
+      "budget_to_rub": "580000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149793",
+      "max_deviation_percent": "3.14979300"
+    },
+    {
+      "budget_from_rub": "580000",
+      "budget_to_rub": "590000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149783",
+      "max_deviation_percent": "3.14978300"
+    },
+    {
+      "budget_from_rub": "590000",
+      "budget_to_rub": "600000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149773",
+      "max_deviation_percent": "3.14977300"
+    },
+    {
+      "budget_from_rub": "600000",
+      "budget_to_rub": "610000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149763",
+      "max_deviation_percent": "3.14976300"
+    },
+    {
+      "budget_from_rub": "610000",
+      "budget_to_rub": "620000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149753",
+      "max_deviation_percent": "3.14975300"
+    },
+    {
+      "budget_from_rub": "620000",
+      "budget_to_rub": "630000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149743",
+      "max_deviation_percent": "3.14974300"
+    },
+    {
+      "budget_from_rub": "630000",
+      "budget_to_rub": "640000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149733",
+      "max_deviation_percent": "3.14973300"
+    },
+    {
+      "budget_from_rub": "640000",
+      "budget_to_rub": "650000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149723",
+      "max_deviation_percent": "3.14972300"
+    },
+    {
+      "budget_from_rub": "650000",
+      "budget_to_rub": "660000",
+      "upper_inclusive": false,
+      "max_deviation": "0.03149713",
+      "max_deviation_percent": "3.14971300"
+    },
+    {
+      "budget_from_rub": "660000",
+      "budget_to_rub": "670000",
+      "upper_inclusive": false,
+      "max_deviation": "0.07082257",
+      "max_deviation_percent": "7.08225700"
+    },
+    {
+      "budget_from_rub": "670000",
+      "budget_to_rub": "680000",
+      "upper_inclusive": false,
+      "max_deviation": "0.07082256",
+      "max_deviation_percent": "7.08225600"
+    },
+    {
+      "budget_from_rub": "680000",
+      "budget_to_rub": "690000",
+      "upper_inclusive": false,
+      "max_deviation": "0.07053280",
+      "max_deviation_percent": "7.05328000"
+    },
+    {
+      "budget_from_rub": "690000",
+      "budget_to_rub": "700000",
+      "upper_inclusive": false,
+      "max_deviation": "0.06844339",
+      "max_deviation_percent": "6.84433900"
+    },
+    {
+      "budget_from_rub": "700000",
+      "budget_to_rub": "710000",
+      "upper_inclusive": false,
+      "max_deviation": "0.06419169",
+      "max_deviation_percent": "6.41916900"
+    },
+    {
+      "budget_from_rub": "710000",
+      "budget_to_rub": "720000",
+      "upper_inclusive": false,
+      "max_deviation": "0.06187338",
+      "max_deviation_percent": "6.18733800"
+    },
+    {
+      "budget_from_rub": "720000",
+      "budget_to_rub": "730000",
+      "upper_inclusive": false,
+      "max_deviation": "0.06187328",
+      "max_deviation_percent": "6.18732800"
+    },
+    {
+      "budget_from_rub": "730000",
+      "budget_to_rub": "740000",
+      "upper_inclusive": false,
+      "max_deviation": "0.06187318",
+      "max_deviation_percent": "6.18731800"
+    },
+    {
+      "budget_from_rub": "740000",
+      "budget_to_rub": "750000",
+      "upper_inclusive": false,
+      "max_deviation": "0.06187308",
+      "max_deviation_percent": "6.18730800"
+    },
+    {
+      "budget_from_rub": "750000",
+      "budget_to_rub": "760000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01445771",
+      "max_deviation_percent": "1.44577100"
+    },
+    {
+      "budget_from_rub": "760000",
+      "budget_to_rub": "770000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01399870",
+      "max_deviation_percent": "1.39987000"
+    },
+    {
+      "budget_from_rub": "770000",
+      "budget_to_rub": "780000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01399860",
+      "max_deviation_percent": "1.39986000"
+    },
+    {
+      "budget_from_rub": "780000",
+      "budget_to_rub": "790000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01359533",
+      "max_deviation_percent": "1.35953300"
+    },
+    {
+      "budget_from_rub": "790000",
+      "budget_to_rub": "800000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01359523",
+      "max_deviation_percent": "1.35952300"
+    },
+    {
+      "budget_from_rub": "800000",
+      "budget_to_rub": "810000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01359513",
+      "max_deviation_percent": "1.35951300"
+    },
+    {
+      "budget_from_rub": "810000",
+      "budget_to_rub": "820000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01337761",
+      "max_deviation_percent": "1.33776100"
+    },
+    {
+      "budget_from_rub": "820000",
+      "budget_to_rub": "830000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01337751",
+      "max_deviation_percent": "1.33775100"
+    },
+    {
+      "budget_from_rub": "830000",
+      "budget_to_rub": "840000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01337741",
+      "max_deviation_percent": "1.33774100"
+    },
+    {
+      "budget_from_rub": "840000",
+      "budget_to_rub": "850000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01337731",
+      "max_deviation_percent": "1.33773100"
+    },
+    {
+      "budget_from_rub": "850000",
+      "budget_to_rub": "860000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01341236",
+      "max_deviation_percent": "1.34123600"
+    },
+    {
+      "budget_from_rub": "860000",
+      "budget_to_rub": "870000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01341233",
+      "max_deviation_percent": "1.34123300"
+    },
+    {
+      "budget_from_rub": "870000",
+      "budget_to_rub": "880000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01341223",
+      "max_deviation_percent": "1.34122300"
+    },
+    {
+      "budget_from_rub": "880000",
+      "budget_to_rub": "890000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01341213",
+      "max_deviation_percent": "1.34121300"
+    },
+    {
+      "budget_from_rub": "890000",
+      "budget_to_rub": "900000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01337681",
+      "max_deviation_percent": "1.33768100"
+    },
+    {
+      "budget_from_rub": "900000",
+      "budget_to_rub": "910000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01302213",
+      "max_deviation_percent": "1.30221300"
+    },
+    {
+      "budget_from_rub": "910000",
+      "budget_to_rub": "920000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01291097",
+      "max_deviation_percent": "1.29109700"
+    },
+    {
+      "budget_from_rub": "920000",
+      "budget_to_rub": "930000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01291087",
+      "max_deviation_percent": "1.29108700"
+    },
+    {
+      "budget_from_rub": "930000",
+      "budget_to_rub": "940000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01291077",
+      "max_deviation_percent": "1.29107700"
+    },
+    {
+      "budget_from_rub": "940000",
+      "budget_to_rub": "950000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01275496",
+      "max_deviation_percent": "1.27549600"
+    },
+    {
+      "budget_from_rub": "950000",
+      "budget_to_rub": "960000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01275486",
+      "max_deviation_percent": "1.27548600"
+    },
+    {
+      "budget_from_rub": "960000",
+      "budget_to_rub": "970000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01097597",
+      "max_deviation_percent": "1.09759700"
+    },
+    {
+      "budget_from_rub": "970000",
+      "budget_to_rub": "980000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01056753",
+      "max_deviation_percent": "1.05675300"
+    },
+    {
+      "budget_from_rub": "980000",
+      "budget_to_rub": "990000",
+      "upper_inclusive": false,
+      "max_deviation": "0.01056743",
+      "max_deviation_percent": "1.05674300"
+    },
+    {
+      "budget_from_rub": "990000",
+      "budget_to_rub": "1000000",
+      "upper_inclusive": true,
+      "max_deviation": "0.01056733",
+      "max_deviation_percent": "1.05673300"
+    }
+  ]
+}
