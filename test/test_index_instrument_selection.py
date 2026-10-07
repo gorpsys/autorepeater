@@ -162,6 +162,7 @@ def test_closed_tqtf_fund_is_replaced_by_api_available_tqbr(client, src):
     execution.get_trade_rules.return_value = {
         'new': TradeRules(1, 'rub', True, True, Decimal(100), 100, 0)}
     client.orders.post_order.return_value = invest.PostOrderResponse(
+        instrument_uid='new', direction=invest.OrderDirection.ORDER_DIRECTION_BUY,
         order_id='offline', lots_requested=9, lots_executed=9,
         execution_report_status=invest.OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL)
     engine = AutoRepeater(

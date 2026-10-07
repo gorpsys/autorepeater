@@ -1,6 +1,7 @@
 """Only API rate-limit failures are retried, with unchanged request arguments."""
 import inspect
 import logging
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, call, create_autospec, patch
 from test.test_order_execution import sale_plan
@@ -11,6 +12,8 @@ from t_tech import invest
 from t_tech.invest.services import OrdersService
 
 from autorepeater.order_execution import TInvestOrderExecutor
+from autorepeater.execution import OrderExecutionError
+from autorepeater.order_plan import OrderIntent
 from autorepeater.tinvest_execution_data import _read
 from autorepeater.tinvest_requests import call_api
 
@@ -55,6 +58,7 @@ def test_post_order_retries_keep_one_idempotency_key():
     orders.post_order.side_effect = [
         invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None),
         invest.PostOrderResponse(
+            instrument_uid='X', direction=invest.OrderDirection.ORDER_DIRECTION_SELL,
             order_id='id', lots_requested=10, lots_executed=10, execution_report_status=(
                 invest.OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL))]
     with patch('autorepeater.tinvest_requests.time.sleep') as sleep, patch(
@@ -68,6 +72,34 @@ def test_post_order_retries_keep_one_idempotency_key():
         account_id='dst', instrument_id='X', quantity=10,
         direction=invest.OrderDirection.ORDER_DIRECTION_SELL,
         order_type=invest.OrderType.ORDER_TYPE_BESTPRICE, order_id='request-id')] * 2
+
+
+@pytest.mark.parametrize('code', [StatusCode.DEADLINE_EXCEEDED, StatusCode.UNAVAILABLE])
+def test_post_order_quota_then_failure_preserves_request_and_cause(code, caplog):
+    """Quota retries stop on transport failure with the original submission context."""
+    orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
+    secret = 'private-transport-details'
+    error = invest.RequestError(code, secret, {'token': secret})
+    orders.post_order.side_effect = [
+        invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, secret, None), error,
+        invest.PostOrderResponse(),
+    ]
+    factory = Mock(return_value='request-id')
+    executor = TInvestOrderExecutor(SimpleNamespace(orders=orders), order_id_factory=factory)
+    with patch('autorepeater.tinvest_requests.time.sleep') as sleep:
+        with pytest.raises(OrderExecutionError) as raised:
+            executor.submit_order('dst', OrderIntent('X', 'SELL', 10, 1, {(): Decimal(10)}))
+    assert raised.value.request_id == 'request-id'
+    assert raised.value.__cause__ is error
+    assert factory.mock_calls == [call()]
+    assert sleep.mock_calls == [call(10)]
+    assert orders.mock_calls == [call.post_order(
+        account_id='dst', instrument_id='X', quantity=10,
+        direction=invest.OrderDirection.ORDER_DIRECTION_SELL,
+        order_type=invest.OrderType.ORDER_TYPE_BESTPRICE, order_id='request-id')] * 2
+    assert any(record.levelno == logging.ERROR and 'request_id=request-id' in record.message
+               for record in caplog.records)
+    assert secret not in caplog.text
 
 
 def test_execution_reads_use_shared_quota_wrapper():

@@ -95,6 +95,48 @@ can fund every recipient. It is never assigned to an isolated seller from
 the account cash delta. This receipt field is used by the neutral funding
 protocol and is not an SDK proceeds estimate.
 
+## Broker receipts and request identity
+
+The installed SDK schema (`t-tech-investments==1.51.0`) supplies
+`instrument_uid`, `direction`, `order_id`, `execution_report_status`,
+`lots_requested` and `lots_executed` in both PostOrderResponse and OrderState.
+The common SDK converter copies these response facts into ExecutionReceipt;
+it never fills missing identity from the intent or the submitted request ID.
+UID and broker order ID must be nonempty strings. Direction must be an
+OrderDirection BUY/SELL enum; status must be an OrderExecutionReportStatus
+FILL/REJECTED/CANCELLED/NEW/PARTIALLYFILL enum. Plain numbers, bools, strings,
+UNSPECIFIED and unsupported enum values are rejected. Lot counts must be int,
+excluding bool, with `0 <= lots_executed <= lots_requested`. Missing or malformed
+mandatory fields raise OrderExecutionError with a fixed safe reason.
+Structurally valid facts remain unchanged even when they describe a different
+order: the neutral executor checks them against the intent and stops the pass
+on a mismatch. REJECTED/CANCELLED never become a successful FILL.
+
+The client request ID is generated once after validate_intent, before PostOrder,
+and sent in the request's `order_id` argument. It is local to that submission;
+invalid intents call neither the ID factory nor the SDK. The broker order ID
+comes only from a validated response and is not assumed equal to the request ID.
+INFO links `request_id` and `broker_order_id` with the response UID, side, status
+and lot counts. ExecutionReceipt keeps only the broker ID; SELL polling uses
+that ID without generating a request ID or submitting another order.
+
+On a PostOrder RequestError or malformed response, OrderExecutionError preserves
+the optional keyword-only `request_id` context; existing message-only calls
+remain compatible. The adapter emits ERROR with that same request ID, validated
+intent UID/side/lots and a fixed reason. It excludes RequestError text, raw kwargs,
+malformed field values and SDK repr. A transport RequestError is preserved as
+the exception cause. Malformed GetOrderState responses emit ERROR with the
+requested broker ID and a fixed reason, then propagate OrderExecutionError.
+Propagation keeps the context and cause: CLI stops the current pass and continues
+events, while run_sync/cloud propagate failure without Success. A later event
+may initiate a fresh pass. Programming errors are not caught as broker failures.
+Preserving cause does not sanitize third-party tracebacks; the broader error and
+reporting work in issue #16 is outside this change.
+
+These are local DTO, adapter and lifecycle checks. They do not establish that
+every live response populates the schema, or constitute sandbox/production or
+cloud deployment acceptance; those checks require separate authorization.
+
 INFO diagnostics list loading, portfolio/currency/security/exchange blockers,
 active order IDs/UIDs/statuses/lot counts, expected versus actual quantities,
 submission and verified FILL results, refresh stages and pass result counts.
@@ -112,7 +154,9 @@ unary timeout is 10 seconds; a smaller existing timeout is preserved.
 Streams are not intercepted. The SDK-only call_api wrapper retries unary
 RESOURCE_EXHAUSTED errors every 10 seconds without an attempt cap, until
 success or a different error. All other errors retain the fail-stop behavior.
-PostOrder generates its order_id once, outside the retry loop. Neither
+PostOrder reuses the same client request ID in every quota retry; the ID factory
+runs once outside the retry loop. Deadlines and other errors do not resubmit an
+order, and no cross-process exactly-once guarantee is claimed. Neither
 request arguments nor tokens are logged. The platform invocation timeout
 can still end a retrying cloud call.
 RequestError/DataAccessError become ExecutionDataError with their cause.

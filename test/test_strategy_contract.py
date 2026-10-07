@@ -420,7 +420,8 @@ def configure_filled_sdk(client):
             positions.append(held)
         held.quantity.units += direction * amount
         cash_position().quantity.units -= direction * amount * price
-        return invest.PostOrderResponse(order_id='offline', lots_requested=lots, lots_executed=lots,
+        return invest.PostOrderResponse(instrument_uid=uid, direction=params['direction'],
+                                       order_id='offline', lots_requested=lots, lots_executed=lots,
                                        execution_report_status=invest.OrderExecutionReportStatus.
                                        EXECUTION_REPORT_STATUS_FILL)
     client.orders.post_order.side_effect = fill

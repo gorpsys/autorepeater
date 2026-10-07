@@ -28,6 +28,10 @@ SETTLEMENT_RETRY_INTERVAL = 2
 class OrderExecutionError(Exception):
     """Stop this pass; a submitted order may still execute later."""
 
+    def __init__(self, message: str, *, request_id: str | None = None) -> None:
+        super().__init__(message)
+        self.request_id = request_id
+
 
 @dataclass(frozen=True)
 class ExecutionReceipt:  # pylint: disable=too-many-instance-attributes
