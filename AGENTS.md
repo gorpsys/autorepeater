@@ -232,7 +232,18 @@ Decimal prec28, сравнения строго без epsilon; exact_sum/exact_
 Совместимые дубликаты UID агрегируются без изменения nano B,
 несовместимые отклоняются.
 
-Каждая SELL/BUY имеет один order_id, FILL и requested=executed=intent.lots.
+Каждая SELL/BUY требует FILL и requested=executed=intent.lots.
+SDK-квитанция берёт UID/side/broker order_id/status/лоты только из фактического
+PostOrderResponse/OrderState, без fallback на intent. UID/ID непустые строки,
+direction/status только допустимые SDK enum (не числа/bool/строки),
+лоты int без bool, 0<=executed<=requested. Отсутствующие/повреждённые поля,
+UNSPECIFIED/неизвестные enum дают OrderExecutionError с безопасной причиной;
+REJECTED/CANCELLED не FILL. Корректную форму с чужими фактами отклоняет
+нейтральный исполнитель сверкой с intent; SDK туда не импортируется.
+Request ID создаётся после validate_intent один раз до PostOrder, локально
+на вызов. Невалидный intent не вызывает фабрику/SDK. Request ID не считается
+broker order_id; последний берётся только из ответа. INFO связывает оба ID
+и проверенные факты ответа. ExecutionReceipt не содержит request ID.
 SELL NEW/PARTIALLYFILL с валидными UID/направлением/лотами проверяется по
 broker order_id через OrderExecutor.get_order_state каждые 2s, окно 30s.
 Нельзя повторно отправлять продажу, менять ID или доверять несовпавшему ответу.
@@ -241,8 +252,10 @@ broker order_id через OrderExecutor.get_order_state каждые 2s, окн
 Автоматической отмены нет, уже совершённое не откатывается.
 Исключение: общая SDK-обёртка call_api при RESOURCE_EXHAUSTED ждёт 10 секунд
 и повторяет тот же unary-запрос до успеха или другой ошибки, без лимита
-попыток. PostOrder сохраняет order_id; аргументы и токены не логируются.
+попыток. PostOrder сохраняет тот же request ID в аргументе order_id во всех
+квотных попытках, фабрика вне retry; аргументы и токены не логируются.
 Deadline/прочие ошибки не повторяются. Общий тайм-аут облака остаётся границей.
+Межпроцессная exactly-once гарантия не заявляется.
 После SELL свежие positions/money/caps, BUY перепланируется при той же main.
 После всех SELL FILL отдельно ожидать readiness и совпадения фиксированного
 владения с позициями: чтение каждые 2s в окне 30s, затем WARNING и отложенный BUY.
@@ -258,8 +271,17 @@ Unary interceptor deadline10s, меньший existing timeout сохранит�
 
 ValueError (включая UnsupportedSourceError) данных фатален, без retry;
 DataAccessError/ExecutionDataError сохраняют cause транспорта.
+При RequestError PostOrder или повреждённом ответе OrderExecutionError
+сохраняет keyword-only request_id=None (старые вызовы с message совместимы).
+ERROR адаптера содержит отправленный request ID, проверенные UID/side/лоты
+intent и фиксированную причину, без str(RequestError)/kwargs/SDK repr.
+RequestError сохраняется как cause, контекст не теряется при пробросе;
+broker ID логировать отдельно только из проверенного ответа.
 OrderExecutionError стоп прохода: mainflow продолжает события,
 run_sync/облако пробрасывают, ложного Success нет. Programming errors не маскировать.
+Следующее событие может запустить свежий расчёт, не retry неизвестной заявки.
+Cause не гарантирует очистки стороннего traceback; общий перенос errors/reporting
+из issue #16 не входит в этот контракт.
 Event_accounts непустой tuple уникальных непустых строк без пробелов;
 should_rebalance строго bool, это инициатор проверки, не разрешение сделки.
 Начальная синхронизация до подписки, одно position_events, повтор после конца/

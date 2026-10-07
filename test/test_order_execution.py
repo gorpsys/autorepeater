@@ -11,7 +11,7 @@ import pytest
 from grpc import StatusCode
 from t_tech.invest import OrderDirection, OrderType, OrderExecutionReportStatus
 from t_tech.invest.exceptions import RequestError
-from t_tech.invest import PostOrderResponse
+from t_tech.invest import MoneyValue, OrderState, PostOrderResponse
 from t_tech.invest.services import OrdersService
 
 from autorepeater.execution_data import ExecutionData, ExecutionDataError
@@ -47,9 +47,11 @@ def sale_plan():
 def test_injected_order_ids_are_generated_once_per_submission() -> None:
     """Explicit IDs remain deterministic without patching UUID internals."""
     orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
-    orders.post_order.return_value = PostOrderResponse(
+    orders.post_order.side_effect = [PostOrderResponse(
+        instrument_uid=uid, direction=OrderDirection.ORDER_DIRECTION_SELL,
         order_id='broker-id', lots_requested=10, lots_executed=10,
         execution_report_status=OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL)
+        for uid in ('X', 'Z')]
     factory = Mock(side_effect=['first-id', 'second-id'])
     executor = TInvestOrderExecutor(SimpleNamespace(orders=orders), order_id_factory=factory)
     intents = sale_plan().sells
@@ -79,7 +81,8 @@ def test_injected_order_id_is_reused_when_api_quota_is_exhausted() -> None:
     orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
     orders.post_order.side_effect = [
         RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None),
-        PostOrderResponse(order_id='broker-id', lots_requested=10, lots_executed=10,
+        PostOrderResponse(instrument_uid='X', direction=OrderDirection.ORDER_DIRECTION_SELL,
+                          order_id='broker-id', lots_requested=10, lots_executed=10,
                           execution_report_status=OrderExecutionReportStatus.
                           EXECUTION_REPORT_STATUS_FILL),
     ]
@@ -319,7 +322,7 @@ def test_sdk_order_status_read_preserves_identity_and_counts():
     """Status checks use the broker's ID and do not submit orders or guess proceeds."""
     client = Mock(spec_set=['orders'])
     client.orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
-    client.orders.get_order_state.return_value = SimpleNamespace(
+    client.orders.get_order_state.return_value = OrderState(
         instrument_uid='uid', direction=OrderDirection.ORDER_DIRECTION_SELL, order_id='order',
         execution_report_status=OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_PARTIALLYFILL,
         lots_requested=10, lots_executed=3)
@@ -355,6 +358,7 @@ def test_sdk_enum_conversion_at_boundary():
     client = Mock(spec_set=['orders'])
     client.orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
     client.orders.post_order.return_value = PostOrderResponse(
+        instrument_uid='X', direction=OrderDirection.ORDER_DIRECTION_SELL,
         order_id='id', execution_report_status=(
             OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL),
         lots_requested=10, lots_executed=10)
@@ -378,12 +382,14 @@ def test_programming_error_is_not_masked():
 
 def test_no_fake_receipt_proceeds_or_commission_price_credit():
     """no fake receipt proceeds or commission price credit."""
-    client = Mock()
-    client.orders.post_order.return_value = SimpleNamespace(
+    client = SimpleNamespace(orders=create_autospec(
+        inspect.unwrap(OrdersService), instance=True, spec_set=True))
+    client.orders.post_order.return_value = PostOrderResponse(
+        instrument_uid='X', direction=OrderDirection.ORDER_DIRECTION_SELL,
         order_id='id', execution_report_status=(
             OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL),
-        lots_requested=10, lots_executed=10, executed_order_price=D(500),
-        total_order_amount=D(4990), executed_commission=D(10))
+        lots_requested=10, lots_executed=10, executed_order_price=MoneyValue('rub', 500, 0),
+        total_order_amount=MoneyValue('rub', 4990, 0), executed_commission=MoneyValue('rub', 10, 0))
     assert not TInvestOrderExecutor(client).submit_order('offline', sale_plan().sells[0]).cash
 
 

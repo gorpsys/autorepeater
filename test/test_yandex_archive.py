@@ -114,6 +114,27 @@ def test_default_entrypoint(project):
     assert (project / 'build/yandex-function.zip').is_file()
 
 
+@pytest.mark.parametrize('override', [False, True])
+def test_make_archive_without_python_alias(project, tmp_path, override):
+    """Make uses python3 by default and accepts an explicit interpreter."""
+    repository = Path(__file__).resolve().parents[1]
+    for relative in ('Makefile', 'scripts/build_yandex_archive.py'):
+        shutil.copyfile(repository / relative, project / relative)
+    commands = tmp_path / 'commands'
+    commands.mkdir()
+    arguments = [f'PYTHON={sys.executable}'] if override else []
+    if not override:
+        (commands / 'python3').symlink_to(sys.executable)
+    make = shutil.which('make')
+    assert make is not None
+    result = subprocess.run([make, 'claude-yandex-archive', *arguments], cwd=project,
+                            env={'PATH': str(commands)}, check=False,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    with ZipFile(project / 'build/yandex-function.zip') as archive:
+        assert set(archive.namelist()) == EXPECTED
+
+
 def test_missing_required_file(project):
     """A missing root entry fails rather than producing a silently incomplete bundle."""
     (project / 'handler.py').unlink()

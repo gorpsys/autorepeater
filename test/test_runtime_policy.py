@@ -2,13 +2,21 @@
 from dataclasses import replace
 from decimal import Decimal
 import logging
-from unittest.mock import Mock, create_autospec
+import inspect
+from types import SimpleNamespace
+from unittest.mock import Mock, call, create_autospec
 from contextlib import nullcontext
 
 import pytest
+from grpc import StatusCode
+from t_tech.invest import (
+    OrderDirection, OrderExecutionReportStatus, OrderType, PostOrderResponse, RequestError,
+)
+from t_tech.invest.services import OrdersService
 
 from autorepeater.execution_data import ExecutionData, ExecutionSnapshot, TradeRules
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError, OrderExecutor
+from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.repeater import AutoRepeater
 from autorepeater.strategy_contract import Strategy, validate_strategy
@@ -144,6 +152,126 @@ def test_unknown_execution_stops_only_local_pass(runtime):
         AutoRepeater(strategy, data, execution, executor).mainflow('dst')
     assert executor.submit_order.call_count == 2
     assert execution.get_destination.call_count == 2
+
+
+@pytest.fixture(name='sdk_runtime')
+def fixture_sdk_runtime(runtime):
+    """Real submission/execution/orchestration with strict offline read and SDK ports."""
+    strategy, data, execution, _executor = runtime
+    orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
+    factory = Mock(side_effect=['first-request', 'next-request'])
+    executor = TInvestOrderExecutor(SimpleNamespace(orders=orders), order_id_factory=factory)
+    engine = AutoRepeater(strategy, data, execution, executor)
+    return engine, strategy, data, execution, orders, factory
+
+
+def failed_post_response(code):
+    """Each failure starts with an otherwise valid DTO or a private transport error."""
+    if code is not None:
+        return RequestError(code, 'private-sdk-details', {'token': 'private-sdk-details'})
+    return PostOrderResponse(
+        instrument_uid='stock', direction='private-sdk-details', order_id='broker-first',
+        lots_requested=10, lots_executed=10,
+        execution_report_status=OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL,
+        message='private-sdk-details')
+
+
+def stock_post_call(request_id):
+    """Exact intent and one locally generated ID per fresh pass."""
+    return call.post_order(
+        account_id='dst', instrument_id='stock', quantity=10,
+        direction=OrderDirection.ORDER_DIRECTION_BUY,
+        order_type=OrderType.ORDER_TYPE_BESTPRICE, order_id=request_id)
+
+
+@pytest.mark.parametrize('code', [StatusCode.DEADLINE_EXCEEDED, StatusCode.UNAVAILABLE, None])
+def test_sdk_failure_propagates_through_sync_and_cloud_boundary(
+        sdk_runtime, code, monkeypatch, caplog):
+    """The same adapter error reaches sync and the mocked Runner boundary of handler."""
+    engine, _strategy, data, execution, orders, factory = sdk_runtime
+    failure = failed_post_response(code)
+    orders.post_order.side_effect = [failure]
+    with pytest.raises(OrderExecutionError) as stopped:
+        engine.sync_accounts('dst')
+    assert stopped.value.request_id == 'first-request'
+    assert stopped.value.__cause__ is (failure if code is not None else None)
+    assert orders.mock_calls == [stock_post_call('first-request')]
+    assert factory.mock_calls == [call()]
+    assert data.mock_calls == [call.begin_snapshot()]
+    assert execution.mock_calls == [call.get_destination('dst'),
+                                    call.get_trade_rules('dst', ['stock'])]
+    assert any(record.levelno == logging.ERROR and 'request_id=first-request' in record.message
+               for record in caplog.records)
+    runner = create_autospec(runner_module.Runner, spec_set=True)
+    runner.return_value.run_sync.side_effect = stopped.value
+    prepared = SimpleNamespace(source_display='offline')
+    monkeypatch.setattr(serverless, 'Runner', runner)
+    monkeypatch.setattr(serverless, 'prepare_strategy', Mock(return_value=prepared))
+    monkeypatch.setattr(serverless, 'configure_yc_logging', Mock())
+    with pytest.raises(OrderExecutionError) as cloud:
+        serverless.handler({'queryStringParameters': {
+            'algoritm': 'OFFLINE', 'src': 'source', 'token': 'offline', 'dst': 'dst'}}, None)
+    assert cloud.value is stopped.value
+    assert cloud.value.__cause__ is stopped.value.__cause__
+    assert cloud.value.request_id == 'first-request'
+    assert runner.mock_calls == [call(token='offline', prepared_strategy=prepared, dst='dst'),
+                                 call().run_sync()]
+    assert orders.mock_calls == [stock_post_call('first-request')]
+    assert 'private-sdk-details' not in caplog.text
+
+
+class EndOfReceiptStream(Exception):
+    """Terminate the working CLI stream without adding production exit behavior."""
+
+
+@pytest.mark.parametrize('code', [StatusCode.DEADLINE_EXCEEDED, StatusCode.UNAVAILABLE, None])
+def test_sdk_unknown_result_stops_pass_but_mainflow_processes_next_event(
+        sdk_runtime, code, monkeypatch, caplog):
+    """No blind retry; only a later event starts a fresh pass with a new request ID."""
+    engine, strategy, data, execution, orders, factory = sdk_runtime
+    failure = failed_post_response(code)
+    orders.post_order.side_effect = [failure, PostOrderResponse(
+        instrument_uid='stock', direction=OrderDirection.ORDER_DIRECTION_BUY,
+        order_id='broker-next', lots_requested=10, lots_executed=10,
+        execution_report_status=OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL)]
+    stopped = []
+    sync = engine.sync_accounts
+    def observe_sync(dst):
+        try:
+            return sync(dst)
+        except OrderExecutionError as error:
+            stopped.append(error)
+            raise
+    monkeypatch.setattr(engine, 'sync_accounts', observe_sync)
+    strategy.event_accounts.return_value = ('dst',)
+    strategy.should_rebalance.return_value = True
+    def events(_accounts):
+        assert orders.mock_calls == [stock_post_call('first-request')]
+        assert factory.mock_calls == [call()]
+        assert len(stopped) == 1
+        assert stopped[0].request_id == 'first-request'
+        assert stopped[0].__cause__ is (failure if code is not None else None)
+        yield PositionEvent(True, 'dst', (), (), 'offline')
+        raise EndOfReceiptStream()
+    data.position_events.side_effect = events
+    with caplog.at_level(logging.INFO, logger='tinkoffBot'), pytest.raises(EndOfReceiptStream):
+        engine.mainflow('dst')
+    assert len(stopped) == 1
+    assert orders.mock_calls == [stock_post_call('first-request'), stock_post_call('next-request')]
+    assert factory.mock_calls == [call(), call()]
+    assert data.mock_calls == [call.begin_snapshot(), call.position_events(('dst',)),
+                               call.begin_snapshot()]
+    assert execution.mock_calls == [call.get_destination('dst'),
+                                    call.get_trade_rules('dst', ['stock'])] * 2
+    strategy.should_rebalance.assert_called_once_with(
+        PositionEvent(True, 'dst', (), (), 'offline'), 'dst')
+    assert any(record.levelno == logging.ERROR and 'request_id=first-request' in record.message
+               for record in caplog.records)
+    assert any(record.levelno == logging.ERROR and 'Current pass stopped' in record.message
+               for record in caplog.records)
+    assert any(record.levelno == logging.INFO and 'request_id=next-request' in record.message
+               and 'broker_order_id=broker-next' in record.message for record in caplog.records)
+    assert 'private-sdk-details' not in caplog.text
 
 
 @pytest.mark.parametrize('flag', ['-t', '--threshold'])
