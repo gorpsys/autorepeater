@@ -3,6 +3,8 @@ source = .
 relative_files = True
 omit =
     test/*
+    e2e/conftest.py
+    e2e/test_sandbox.py
     build/*
     .venv*/*
     venv/*

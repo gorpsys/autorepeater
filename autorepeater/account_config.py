@@ -40,8 +40,9 @@ def validate_account_config(data: object) -> AccountConfig:
     if not isinstance(name, str) or not name or any(char.isspace() for char in name):
         raise ValueError('account config.name: expected a nonempty name without whitespace')
     source = data.get('source_account_id')
-    if not isinstance(source, str) or not source.isascii() or not source.isdecimal():
-        raise ValueError('account config.source_account_id: expected ASCII digits')
+    if not isinstance(source, str) or not source or any(char.isspace() for char in source):
+        raise ValueError(
+            'account config.source_account_id: expected a nonempty string without whitespace')
     return AccountConfig(name, source, _fraction(data, 'reserve'),
                          _fraction(data, 'allocation_drift_limit'))
 
