@@ -93,7 +93,7 @@ class TInvestStrategyData:
         """Return an ordered portfolio snapshot for one account."""
         try:
             response = call_api(self._client.operations.get_portfolio,
-                account_id=account_id)
+                                account_id=account_id)
         except RequestError as error:
             raise _transport_error(error) from error
 
@@ -129,7 +129,7 @@ class TInvestStrategyData:
         if instrument_type not in self._catalogs:
             try:
                 response = call_api(methods[instrument_type],
-                    instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
+                                    instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
             except RequestError as error:
                 raise _transport_error(error) from error
             catalog = {}
@@ -150,7 +150,7 @@ class TInvestStrategyData:
         if info is None:
             try:
                 response = call_api(self._client.instruments.get_instrument_by,
-                    id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
+                                    id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
             except RequestError as error:
                 raise _transport_error(error) from error
             instrument = response.instrument
@@ -169,7 +169,7 @@ class TInvestStrategyData:
         """Return SDK quote records in their original order."""
         try:
             response = call_api(self._client.market_data.get_last_prices,
-                instrument_id=list(uids))
+                                instrument_id=list(uids))
         except RequestError as error:
             raise _transport_error(error) from error
 

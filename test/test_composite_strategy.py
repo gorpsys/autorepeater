@@ -20,7 +20,7 @@ from autorepeater.strategy_contract import (
 )
 from autorepeater.strategy_data import DataAccessError, PositionEvent, StrategyData
 from autorepeater.strategy_plan import (AllocationProfile, StrategyContext, StrategyDecision,
-                                       StrategyPlan, TradeMode)
+                                        StrategyPlan, TradeMode)
 
 
 def make_composite(children, weights=None, name='root', algorithms=None, sources=None):
@@ -194,8 +194,8 @@ def test_uid_sums_fractional_zero_and_prices_only_from_contributors():
 
 
 @pytest.mark.parametrize('budget', [None, True, 1, 1.0, '1', Decimal('NaN'), Decimal('sNaN'),
-                                  Decimal('Infinity'), Decimal('-Infinity'),
-                                  Decimal('0'), Decimal('-1')])
+                                    Decimal('Infinity'), Decimal('-Infinity'),
+                                    Decimal('0'), Decimal('-1')])
 def test_invalid_composite_budget_never_calls_child_build(budget):
     """Reject invalid full budgets before allocating anything to children."""
     child = mock_child()
@@ -247,7 +247,7 @@ def test_late_invalid_target_is_not_hidden_by_early_empty(bad_target, message):
 
 @pytest.mark.parametrize('phase', ['load_snapshot', 'build_plan'])
 @pytest.mark.parametrize('error', [DataAccessError('read failed'), ValueError('bad data'),
-                                  RuntimeError('programming error')])
+                                   RuntimeError('programming error')])
 def test_child_errors_propagate_without_empty_fallback(phase, error):
     """Transport, data and programming failures retain identity and cause."""
     early, late = mock_child(), mock_child()
@@ -283,7 +283,7 @@ def test_event_accounts_union_order_and_all_child_decisions():
 
 
 @pytest.mark.parametrize('accounts', [None, [], ['dst'], (), ('',), ('bad id',),
-                                    (1,), (True,), ('dst', 'dst'), ('dst', [])])
+                                      (1,), (True,), ('dst', 'dst'), ('dst', [])])
 def test_invalid_child_accounts_are_checked_before_union(accounts):
     """Duplicates, bad types and empty children cannot disappear through flattening."""
     early, late = mock_child(), mock_child()

@@ -2,7 +2,7 @@
 from dataclasses import replace
 from decimal import Decimal
 import logging
-from test.test_autorepeater import client_tinvest  # pylint: disable=unused-import
+from test.test_autorepeater import client_tinvest
 from unittest.mock import call, create_autospec
 
 import pytest
@@ -17,6 +17,8 @@ from autorepeater.strategy_data import (
 )
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
 
+__all__ = ['client_tinvest']
+
 
 def selection_case(rows):
     """Use a real one-ticker config with explicit SDK-independent candidate metadata."""
@@ -28,7 +30,7 @@ def selection_case(rows):
     by_uid = {item.uid: item for item in rows}
     data.get_instrument.side_effect = by_uid.__getitem__
     data.get_last_prices.side_effect = lambda uids: [PriceQuote(uid, Decimal('10'), None)
-                                                    for uid in uids]
+                                                     for uid in uids]
     return strategy, data
 
 

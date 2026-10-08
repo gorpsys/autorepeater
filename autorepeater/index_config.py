@@ -10,6 +10,7 @@ from autorepeater import reporting
 from autorepeater.config_catalog import Candidate, discover_candidates, select_candidate
 from autorepeater.strategy_contract import UnsupportedSourceError
 
+
 @dataclass
 class IndexInstrument:
     """Reference data; weights are percentages, coefficients are fractions."""

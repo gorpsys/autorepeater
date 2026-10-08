@@ -102,6 +102,7 @@ from scripts import check_imoex_strategy as calibration
 
 pytestmark = pytest.mark.usefixtures('named_accounts')
 
+
 def account_strategy(src, reserve='0.01'):
     """Construct a strategy from explicit settings without filesystem I/O."""
     return AccountStrategy(PreparedAccountSource(
@@ -473,12 +474,6 @@ def test_index_strategy_uses_own_data_port_and_preserves_query_order(index_sdk_c
     ]
 
 
-
-
-
-
-
-
 @pytest.fixture(name='client')
 def client_tinvest():
     """SDK services enforce signatures; response data stays explicit."""
@@ -609,8 +604,6 @@ def test_client_empty_portfolio(client):
     assert response.positions == []
 
 
-
-
 def test_set_debug(auto_repeater):
     """test_set_debug"""
     # Проверка включения отладки
@@ -630,8 +623,6 @@ def test_set_debug(auto_repeater):
         auto_repeater.set_debug(1)  # Должно быть bool
     with pytest.raises(TypeError):
         auto_repeater.set_debug("True")  # Должно быть bool
-
-
 
 
 @pytest.mark.parametrize(
@@ -743,16 +734,6 @@ def test_account_strategy_basic_target(client):
     assert target.prices == {'1': Decimal('1.2')}
 
 
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize('flag', ['-r', '--reserve'])
 def test_cli_rejects_removed_reserve(flag, monkeypatch):
     """Removed overrides are rejected before source preparation or client creation."""
@@ -772,10 +753,6 @@ def test_calibration_rejects_removed_reserve():
             calibration.main(['--reserve', '0'])
         assert error.value.code == 2
         client.assert_not_called()
-
-
-
-
 
 
 @pytest.fixture(name='fractional_portfolios')
@@ -997,16 +974,6 @@ def test_direct_repeater_rejects_incomplete_strategy_before_use(client, missing_
     assert client.mock_calls == []
 
 
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize('quantities, prices', [
     ({}, {}),
     ({'1': Decimal('2'), '2': Decimal('0')}, {'1': Decimal('1.25'), '2': Decimal('0')}),
@@ -1073,12 +1040,6 @@ def test_validate_target_rejects_nonstring_reason(reason):
     """Diagnostics do not silently accept arbitrary objects."""
     with pytest.raises(ValueError, match='empty_reason'):
         validate_target(TargetPortfolio({}, {}, reason))
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize('src', ['4', '0004', '0', '123456789012345678901234567890'])
@@ -1268,7 +1229,14 @@ def test_account_strategy_load_error(client, caplog):
 
     assert exc_info.value.__cause__ is error
     assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
-    assert [record.getMessage() for record in caplog.records] == ['src account']
+    assert len(caplog.records) == 2
+    assert caplog.records[0].getMessage() == 'src account'
+    failure = caplog.records[1]
+    assert failure.levelno == logging.ERROR
+    assert failure.msg == 'API request failed: method=%s status=%s elapsed_seconds=%.3f'
+    assert failure.args[:2] == ('MagicMock', 'UNAVAILABLE')
+    assert failure.args[2] >= 0
+    assert 'source unavailable' not in caplog.text
 
 
 @pytest.mark.parametrize('positions', [
@@ -1319,16 +1287,6 @@ def test_account_strategy_event_predicate(client, position, expected, caplog):
     assert caplog.records == []
 
 
-
-
-
-
-
-
-
-
-
-
 @pytest.fixture(name='rotation_portfolios')
 def rotation_portfolios_fixture(client):
     """Equal-value portfolios require selling 100 shares before buying 50 ETFs."""
@@ -1345,34 +1303,6 @@ def rotation_portfolios_fixture(client):
         PortfolioResponse(positions=list(dst_positions.values())),
     ]
     return src_positions, dst_positions
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_print_all_portfolios(client, caplog):
@@ -1424,10 +1354,6 @@ def test_get_portfolio_error(client, caplog):
     assert caplog.records == []
 
 
-
-
-
-
 def test_skipped_event_reporting_uses_only_strategy_diagnostics(caplog):
     """Skipped events keep DTO diagnostics without the obsolete raw-event API."""
     event = PositionEvent(False, '', (), (), 'skipped event diagnostic')
@@ -1437,8 +1363,6 @@ def test_skipped_event_reporting_uses_only_strategy_diagnostics(caplog):
     assert caplog.messages == ['skipped event diagnostic']
     assert [record.levelno for record in caplog.records] == [logging_config.IMPORTANT]
     assert not hasattr(reporting, 'print_skipped_event')
-
-
 
 
 @pytest.mark.parametrize('method', ['run', 'run_sync'])
@@ -1470,10 +1394,6 @@ def test_runner_reporting_integration(method, client, caplog):
     client.orders.post_order.assert_not_called()
 
 
-
-
-
-
 @pytest.mark.parametrize('method', ['run', 'run_sync'])
 @pytest.mark.parametrize('src, message', [
     (None, 'src is required'), ('', 'src is required'), (' \t', 'src is required'),
@@ -1490,10 +1410,6 @@ def test_runner_invalid_source_before_client(method, src, message, client):
             getattr(runner, method)()
         sdk_client.assert_not_called()
     assert client.mock_calls == []
-
-
-
-
 
 
 @pytest.fixture(name='invest_environment', autouse=True)
@@ -1534,8 +1450,6 @@ def named_strategy_factory_fixture(client, target_strategy, monkeypatch):
         TestException(),
     ]
     return factory
-
-
 
 
 @pytest.mark.parametrize('has_token', [False, True])
@@ -1688,6 +1602,7 @@ def test_cloud_archive(tmp_path):
         [sys.executable, '-I', '-c', '''
 import os
 import sys
+import sysconfig
 from collections import Counter
 from decimal import Decimal
 from pathlib import Path
@@ -1696,7 +1611,11 @@ from unittest.mock import Mock, create_autospec, patch
 extracted, repository = map(Path, sys.argv[1:])
 assert not Path.cwd().is_relative_to(repository)
 assert not Path.cwd().is_relative_to(extracted)
-assert all(not Path(path).resolve().is_relative_to(repository) for path in sys.path)
+dependency_paths = {Path(sysconfig.get_path(key)).resolve() for key in ('purelib', 'platlib')}
+source_paths = [path for path in sys.path
+                if Path(path).resolve().is_relative_to(repository)
+                and Path(path).resolve() not in dependency_paths]
+assert not source_paths, ('application source leaked onto sys.path', source_paths)
 sys.path.insert(0, str(extracted))
 with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbidden')) as client, \\
         patch('grpc.secure_channel', side_effect=AssertionError('gRPC forbidden')) as channel, \\
@@ -2335,8 +2254,6 @@ def test_index_event_predicate(client, index_sdk_config, position, expected, cap
     assert caplog.records == []
 
 
-
-
 @pytest.fixture(name='index_launch')
 def fixture_index_launch(client, tmp_path, index_config_data, invest_environment):
     """Real index launches use a single affordable share and a destination to rotate."""
@@ -2383,10 +2300,6 @@ def fixture_index_launch(client, tmp_path, index_config_data, invest_environment
     return invest_environment
 
 
-
-
-
-
 def test_index_config_success(tmp_path, index_config_data):
     """Preserve every reference field as Decimal without reapplying coefficients."""
     config = load_index_config(write_index_config(tmp_path, index_config_data))
@@ -2401,7 +2314,7 @@ def test_index_config_success(tmp_path, index_config_data):
             reference_weight=Decimal('0.25'),
             reference_index_capitalization=Decimal('13867407050'),
         )],
-    allocation_drift_limits=(AllocationDriftRange(Decimal('0'), None, False, Decimal('0')),))
+        allocation_drift_limits=(AllocationDriftRange(Decimal('0'), None, False, Decimal('0')),))
     assert isinstance(config.max_lot_weight_error, Decimal)
     assert config.min_position_value == Decimal(0)
     assert config.reserve == Decimal('0.01')
@@ -2627,7 +2540,7 @@ def index_calculation_case(rows, threshold='0.05'):
     snapshot = {ticker: IndexQuote(f'uid-{ticker}', Decimal(price), lot)
                 for ticker, _, price, lot in rows}
     return IndexConfig('IMOEX', Decimal(threshold), instruments, reserve=Decimal('0.01'),
-        allocation_drift_limits=(
+                       allocation_drift_limits=(
             AllocationDriftRange(Decimal('0'), None, False, Decimal('0')),)), snapshot
 
 
@@ -2733,8 +2646,6 @@ def fixture_single_fund(client, request):
                           quantity=Quotation(240, 0), current_price=MoneyValue('rub', 1, 0)),
     ])
     return strategy
-
-
 
 
 @pytest.mark.parametrize('single_fund', ['GOLD', 'OBLG', 'TMON'], indirect=True)
@@ -2961,7 +2872,7 @@ def test_index_calculation_order_and_invariants(budget):
     result = calculate_index_target(config, snapshot, budget)
     reversed_config = IndexConfig(
         config.name, config.max_lot_weight_error, config.instruments[::-1], reserve=config.reserve,
-            allocation_drift_limits=(
+        allocation_drift_limits=(
                 AllocationDriftRange(Decimal('0'), None, False, Decimal('0')),))
     reversed_snapshot = dict(reversed(list(snapshot.items())))
     assert calculate_index_target(reversed_config, reversed_snapshot, budget) == result
@@ -2997,7 +2908,7 @@ def test_index_calculation_incomplete_snapshot():
 
 
 @pytest.mark.parametrize('price', [Decimal('0'), Decimal('-1'), Decimal('NaN'), Decimal('sNaN'),
-                                  Decimal('Infinity'), Decimal('-Infinity'), None, '1', 1, 1.0])
+                                   Decimal('Infinity'), Decimal('-Infinity'), None, '1', 1, 1.0])
 def test_index_calculation_invalid_price(price):
     """Every constituent needs a positive finite Decimal price before allocation."""
     config, snapshot = index_calculation_case([('A', '1', '1', 1)])

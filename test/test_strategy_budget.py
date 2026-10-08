@@ -66,8 +66,8 @@ def test_index_leaf_reserves_gross_once(reserve, quantity):
 
 
 @pytest.mark.parametrize('budget', [Decimal('0'), Decimal('-1'), Decimal('NaN'),
-                                   Decimal('sNaN'), Decimal('Infinity'), Decimal('-Infinity'),
-                                   100, True, '100', None])
+                                    Decimal('sNaN'), Decimal('Infinity'), Decimal('-Infinity'),
+                                    100, True, '100', None])
 def test_index_leaf_keeps_budget_errors(budget):
     """Invalid gross budgets still fail with a descriptive ValueError before snapshot access."""
     config, _ = single_index('0.1')

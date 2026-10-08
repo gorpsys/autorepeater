@@ -240,6 +240,22 @@ def _allocate_lots(capitalizations: dict[str, Decimal], snapshot: dict[str, Inde
     }
 
 
+def _exclude_allocation_tail(allocations: dict[str, IndexAllocation],
+                             candidates: dict[str, Decimal], max_error: Decimal) -> None:
+    """Record the first failed allocation and permanently remove its entire suffix."""
+    cut = False
+    for ticker, allocation in allocations.items():
+        if cut:
+            allocation.exclusion_reason = 'prefix_tail'
+        elif allocation.lots == 0:
+            allocation.exclusion_reason = 'zero_lots'
+        elif allocation.ideal_lots < 1 and allocation.error > max_error:
+            allocation.exclusion_reason = 'weight_error'
+        if allocation.exclusion_reason:
+            cut = True
+            del candidates[ticker]
+
+
 def calculate_index_target(config: IndexConfig, snapshot: dict[str, IndexQuote],
                            budget: Decimal) -> IndexCalculation:
     """Allocate an affordable capitalization prefix and renormalize after suffix cuts.
@@ -267,17 +283,7 @@ def calculate_index_target(config: IndexConfig, snapshot: dict[str, IndexQuote],
     while candidates:
         allocations = _allocate_lots(candidates, snapshot, budget)
         passes.append(allocations)
-        cut = False
-        for ticker, allocation in allocations.items():
-            if cut:
-                allocation.exclusion_reason = 'prefix_tail'
-            elif allocation.lots == 0:
-                allocation.exclusion_reason = 'zero_lots'
-            elif allocation.ideal_lots < 1 and allocation.error > config.max_lot_weight_error:
-                allocation.exclusion_reason = 'weight_error'
-            if allocation.exclusion_reason:
-                cut = True
-                del candidates[ticker]
+        _exclude_allocation_tail(allocations, candidates, config.max_lot_weight_error)
         # Each unsuccessful pass shortens the prefix; excluded rows never return.
         if len(candidates) == len(allocations):
             target = TargetPortfolio(

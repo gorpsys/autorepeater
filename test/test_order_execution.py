@@ -27,6 +27,7 @@ from autorepeater import execution as execution_module
 def fixture_clock(monkeypatch):
     """Deterministic polling without real sleeps or network requests."""
     state = SimpleNamespace(now=0)
+
     def advance(seconds):
         state.now += seconds
     sleeper = Mock(side_effect=advance)
@@ -480,8 +481,8 @@ def test_fresh_read_transport_stops_after_already_filled_sales():
 
 
 @pytest.mark.parametrize('fresh', [destination({'A': D(2)}, cash='0'),
-                                  replace(destination(), limits_ready=False),
-                                  replace(destination(), active_orders=('pending',))])
+                                   replace(destination(), limits_ready=False),
+                                   replace(destination(), active_orders=('pending',))])
 def test_next_buy_defers_if_money_or_readiness_changes(fresh):
     """next buy defers if money or readiness changes."""
     plan = build_order_plan(leaf(target={'A': D(2), 'B': D(2)}), destination(),

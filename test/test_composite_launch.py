@@ -7,7 +7,7 @@ import sys
 from contextlib import nullcontext
 from decimal import Decimal
 from test.test_strategy_contract import EndOfTestStream, pure_plan_target
-from test.test_strategy_contract import fixture_launch  # pylint: disable=unused-import
+from test.test_strategy_contract import fixture_launch
 from unittest.mock import ANY, Mock, call, patch
 
 import pytest
@@ -24,6 +24,8 @@ from autorepeater.strategy_data import (
     DataAccessError, InstrumentInfo, InstrumentMatch, InstrumentType, MoneyBlocking,
     PositionEvent, PriceQuote,
 )
+
+__all__ = ['fixture_launch']
 
 
 @pytest.fixture(name='catalog')
@@ -81,7 +83,7 @@ def fixture_execution(launch, monkeypatch):
     client.instruments.find_instrument.side_effect = lambda query: invest.FindInstrumentResponse(
         instruments=[invest.InstrumentShort(uid=query, ticker='ONE', name='One')])
     data.get_last_prices.side_effect = lambda uids: [PriceQuote(uid, Decimal('2'), None)
-                                                    for uid in uids]
+                                                     for uid in uids]
     for name in ('ALGORITM', 'SRC_ACCOUNT', 'DST_ACCOUNT', 'INVEST_TOKEN', 't_token'):
         monkeypatch.delenv(name, raising=False)
     return client, data, prepare, create, sdk, adapter
@@ -153,7 +155,7 @@ def test_unified_target_and_debug(execution, debug):
     """Debug computes the same bounded physical intents without any submission."""
     client, data, *_ = execution
     runner = runner_module.Runner('test-token', strategies.prepare_strategy('COMPOSITE', 'ROOT'),
-                                 'dst', runner_module.RunnerParams(debug))
+                                  'dst', runner_module.RunnerParams(debug))
     snapshot = runner.strategy.load_snapshot(data)
     assert pure_plan_target(runner.strategy, snapshot, Decimal('100')) == TargetPortfolio(
         {'uid': Decimal('24.90'), 'other': Decimal('12.25')},
@@ -169,6 +171,7 @@ def test_nontrading_shared_uid_keeps_goal_but_has_no_order(execution):
     """Trading status is enforced after composition by the existing executor."""
     client, *_ = execution
     status = client.market_data.get_trading_status.side_effect
+
     def unavailable(instrument_id):
         response = status(instrument_id)
         if instrument_id == 'uid':
@@ -234,7 +237,7 @@ def test_invalid_child_contract_before_client(catalog, execution):
     client, _, _, _, sdk, _ = execution
     catalog('ROOT', [('ACCOUNT', '00123', '0.5'), ('BROKEN', 'opaque', '0.5')])
     strategies.register_algorithm('BROKEN', AlgorithmDefinition(lambda src, context: src,
-                                                               lambda prepared: object()))
+                                                                lambda prepared: object()))
     prepared = strategies.prepare_strategy('COMPOSITE', 'ROOT')
     with pytest.raises(TypeError, match='load_snapshot'):
         runner_module.Runner('test-token', prepared, 'dst').run_sync()
@@ -306,6 +309,7 @@ def test_single_stream_recovery_uses_same_tree(execution, failure):
         from grpc import StatusCode  # pylint: disable=import-outside-toplevel
         fill = client.orders.post_order.side_effect
         attempts = 0
+
         def fail_once(**params):
             nonlocal attempts
             attempts += 1
@@ -409,7 +413,7 @@ def test_builtin_balanced_default_runs_actual_engine(execution, monkeypatch, eve
     data.find_instruments.side_effect = find
     data.get_instrument.side_effect = lambda uid: info(uid.removeprefix('uid-'))
     data.get_last_prices.side_effect = lambda uids: [PriceQuote(uid, Decimal('10'), None)
-                                                    for uid in uids]
+                                                     for uid in uids]
     result = cloud.handler(event, None)
     assert result['body'] == 'Success sync, BALANCED dst!'
     orders_sent = client.orders.post_order.call_args_list

@@ -59,7 +59,8 @@ class TInvestOrderExecutor:  # pylint: disable=too-few-public-methods
         validate_intent(intent)
         request_id = str(self.order_id_factory())
         try:
-            response = call_api(self.client.orders.post_order,
+            response = call_api(
+                self.client.orders.post_order,
                 account_id=account_id, instrument_id=intent.uid, quantity=intent.lots,
                 direction=(OrderDirection.ORDER_DIRECTION_BUY if intent.side == 'BUY'
                            else OrderDirection.ORDER_DIRECTION_SELL),

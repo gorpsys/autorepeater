@@ -19,7 +19,6 @@ from autorepeater.purchase_plan import (
 LOGGER = logging.getLogger('tinkoffBot')
 
 
-
 @dataclass(frozen=True)
 class OrderPlan:  # pylint: disable=too-many-instance-attributes
     """One pass, including fixed ownership and initial spending permissions."""
@@ -86,16 +85,9 @@ def allocate_money(amount: Decimal, limits: dict[tuple[int, ...], Decimal]
     return dict(zip(paths, parts))
 
 
-def _validate_inputs(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
-                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
-                     marks: dict[str, Decimal], rules: dict[str, TradeRules]) -> None:
-    # pylint: disable=too-many-branches
-    validate_plan(strategy)
-    validate_map(snapshot.quantities, 'destination quantities')
-    validate_map(snapshot.available_quantities, 'free quantities')
-    validate_map(snapshot.available_cash, 'available cash')
-    validate_map(marks, 'marks')
-    validate_rules(rules)
+def _validate_ownership(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                        ownership: dict[tuple[int, ...], dict[str, Decimal]]) -> set[str]:
+    """Every physical quantity must belong to exactly the declared occurrence pool."""
     paths = {node.path for node in nodes(strategy) if node.unassigned or not node.children}
     if set(ownership) != paths:
         raise ValueError('ownership paths must match leaves/unassigned occurrences')
@@ -107,6 +99,13 @@ def _validate_inputs(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
         owned = exact_sum(quantities.get(uid, ZERO) for quantities in ownership.values())
         if owned != snapshot.quantities.get(uid, ZERO):
             raise ValueError(f'ownership does not conserve destination UID {uid}')
+    return uids
+
+
+def _validate_target_marks(strategy: StrategyPlan,
+                           ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                           marks: dict[str, Decimal]) -> None:
+    """Check unassigned ownership and valuation for every node before any intent."""
     for node in nodes(strategy):
         for uid, quantity in node.unassigned.items():
             if ownership[node.path].get(uid, ZERO) < quantity:
@@ -116,11 +115,44 @@ def _validate_inputs(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                 raise ValueError(f'marks missing target UID {uid}')
             if marks[uid] <= 0 < node.target.quantities[uid]:
                 raise ValueError(f'positive mark required for target UID {uid}')
+
+
+def _validate_inputs(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                     marks: dict[str, Decimal], rules: dict[str, TradeRules]) -> None:
+    validate_plan(strategy)
+    validate_map(snapshot.quantities, 'destination quantities')
+    validate_map(snapshot.available_quantities, 'free quantities')
+    validate_map(snapshot.available_cash, 'available cash')
+    validate_map(marks, 'marks')
+    validate_rules(rules)
+    uids = _validate_ownership(strategy, snapshot, ownership)
+    _validate_target_marks(strategy, ownership, marks)
     for uid in uids:
         if uid not in marks:
             raise ValueError(f'marks missing destination UID {uid}')
         if marks[uid] <= 0 < snapshot.quantities.get(uid, ZERO):
             raise ValueError(f'positive mark required for destination UID {uid}')
+
+
+def _sale_capacities(strategy: StrategyPlan,
+                     ownership: dict[tuple[int, ...], dict[str, Decimal]], uid: str
+                     ) -> tuple[dict[tuple[int, ...], Decimal], dict[tuple[int, ...], Decimal]]:
+    """Only unassigned holdings and rebalance-authorized leaf excess may be sold."""
+    capacities = {}
+    deltas = {}
+    for node in nodes(strategy):
+        held = ownership.get(node.path, {}).get(uid, ZERO)
+        unassigned = node.unassigned.get(uid, ZERO)
+        if unassigned:
+            capacities[node.path] = unassigned
+            deltas[node.path] = unassigned
+        if not node.children and node.decision.mode == TradeMode.REBALANCE:
+            delta = max(ZERO, difference(held, node.target.quantities.get(uid, ZERO)))
+            if delta:
+                capacities[node.path] = held
+                deltas[node.path] = delta
+    return capacities, deltas
 
 
 def sale_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
@@ -136,19 +168,7 @@ def sale_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
             LOGGER.info('Defer SELL UID %s: currency or API/BESTPRICE unavailable', uid)
             continue
         excess = max(ZERO, difference(current, strategy.target.quantities.get(uid, ZERO)))
-        capacities = {}
-        deltas = {}
-        for node in nodes(strategy):
-            held = ownership.get(node.path, {}).get(uid, ZERO)
-            unassigned = node.unassigned.get(uid, ZERO)
-            if unassigned:
-                capacities[node.path] = unassigned
-                deltas[node.path] = unassigned
-            if not node.children and node.decision.mode == TradeMode.REBALANCE:
-                delta = max(ZERO, difference(held, node.target.quantities.get(uid, ZERO)))
-                if delta:
-                    capacities[node.path] = held
-                    deltas[node.path] = delta
+        capacities, deltas = _sale_capacities(strategy, ownership, uid)
         delta = min(excess, exact_sum(deltas.values()))
         with localcontext() as context:
             context.prec = max(28, len(delta.as_tuple().digits) + 4)

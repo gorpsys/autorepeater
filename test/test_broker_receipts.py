@@ -314,6 +314,7 @@ def trading_case():
 def fixture_clock(monkeypatch):
     """Restore production polling bounds locally and advance time without waiting."""
     state = SimpleNamespace(now=0)
+
     def advance(seconds):
         state.now += seconds
     sleeper = Mock(side_effect=advance)
@@ -410,7 +411,7 @@ def test_matching_pending_sale_polls_broker_id_then_buys(status, executed, clock
     assert [(item.uid, item.side, item.order_id) for item in result] == [
         ('expected-uid', 'SELL', 'broker-id'), ('buy-uid', 'BUY', 'buy-broker-id')]
     assert orders.mock_calls == [expected_call('submit_order'), expected_call('get_order_state'),
-                                call.post_order(
+                                 call.post_order(
                                     account_id='dst', instrument_id='buy-uid', quantity=2,
                                     direction=BUY, order_type=OrderType.ORDER_TYPE_BESTPRICE,
                                     order_id='request-id')]

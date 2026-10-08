@@ -117,7 +117,7 @@ def _account_cases(manifest: dict[str, Any], capture: dict[str, Any], repetition
                               for uid in weights}
                     lots = {uid: capture['snapshot'][uid]['lot'] for uid in weights}
                     source = {uid: D(max(1, round(D(10000000) * weight / weight_sum
-                                                / prices[uid] / lots[uid]))) * lots[uid]
+                                                  / prices[uid] / lots[uid]))) * lots[uid]
                               for uid, weight in weights.items()}
                     initial = strategy.build_target(account_snapshot(source, prices), D(nominal))
                     current = {uid: D(round(initial.quantities[uid] / lots[uid])) * lots[uid]
@@ -342,7 +342,7 @@ def protected_shared_sales(plan):
                              decision=replace(child.decision,
                                               mode=mode, redistribution_allowed=False))
                      for child, uid, mode in zip(plan.children, ('a', 'b'),
-                                                (TradeMode.REBALANCE, TradeMode.BUY_ONLY)))
+                                                 (TradeMode.REBALANCE, TradeMode.BUY_ONLY)))
     plan = replace(plan, children=children,
                    target=TargetPortfolio({'a': D(1), 'b': D(1)}, {'a': D(10), 'b': D(10)}))
     model = ModelExecution({'x': D(10)}, {'x': D(10), 'a': D(10), 'b': D(10)},
@@ -381,13 +381,13 @@ def composite_acceptance():  # pylint: disable=too-many-locals
                                          child_snapshot))
     nested_plan = nested.build_plan(nested_snapshot, context(nested, nested_snapshot, D(1000)))
     unassigned_model = ModelExecution({'unknown': D(100)},
-                                     {'a': D(10), 'unknown': D(10)}, {'a': 1, 'unknown': 1}, ZERO)
+                                      {'a': D(10), 'unknown': D(10)}, {'a': 1, 'unknown': 1}, ZERO)
     unfunded = model_plan(first, snap_a, unassigned_model)
     owner_a, owner_snapshot_a = model_leaf(('x', 'a'), limit='.99')
     owner_b, owner_snapshot_b = model_leaf(('x', 'b'), limit='.99')
     # X exposures 1/2 and 1/4 give claims .30/.10 at parent weights .6/.4.
     owner_b.config.instruments[1] = replace(owner_b.config.instruments[1],
-                                           reference_index_capitalization=D(300))
+                                            reference_index_capitalization=D(300))
     shared = compose((owner_a, owner_b), ('.6', '.4'))
     shared_snapshot = CompositeSnapshot((owner_snapshot_a, owner_snapshot_b))
     positions = (entry('x', D(10), D(10)),)
@@ -400,7 +400,7 @@ def composite_acceptance():  # pylint: disable=too-many-locals
         shared_snapshot, context(shared, shared_snapshot, D(1000), positions))
     return {'drift_budgets': [str(child.budget.quantize(D(1))) for child in plans[0].children],
             'capital_shortage_budgets': [str(child.budget.quantize(D(1)))
-                                        for child in plans[1].children],
+                                         for child in plans[1].children],
             'reserve_only_repeated_sales': reserve_sales,
             'reserve_restored_with_deposit': model.cash >= floor,
             'reserve_after_deposit_cash': model.cash,

@@ -44,7 +44,7 @@ def test_nested_parent_quantity_single_and_unassigned():
         (position(), position('Y', '2'), position('old', '3')), profiles,
         (D('.1'), D('.2')), {'X': D(100), 'Y': D(100), 'old': D(100)})
     nested = attribute_positions(parent.children[0], (profile({'X': '1'}),) * 2,
-                                (D('.5'),) * 2, {'X': D(100)}, path=(0,))
+                                 (D('.5'),) * 2, {'X': D(100)}, path=(0,))
     assert exact_sum(p[0].quantity for p in nested.children) == 10
     assert parent.children[1][0].uid == 'Y'
     assert parent.unassigned == {'old': D(3)}
@@ -157,6 +157,7 @@ def test_composite_opaque_profiles_reserves_once_and_unallocated():
     strategy.source = SimpleNamespace(components=(SimpleNamespace(weight=D('.6')),
                                                   SimpleNamespace(weight=D('.3'))))
     calls = []
+
     def child_profile(snapshot):
         calls.append(snapshot)
         return inner
@@ -200,9 +201,9 @@ def test_no_invested_leaf_fraction():
 
 
 @pytest.mark.parametrize('snapshot', [None, (), ({},), ([], D(1)),
-                                       ({'X': object()}, D(1)),
-                                       ({'wrong': position()}, D(1000)),
-                                       ({'X': position()}, D(999))])
+                                      ({'X': object()}, D(1)),
+                                      ({'wrong': position()}, D(1000)),
+                                      ({'X': position()}, D(999))])
 def test_bad_account_snapshot(snapshot):
     """Profile validation rejects corrupted neutral snapshots, not only bad numbers."""
     config = SimpleNamespace(source_account_id='001', reserve=D('.01'))
@@ -260,13 +261,13 @@ def test_profile_decimal_residual_receiver_is_deterministic():
     assert result.exposures['Z'] == result.exposures['M'] == third
     assert result.exposures['A'] == exact_sum((D(1), third.copy_negate(), third.copy_negate()))
     result = attribute_positions((position(quantity='1'),), (profile({'X': '1'}),) * 3,
-                                (D('.3'),) * 3, {'X': D(100)})
+                                 (D('.3'),) * 3, {'X': D(100)})
     assert result.children[1][0].quantity == result.children[2][0].quantity == third
     assert result.children[0][0].quantity > third
 
 
 @pytest.mark.parametrize('cap', ['0.3333333333333333333333333333',
-                                '0.3333333333333333333333333334'])
+                                 '0.3333333333333333333333333334'])
 def test_bounded_split_preserves_deficits_at_exact_capacity(cap):
     """Correction must not exceed a region's monetary deficit, even by a tail."""
     caps = (D(cap),) * 3

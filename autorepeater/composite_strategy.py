@@ -54,7 +54,6 @@ class CompositeStrategy:
         """Read each child anew, retaining its opaque snapshot in declaration order."""
         return CompositeSnapshot(tuple(child.load_snapshot(data) for child in self.children))
 
-
     def event_accounts(self, dst_account_id):
         """Validate each child's declaration before forming one ordered account union."""
         accounts = {}

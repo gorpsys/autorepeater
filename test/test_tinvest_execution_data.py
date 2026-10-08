@@ -40,7 +40,7 @@ def fixture_reads():
     for name, service in [('operations', OperationsService), ('orders', OrdersService),
                           ('market_data', MarketDataService)]:
         setattr(client, name, create_autospec(inspect.unwrap(service), instance=True,
-                                            spec_set=True))
+                                              spec_set=True))
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     data.get_portfolio.return_value = PortfolioSnapshot((entry(),))
     data.get_instrument.return_value = InstrumentInfo(
@@ -109,7 +109,7 @@ def test_usd_instrument_with_rub_valuation_keeps_full_budget(reads):
 
 
 @pytest.mark.parametrize('change', [{'current_price': D(6)}, {'currency': 'usd'},
-                                   {'instrument_type': InstrumentType.ETF}])
+                                    {'instrument_type': InstrumentType.ETF}])
 def test_incompatible_duplicate_is_rejected(reads, change):
     """Duplicate aggregation cannot silently choose a mark or currency."""
     _, data, adapter = reads
@@ -118,8 +118,9 @@ def test_incompatible_duplicate_is_rejected(reads, change):
         adapter.get_destination('account')
 
 
-@pytest.mark.parametrize('guard', ['loading', 'money', 'security', 'exchange', 'future',
-                                 'option', 'portfolio_flag', 'portfolio_number', 'new', 'partial'])
+@pytest.mark.parametrize('guard', [
+    'loading', 'money', 'security', 'exchange', 'future', 'option',
+    'portfolio_flag', 'portfolio_number', 'new', 'partial'])
 def test_any_blocking_disables_availability(reads, guard, caplog):
     """No balance units or money-minus-blocked arithmetic is needed."""
     client, data, adapter = reads
@@ -332,8 +333,8 @@ def test_invalid_cap_currency_or_missing_own_limits(reads, field, value):
 
 
 @pytest.mark.parametrize('value', [None, sdk.Quotation(units=-1, nano=0),
-                                 SimpleNamespace(units=0, nano=True),
-                                 SimpleNamespace(nano=0), True])
+                                   SimpleNamespace(units=0, nano=True),
+                                   SimpleNamespace(nano=0), True])
 def test_missing_negative_or_bool_availability(reads, value):
     """Available cash is nonnegative and all quotation components are numeric."""
     client, _, adapter = reads
@@ -343,7 +344,7 @@ def test_missing_negative_or_bool_availability(reads, value):
 
 
 @pytest.mark.parametrize('state', ['money_currency', 'money_missing', 'money_nan', 'blocked_bool',
-                                 'loading_bool', 'exchange_bool'])
+                                   'loading_bool', 'exchange_bool'])
 def test_invalid_positions_fields(reads, state):
     """Even when loading, malformed numeric and flag values remain errors."""
     client, _, adapter = reads
@@ -374,9 +375,9 @@ def test_invalid_active_orders(reads, field, value):
     """An unknown status or impossible fill count cannot permit trading."""
     client, _, adapter = reads
     order = sdk.OrderState(order_id='order', instrument_uid='uid',
-                          execution_report_status=(
+                           execution_report_status=(
                               sdk.OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_NEW),
-                          lots_requested=2, lots_executed=0)
+                           lots_requested=2, lots_executed=0)
     setattr(order, field, value)
     client.orders.get_orders.return_value.orders = [order]
     with pytest.raises(ValueError):

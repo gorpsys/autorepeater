@@ -132,7 +132,7 @@ def test_unavailable_control_preserves_valid_main_and_force(kind, control, force
 
 @pytest.mark.parametrize('kind', ['ACCOUNT', 'INDEX'])
 @pytest.mark.parametrize('quantity, expected', [('60', TradeMode.BUY_ONLY),
-                                               ('61', TradeMode.REBALANCE)])
+                                                ('61', TradeMode.REBALANCE)])
 def test_leaf_own_threshold_is_strict(kind, quantity, expected):
     """Equality to the configured limit does not permit internal sales."""
     strategy, snapshot = leaf(kind, reserve='0', uids=('a', 'b'))

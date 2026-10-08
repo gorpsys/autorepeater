@@ -7,6 +7,7 @@ from autorepeater.runner import RunnerParams
 from autorepeater.runner import Runner
 from autorepeater.strategies import prepare_strategy
 
+
 def main() -> None:
     """main function"""
     parser = argparse.ArgumentParser(description="autorepeater")
@@ -28,6 +29,7 @@ def main() -> None:
         params=RunnerParams(
             debug=args.debug))
     runer.run()
+
 
 if __name__ == "__main__":
     main()

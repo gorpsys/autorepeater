@@ -117,11 +117,11 @@ def test_ownership_must_exactly_conserve_snapshot():
 
 
 @pytest.mark.parametrize('intent', [None, OrderIntent('', 'BUY', 1, 1, {(): D(1)}),
-                                   OrderIntent('X', 'OTHER', 1, 1, {(): D(1)}),
-                                   OrderIntent('X', 'BUY', True, 1, {(): D(1)}),
-                                   OrderIntent('X', 'SELL', 1, 0, {(): D(1)}),
-                                   OrderIntent('X', 'BUY', 1, 1, {}),
-                                   OrderIntent('X', 'BUY', 1, 1, {(): D('.9')})])
+                                    OrderIntent('X', 'OTHER', 1, 1, {(): D(1)}),
+                                    OrderIntent('X', 'BUY', True, 1, {(): D(1)}),
+                                    OrderIntent('X', 'SELL', 1, 0, {(): D(1)}),
+                                    OrderIntent('X', 'BUY', 1, 1, {}),
+                                    OrderIntent('X', 'BUY', 1, 1, {(): D('.9')})])
 def test_invalid_intent_rejected_before_boundary(intent):
     """invalid intent rejected before boundary."""
     with pytest.raises(ValueError):
@@ -129,8 +129,8 @@ def test_invalid_intent_rejected_before_boundary(intent):
 
 
 @pytest.mark.parametrize('change', [{'lot': 0}, {'lot': True}, {'currency': ''},
-                                  {'api_trade_available': 1}, {'bestprice_order_available': None},
-                                  {'buy_max_lots': True}, {'sell_max_lots': -1}])
+                                    {'api_trade_available': 1}, {'bestprice_order_available': None},
+                                    {'buy_max_lots': True}, {'sell_max_lots': -1}])
 def test_invalid_own_rules_rejected(change):
     """invalid own rules rejected."""
     with pytest.raises(ValueError, match='trade rules'):
