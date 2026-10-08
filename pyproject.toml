@@ -9,6 +9,9 @@ files = [
     "scripts/sandbox_support.py",
     "scripts/sandbox_evidence.py",
     "scripts/sandbox_github.py",
+    "scripts/sandbox_retry.py",
+    "scripts/sandbox_retry_evidence.py",
+    "scripts/sandbox_retry_report.py",
     "autorepeater/tinvest_requests.py",
 ]
 follow_imports = "silent"

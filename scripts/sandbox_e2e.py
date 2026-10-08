@@ -7,7 +7,11 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 from uuid import UUID, uuid4
+
+GROUP_GRACE_SECONDS = 15
+GROUP_KILL_SECONDS = 5
 
 
 def namespace() -> str:
@@ -30,16 +34,47 @@ def timeout_seconds(value: str) -> int:
     return seconds
 
 
+def _group_active(group_id: int) -> bool:
+    """Linux /proc confirms runnable members, not merely the controller's exit."""
+    for process in Path('/proc').iterdir():
+        if not process.name.isdecimal():
+            continue
+        try:
+            fields = (process / 'stat').read_bytes().rsplit(b')', 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if int(fields[2]) == group_id and fields[0] not in (b'Z', b'X'):
+            return True
+    return False
+
+
+def _wait_group(group_id: int, seconds: float) -> bool:
+    """Zombies cannot trade; an unreadable or still-live group is not confirmed stopped."""
+    deadline = time.monotonic() + seconds
+    while _group_active(group_id):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(.05)
+    return True
+
+
 def _terminate_process_group(child: subprocess.Popen) -> None:
-    """Escalate only a supervisor-owned process group when graceful termination times out."""
+    """Confirm all owned descendants stop before cleanup, even if the leader already died."""
     try:
         os.killpg(child.pid, signal.SIGTERM)
-        child.wait(timeout=15)
+        child.wait(timeout=GROUP_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         os.killpg(child.pid, signal.SIGKILL)
-        child.wait()
+        child.wait(timeout=GROUP_KILL_SECONDS)
     except ProcessLookupError:
-        child.wait()
+        child.wait(timeout=GROUP_KILL_SECONDS)
+    if not _wait_group(child.pid, GROUP_GRACE_SECONDS):
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if not _wait_group(child.pid, GROUP_KILL_SECONDS):
+            raise OSError('sandbox process group did not stop; cleanup unsafe')
 
 
 def _cleanup_run(selected_namespace: str, run_id: str) -> None:
@@ -66,7 +101,12 @@ def run_bounded(command: list[str], timeout: int, selected_namespace: str, run_i
     for signum in (signal.SIGINT, signal.SIGTERM):
         previous[signum] = signal.signal(signum, interrupted)
     try:
-        return child.wait(timeout=timeout)
+        result = child.wait(timeout=timeout)
+        if result == 124:
+            _terminate_process_group(child)
+            _cleanup_run(selected_namespace, run_id)
+            return 124
+        return result
     except (subprocess.TimeoutExpired, KeyboardInterrupt):
         print('Sandbox run interrupted or timed out; attempting cleanup', flush=True)
         _terminate_process_group(child)
@@ -97,10 +137,12 @@ def main(argv: list[str] | None = None, *,
             run_id = create_run_id().hex
             os.environ['E2E_NAMESPACE'] = selected_namespace
             os.environ['E2E_RUN_ID'] = run_id
+            os.environ['E2E_SUPERVISED'] = '1'
             additional = args.pytest_args
             if additional[:1] == ['--']:
                 additional = additional[1:]
-            return run_bounded([sys.executable, '-m', 'pytest', 'e2e/',
+            return run_bounded([sys.executable, '-m', 'scripts.sandbox_retry',
+                                '--timeout', str(args.timeout), '--', 'e2e/',
                                 '--confcutdir=e2e', '-q', '--tb=no', '--show-capture=no',
                                 '-p', 'no:cacheprovider', *additional],
                                args.timeout, selected_namespace, run_id)

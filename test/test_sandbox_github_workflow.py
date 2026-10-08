@@ -26,18 +26,24 @@ def test_shared_workflow_concurrency_covers_all_jobs() -> None:
     assert 'pull_request_target' not in text
 
 
-def test_bootstrap_is_explicitly_approval_gated_for_pr27_only() -> None:
+def test_bootstrap_is_explicitly_approval_gated_for_repair_pr28_only() -> None:
     """Future PR events must not implicitly run sandbox code with credentials."""
     text = WORKFLOW.read_text(encoding='utf-8')
     assert 'sandbox-e2e-bootstrap' in job('bootstrap-approval')
-    assert 'github.event.pull_request.number == 27' in job('bootstrap-approval')
-    assert 'github.event.pull_request.number != 27' in job('manual-required')
+    assert 'github.event.pull_request.number == 28' in job('bootstrap-approval')
+    assert 'github.event.pull_request.number != 28' in job('manual-required')
     assert 'head.repo.full_name == github.repository' in job('bootstrap-approval')
     assert 'github.ref == \'refs/heads/master\'' in job('prepare')
     assert 'secrets.SANDBOX_TOKEN' not in job('prepare')
     assert 'secrets.SANDBOX_TOKEN' not in job('manual-required')
     assert 'secrets.SANDBOX_TOKEN' not in job('bootstrap-approval')
     assert 'Sandbox E2E' in text
+
+
+def test_bootstrap_also_exercises_the_skipped_manual_route_ancestor() -> None:
+    """An approved repair run must validate the same skipped-ancestor behavior."""
+    assert 'needs: [bootstrap-approval, manual-required]' in job('prepare')
+    assert 'always() && !cancelled()' in job('prepare')
 
 
 def test_live_is_read_only_pinned_and_bounded() -> None:
@@ -57,7 +63,9 @@ def test_live_is_read_only_pinned_and_bounded() -> None:
     assert "if: ${{ always() && steps.run.outcome != 'skipped' }}" in text
     assert 'retention-days: 7' in text
     assert 'sandbox-results/*.json' in text and 'sandbox-results/*.xml' in text
-    assert 'sandbox-results/cleanup.log' in text
+    assert 'sandbox-results/attempts/**/cleanup.log' in text
+    assert 'sandbox-results/attempts/**/*.json' in text
+    assert 'sandbox-results/attempts/**/*.xml' in text
     assert 'sandbox-results/run.log\n' not in text.split('path: |', 1)[1]
     assert "shell: bash" in text
 
@@ -69,9 +77,47 @@ def test_evidence_is_verified_on_a_separate_readonly_runner() -> None:
     assert 'secrets.SANDBOX_TOKEN' not in text
     assert 'actions/download-artifact@v4' in text
     assert 'ref: ${{ needs.prepare.outputs.trusted_sha }}' in text
-    assert 'scripts/sandbox_github.py evidence' in text
-    assert '--run-log sandbox-results/cleanup.log' in text
+    assert '-m scripts.sandbox_github evidence' in text
+    assert '--evidence-format retry-v1' in text
     assert "needs.live.result == 'success'" in text
+
+
+def test_trusted_helpers_use_package_invocation() -> None:
+    """Package imports must work without an inherited local PYTHONPATH."""
+    assert '-m scripts.sandbox_github prepare' in job('prepare')
+    assert 'python3 scripts/sandbox_github.py' not in WORKFLOW.read_text(encoding='utf-8')
+
+
+@pytest.mark.parametrize('name,dependencies', [
+    ('pending', ('prepare',)),
+    ('live', ('prepare', 'pending')),
+])
+@pytest.mark.parametrize('result,cancelled,expected', [
+    ('success', False, True),
+    ('success', True, False),
+    ('failure', False, False),
+    ('cancelled', False, False),
+    ('skipped', False, False),
+])
+def test_live_chain_uses_explicit_status_guards_after_skipped_bootstrap(
+        name: str, dependencies: tuple[str, ...], result: str,
+        cancelled: bool, expected: bool) -> None:
+    """A skipped optional ancestor must not add GitHub's implicit success guard."""
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    condition = re.search(r'^    if: \$\{\{ (.*?) \}\}$', job(name), re.MULTILINE)
+    assert condition is not None, 'job requires an explicit status guard'
+    clauses = condition.group(1).split(' && ')
+    assert clauses[0] == '!cancelled()'
+    assert clauses[1:] == [f"needs.{dependency}.result == 'success'"
+                           for dependency in dependencies]
+    assert ((not cancelled) and all(result == 'success' for _ in dependencies)) is expected
+
+
+def test_incomplete_publication_fails_workflow_after_publishing_failure() -> None:
+    """A red required status must not leave the workflow misleadingly green."""
+    text = job('publish')
+    assert "if (!complete) core.setFailed('Sandbox E2E not fully verified');" in text
+    assert text.index('await github.rest.repos.createCommitStatus') < text.index('core.setFailed')
 
 
 def test_live_step_deadlines_reserve_cleanup_artifact_and_overhead_time() -> None:

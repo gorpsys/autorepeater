@@ -10,7 +10,7 @@ on:
         type: string
   push:
     branches: [master]
-  # Temporary bootstrap: only PR27 may pass the approval job below.
+  # Temporary bootstrap: only the workflow-repair PR28 may pass approval below.
   # Future PRs get an explicit not-run job, never implicit sandbox execution.
   pull_request:
     branches: [master]
@@ -31,7 +31,7 @@ jobs:
   manual-required:
     if: >-
       github.event_name == 'pull_request' &&
-      (github.event.pull_request.number != 27 ||
+      (github.event.pull_request.number != 28 ||
        github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -45,17 +45,19 @@ jobs:
   bootstrap-approval:
     if: >-
       github.event_name == 'pull_request' &&
-      github.event.pull_request.number == 27 &&
+      github.event.pull_request.number == 28 &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions: {}
     environment: sandbox-e2e-bootstrap
     steps:
-      - run: echo "Approved bootstrap workflow for the fixed PR27 event."
+      - run: echo "Approved bootstrap workflow for the fixed PR28 event."
 
   prepare:
-    needs: [bootstrap-approval]
+    # The route marker is skipped for approval/dispatch/push. This also verifies
+    # downstream execution after a skipped ancestor during the repair bootstrap.
+    needs: [bootstrap-approval, manual-required]
     if: >-
       always() && !cancelled() &&
       ((github.event_name != 'pull_request' && github.ref == 'refs/heads/master') ||
@@ -80,10 +82,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 scripts/sandbox_github.py prepare
+        run: python3 -m scripts.sandbox_github prepare
 
   pending:
     needs: [prepare]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
@@ -107,6 +110,7 @@ jobs:
 
   live:
     needs: [prepare, pending]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.pending.result == 'success' }}
     runs-on: ubuntu-latest
     # Queue and environment approval wait are outside this active job deadline.
     # All seven step limits sum to 48m, leaving 7m for runner/action overhead.
@@ -153,11 +157,10 @@ jobs:
         env:
           SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
         run: timeout 90s .venv/bin/python -m scripts.sandbox_lifecycle cleanup --namespace ci
-      - name: Retain only fixed cleanup markers from console output
+      - name: Require original versioned retry evidence
         if: ${{ always() && steps.run.outcome != 'skipped' }}
         timeout-minutes: 1
-        run: |
-          awk '/^Sandbox (scenario|session) cleanup complete$/' sandbox-results/run.log > sandbox-results/cleanup.log
+        run: test -f sandbox-results/retry.json
       - name: Upload sanitized evidence even on failure
         if: ${{ always() }}
         timeout-minutes: 2
@@ -167,7 +170,9 @@ jobs:
           path: |
             tested/sandbox-results/*.json
             tested/sandbox-results/*.xml
-            tested/sandbox-results/cleanup.log
+            tested/sandbox-results/attempts/**/*.json
+            tested/sandbox-results/attempts/**/*.xml
+            tested/sandbox-results/attempts/**/cleanup.log
           retention-days: 7
           if-no-files-found: warn
 
@@ -194,7 +199,7 @@ jobs:
           path: sandbox-results
       - name: Verify exact full suite and fixture cleanup
         id: evidence
-        run: python3 scripts/sandbox_github.py evidence --junit sandbox-results/junit.xml --run-log sandbox-results/cleanup.log
+        run: python3 -m scripts.sandbox_github evidence --evidence-format retry-v1 --junit sandbox-results/junit.xml
 
   publish:
     needs: [prepare, pending, live, verify]
@@ -231,3 +236,4 @@ jobs:
                 'Sandbox suite failed, canceled, not run or incomplete',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
+            if (!complete) core.setFailed('Sandbox E2E not fully verified');

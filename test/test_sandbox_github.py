@@ -15,9 +15,9 @@ SHA = 'a' * 40
 REPO = 'gorpsys/autorepeater'
 
 
-def pull_request() -> dict[str, object]:
+def pull_request(number: int = 27) -> dict[str, object]:
     """Minimal GitHub response; no credential or SDK-shaped facts."""
-    return {'number': 27, 'state': 'open',
+    return {'number': number, 'state': 'open',
             'base': {'ref': 'master', 'repo': {'full_name': REPO}},
             'head': {'sha': SHA, 'repo': {'full_name': REPO}}}
 
@@ -157,7 +157,8 @@ def test_evidence_cli_reports_completion_only_after_validation(tmp_path: Path, m
                        'Sandbox session cleanup complete\n', encoding='utf-8')
     monkeypatch.setenv('GITHUB_OUTPUT', str(output))
     write_junit(path)
-    arguments = ['evidence', '--junit', str(path), '--run-log', str(run_log)]
+    arguments = ['evidence', '--evidence-format', 'single-v1', '--junit', str(path),
+                 '--run-log', str(run_log)]
     assert subject.main(arguments) == 0
     assert output.read_text(encoding='utf-8') == 'complete=true\npassed=17\n'
     output.unlink()
@@ -238,11 +239,11 @@ def test_master_and_bootstrap_select_exact_immutable_sha(event_name: str) -> Non
     """Master and approved bootstrap use the same authorization boundary."""
     client = create_autospec(subject.GitHubClient(REPO, 'synthetic'), spec_set=True)
     client.repository = REPO
-    client.read.side_effect = [{'permission': 'admin'}, pull_request()]
+    client.read.side_effect = [{'permission': 'admin'}, pull_request(28)]
     event = {'after': SHA, 'deleted': False} if event_name == 'push' else {
-        'pull_request': pull_request()}
+        'pull_request': pull_request(28)}
     target = subject.select_target(event, selection_environment(event_name), client)
-    assert target == subject.TestTarget(SHA, 0 if event_name == 'push' else 27)
+    assert target == subject.TestTarget(SHA, 0 if event_name == 'push' else 28)
     assert client.read.call_count == (1 if event_name == 'push' else 2)
 
 
@@ -250,7 +251,8 @@ def test_master_and_bootstrap_select_exact_immutable_sha(event_name: str) -> Non
     ('push', {'after': SHA, 'deleted': True}, {}),
     ('push', {'after': 'b' * 40, 'deleted': False}, {}),
     ('push', {'after': SHA, 'deleted': False}, {'GITHUB_REF': 'refs/heads/untrusted'}),
-    ('pull_request', {'pull_request': {'number': 28}}, {}),
+    ('pull_request', {'pull_request': {'number': 27}}, {}),
+    ('pull_request', {'pull_request': {'number': 29}}, {}),
     ('pull_request', {'pull_request': {'number': True}}, {}),
     ('schedule', {}, {}), ('workflow_dispatch', {}, {'GITHUB_ACTOR': 'injected/user'}),
 ])
