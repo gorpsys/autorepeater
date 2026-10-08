@@ -101,7 +101,7 @@ def test_entrypoint_in_process(project, tmp_path, monkeypatch):
     """The executable entrypoint uses the same builder, within coverage tracing."""
     output = tmp_path / 'entrypoint.zip'
     monkeypatch.setattr('sys.argv', ['build_yandex_archive.py', '--project-root', str(project),
-                                   '--output', str(output)])
+                                     '--output', str(output)])
     runpy.run_path(str(Path(builder.__file__)), run_name='__main__')
     with ZipFile(output) as archive:
         assert set(archive.namelist()) == EXPECTED
@@ -181,24 +181,24 @@ def fixture_application_bundle(tmp_path):
     expected = {source.relative_to(repository).as_posix() for source in sources}
     config_root = project_root / 'autorepeater/configs/new/deep'
     documents = {
-        'composites/first-file.json': {'component_drift_limit': '0.20',
-            'name': 'ARCHIVE_ROOT', 'components': [
-            {'algoritm': 'COMPOSITE', 'src': 'ARCHIVE_MIDDLE', 'weight': '1'}]},
-        'composites/second-file.json': {'component_drift_limit': '0.20',
-            'name': 'ARCHIVE_MIDDLE', 'components': [
-            {'algoritm': 'COMPOSITE', 'src': 'ARCHIVE_LEAF', 'weight': '1'}]},
-        'composites/third-file.json': {'component_drift_limit': '0.20',
-            'name': 'ARCHIVE_LEAF', 'components': [
-            {'algoritm': 'INDEX', 'src': 'ARCHIVE_INDEX', 'weight': '0.5'},
-            {'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '0.5'}]},
-        'composites/invalid-foreign.json': {'component_drift_limit': '0.20',
-            'name': 'FOREIGN', 'components': []},
-        'composites/duplicate-one.json': {'component_drift_limit': '0.20',
-            'name': 'DUPLICATE', 'components': [
-            {'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '1'}]},
-        'composites/duplicate-two.json': {'component_drift_limit': '0.20',
-            'name': 'DUPLICATE', 'components': [
-            {'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '1'}]},
+        'composites/first-file.json': {
+            'component_drift_limit': '0.20', 'name': 'ARCHIVE_ROOT',
+            'components': [{'algoritm': 'COMPOSITE', 'src': 'ARCHIVE_MIDDLE', 'weight': '1'}]},
+        'composites/second-file.json': {
+            'component_drift_limit': '0.20', 'name': 'ARCHIVE_MIDDLE',
+            'components': [{'algoritm': 'COMPOSITE', 'src': 'ARCHIVE_LEAF', 'weight': '1'}]},
+        'composites/third-file.json': {
+            'component_drift_limit': '0.20', 'name': 'ARCHIVE_LEAF', 'components': [
+                {'algoritm': 'INDEX', 'src': 'ARCHIVE_INDEX', 'weight': '0.5'},
+                {'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '0.5'}]},
+        'composites/invalid-foreign.json': {
+            'component_drift_limit': '0.20', 'name': 'FOREIGN', 'components': []},
+        'composites/duplicate-one.json': {
+            'component_drift_limit': '0.20', 'name': 'DUPLICATE',
+            'components': [{'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '1'}]},
+        'composites/duplicate-two.json': {
+            'component_drift_limit': '0.20', 'name': 'DUPLICATE',
+            'components': [{'algoritm': 'ACCOUNT', 'src': '00123', 'weight': '1'}]},
         'settings/different-name.json': {'name': '00123', 'source_account_id': '00123',
                                          'reserve': '0.07', 'allocation_drift_limit': '0.0092'},
     }
@@ -221,15 +221,19 @@ def fixture_application_bundle(tmp_path):
 NESTED_ARCHIVE_PROBE = """
 import os
 import sys
+import sysconfig
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import call, patch
 
 extracted, repository, source_tree = map(Path, sys.argv[1:4])
 scenario, path_style = sys.argv[4:]
+dependency_paths = {Path(sysconfig.get_path(key)).resolve() for key in ('purelib', 'platlib')}
 for root in (repository, source_tree, extracted):
     assert not Path.cwd().is_relative_to(root)
-    assert all(not Path(path).resolve().is_relative_to(root) for path in sys.path)
+    source_paths = [path for path in sys.path if Path(path).resolve().is_relative_to(root)
+                    and Path(path).resolve() not in dependency_paths]
+    assert not source_paths, ('application source leaked onto sys.path', source_paths)
 sys.path.insert(0, str(extracted))
 with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbidden')) as client, \
         patch('grpc.secure_channel', side_effect=AssertionError('gRPC forbidden')) as secure, \
@@ -345,6 +349,28 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
         blocked.assert_not_called()
 print('nested archive validation completed')
 """
+
+
+@pytest.mark.parametrize('location', ['repository', 'package', 'source_tree', 'extracted', 'venv'])
+def test_archive_probe_rejects_application_source_paths(tmp_path, location):
+    """Allow dependency directories, not the repository, its package or entire venv."""
+    repository = Path(__file__).resolve().parents[1]
+    extracted = tmp_path / 'extracted'
+    source_tree = tmp_path / 'source'
+    working = tmp_path / 'working'
+    for directory in (extracted, source_tree, working):
+        directory.mkdir()
+    injected = {
+        'repository': repository, 'package': repository / 'autorepeater',
+        'source_tree': source_tree, 'extracted': extracted, 'venv': repository / '.venv',
+    }[location]
+    script = f'import sys\nsys.path.insert(0, {str(injected)!r})\n' + NESTED_ARCHIVE_PROBE
+    probe = subprocess.run([
+        sys.executable, '-I', '-c', script, str(extracted), str(repository), str(source_tree),
+        'valid', 'absolute'], cwd=working, env={}, check=False,
+        capture_output=True, text=True, timeout=30)
+    assert probe.returncode != 0
+    assert 'application source leaked onto sys.path' in probe.stderr
 
 
 def assert_staging_parity(project_root, extracted, expected):
