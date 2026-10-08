@@ -218,6 +218,13 @@ def _wait_app_operations(session: SandboxSession, account_id: str, prior_operati
         session.sleep(2)
 
 
+def _check_purchase_reserve(budget: D, cash: D, reserve: D, bought: bool) -> None:
+    """Every observed BUY preserves cash floor, whether required or optional."""
+    if bought:
+        tolerance = max(D(2), budget * D('.001'))
+        check(cash + tolerance >= budget * reserve, 'cash floor lost')
+
+
 def app_pass(live: LiveCase, account_id: str, prepared: PreparedStrategy,
              instruments: list[InstrumentInfo], *, sells: bool = False, buys: bool = False,
              no_orders: bool = False, reserve: D = D('.10'), empty: bool = False) -> AppPass:
@@ -249,9 +256,8 @@ def app_pass(live: LiveCase, account_id: str, prepared: PreparedStrategy,
         check(quantity >= 0 and quantity % lots[uid] == 0, 'short or fractional physical lot')
         if uid in before.marks:
             check(abs(after.marks[uid] / before.marks[uid] - 1) <= D('.03'), 'live quote moved >3%')
-    if buys:
-        tolerance = max(D(2), before.budget * D('.001'))
-        check(after.available_cash['rub'] + tolerance >= before.budget * reserve, 'cash floor lost')
+    _check_purchase_reserve(before.budget, after.available_cash.get('rub', D(0)),
+                            reserve, bool(buy_responses))
     session.records.append({'event': 'app_pass', 'time': time.time(),
                             'before_budget': str(before.budget), 'after_budget': str(after.budget),
                             'before_positions': {key: str(value)
@@ -408,8 +414,8 @@ def test_full_balanced_imoex_oblg_gold(live: LiveCase, monkeypatch: pytest.Monke
     oblg = session.instrument('OBLG')
     assert gold.uid in state.quantities and oblg.uid in state.quantities
     assert set(state.quantities) - {gold.uid, oblg.uid}, 'working IMOEX shares missing'
-    app_pass(live, dst, prepared, instruments, no_orders=True,
-             reserve=profile.reserve_fraction)
+    # Live marks and residual cash may fund another lot; repeated passes stay BUY-only.
+    app_pass(live, dst, prepared, instruments, reserve=profile.reserve_fraction)
     session.pay_in(dst, D(2000))
     app_pass(live, dst, prepared, instruments, buys=True,
              reserve=profile.reserve_fraction)

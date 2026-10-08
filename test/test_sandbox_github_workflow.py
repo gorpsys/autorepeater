@@ -63,7 +63,9 @@ def test_live_is_read_only_pinned_and_bounded() -> None:
     assert "if: ${{ always() && steps.run.outcome != 'skipped' }}" in text
     assert 'retention-days: 7' in text
     assert 'sandbox-results/*.json' in text and 'sandbox-results/*.xml' in text
-    assert 'sandbox-results/cleanup.log' in text
+    assert 'sandbox-results/attempts/**/cleanup.log' in text
+    assert 'sandbox-results/attempts/**/*.json' in text
+    assert 'sandbox-results/attempts/**/*.xml' in text
     assert 'sandbox-results/run.log\n' not in text.split('path: |', 1)[1]
     assert "shell: bash" in text
 
@@ -75,9 +77,15 @@ def test_evidence_is_verified_on_a_separate_readonly_runner() -> None:
     assert 'secrets.SANDBOX_TOKEN' not in text
     assert 'actions/download-artifact@v4' in text
     assert 'ref: ${{ needs.prepare.outputs.trusted_sha }}' in text
-    assert 'scripts/sandbox_github.py evidence' in text
-    assert '--run-log sandbox-results/cleanup.log' in text
+    assert '-m scripts.sandbox_github evidence' in text
+    assert '--evidence-format retry-v1' in text
     assert "needs.live.result == 'success'" in text
+
+
+def test_trusted_helpers_use_package_invocation() -> None:
+    """Package imports must work without an inherited local PYTHONPATH."""
+    assert '-m scripts.sandbox_github prepare' in job('prepare')
+    assert 'python3 scripts/sandbox_github.py' not in WORKFLOW.read_text(encoding='utf-8')
 
 
 @pytest.mark.parametrize('name,dependencies', [

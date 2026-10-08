@@ -157,7 +157,8 @@ def test_evidence_cli_reports_completion_only_after_validation(tmp_path: Path, m
                        'Sandbox session cleanup complete\n', encoding='utf-8')
     monkeypatch.setenv('GITHUB_OUTPUT', str(output))
     write_junit(path)
-    arguments = ['evidence', '--junit', str(path), '--run-log', str(run_log)]
+    arguments = ['evidence', '--evidence-format', 'single-v1', '--junit', str(path),
+                 '--run-log', str(run_log)]
     assert subject.main(arguments) == 0
     assert output.read_text(encoding='utf-8') == 'complete=true\npassed=17\n'
     output.unlink()

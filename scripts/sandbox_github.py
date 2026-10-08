@@ -10,25 +10,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-EXPECTED_SCENARIOS = (
-    'test_initial_monthly2000_and_noop[INDEX-PAIR]',
-    'test_initial_monthly2000_and_noop[COMPOSITE-MIX]',
-    'test_initial_monthly2000_and_noop[ACCOUNT-SOURCE]',
-    'test_staged_holdings_drift[INDEX-PAIR-.55-False]',
-    'test_staged_holdings_drift[INDEX-PAIR-.80-True]',
-    'test_staged_holdings_drift[COMPOSITE-MIX-.55-False]',
-    'test_staged_holdings_drift[COMPOSITE-MIX-.80-True]',
-    'test_staged_holdings_drift[ACCOUNT-SOURCE-.55-False]',
-    'test_staged_holdings_drift[ACCOUNT-SOURCE-.80-True]',
-    'test_child_own_drift_below_component_limit',
-    'test_reserve_deficit_insufficient_cash_does_not_sell[INDEX-SOLO0]',
-    'test_reserve_deficit_insufficient_cash_does_not_sell[COMPOSITE-MIX]',
-    'test_reserve_deficit_insufficient_cash_does_not_sell[ACCOUNT-SOURCE]',
-    'test_small_budget_cannot_submit_orders[INDEX-SOLO0]',
-    'test_small_budget_cannot_submit_orders[COMPOSITE-MIX]',
-    'test_small_budget_cannot_submit_orders[ACCOUNT-SOURCE]',
-    'test_full_balanced_imoex_oblg_gold',
-)
+from scripts.sandbox_retry_evidence import EXPECTED_SCENARIOS, RetryFailure, verify_history
 MAX_EVIDENCE_BYTES = 2_000_000
 BOOTSTRAP_PR_NUMBER = 28
 
@@ -229,6 +211,20 @@ def write_outputs(values: dict[str, str]) -> None:
             output.write(f'{key}={value}\n')
 
 
+def evidence_result(junit: Path, run_log: Path | None, format_name: str) -> SuiteEvidence:
+    """Versioned evidence is explicit; never silently accept a legacy merged XML."""
+    if format_name == 'single-v1':
+        if run_log is None:
+            raise GitHubFailure('single-v1 cleanup log required')
+        return verify_evidence(junit, run_log)
+    if junit.name != 'junit.xml':
+        raise GitHubFailure('retry-v1 requires the fixed merged JUnit path')
+    try:
+        return SuiteEvidence(verify_history(junit.parent, require_full=True))
+    except RetryFailure:
+        raise GitHubFailure('retry history does not prove full sandbox acceptance') from None
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run preparation without SDK/secrets, or verify sanitized JUnit evidence."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -236,11 +232,13 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser('prepare')
     evidence = commands.add_parser('evidence')
     evidence.add_argument('--junit', type=Path, required=True)
-    evidence.add_argument('--run-log', type=Path, required=True)
+    evidence.add_argument('--run-log', type=Path)
+    evidence.add_argument('--evidence-format', choices=('retry-v1', 'single-v1'),
+                          default='retry-v1')
     args = parser.parse_args(argv)
     try:
         if args.command == 'evidence':
-            facts = verify_evidence(args.junit, args.run_log)
+            facts = evidence_result(args.junit, args.run_log, args.evidence_format)
             write_outputs({'complete': 'true', 'passed': str(facts.passed)})
         else:
             event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))

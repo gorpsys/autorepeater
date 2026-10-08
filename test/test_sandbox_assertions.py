@@ -10,7 +10,7 @@ from grpc import StatusCode
 from t_tech.invest import RequestError
 
 from e2e.conftest import pytest_runtest_makereport
-from e2e.test_sandbox import _check_app_events, _wait_app_operations
+from e2e.test_sandbox import _check_app_events, _check_purchase_reserve, _wait_app_operations
 from autorepeater.strategy_data import DataAccessError
 from scripts.sandbox_lifecycle import SandboxFailure, safe_call
 from scripts.sandbox_evidence import MoneyEvidence, OperationEvidence, TradeEvidence
@@ -115,6 +115,29 @@ def test_confirmed_sell_then_buy_is_accepted():
         events, sells=True, buys=True, no_orders=False, empty=False)
     assert responses == [events[1], events[4]]
     assert sells == [events[1]] and buys == [events[4]]
+
+
+def test_repeat_pass_accepts_optional_buy_but_not_sell():
+    """Refreshed live budgets may buy more even without an additional pay-in."""
+    events = trade_events('BUY')
+    assert _check_app_events(events, sells=False, buys=False, no_orders=False, empty=False) == (
+        [events[1]], [], [events[1]])
+    with pytest.raises(SandboxFailure, match='forbidden SELL'):
+        _check_app_events(trade_events('SELL'), sells=False, buys=False,
+                          no_orders=False, empty=False)
+
+
+@pytest.mark.parametrize('cash,bought,allowed', [
+    ('100', True, True), ('98', True, True), ('97.99', True, False),
+    ('0', False, True),
+])
+def test_every_actual_purchase_preserves_reserve(cash, bought, allowed):
+    """Optional BUY must obey the same reserve invariant as a mandatory BUY."""
+    if allowed:
+        _check_purchase_reserve(Decimal(1000), Decimal(cash), Decimal('.10'), bought)
+    else:
+        with pytest.raises(SandboxFailure, match='cash floor lost'):
+            _check_purchase_reserve(Decimal(1000), Decimal(cash), Decimal('.10'), bought)
 
 
 @pytest.mark.parametrize('events,sells,buys,reason', [

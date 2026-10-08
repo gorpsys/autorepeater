@@ -82,7 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: python3 scripts/sandbox_github.py prepare
+        run: python3 -m scripts.sandbox_github prepare
 
   pending:
     needs: [prepare]
@@ -157,11 +157,10 @@ jobs:
         env:
           SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
         run: timeout 90s .venv/bin/python -m scripts.sandbox_lifecycle cleanup --namespace ci
-      - name: Retain only fixed cleanup markers from console output
+      - name: Require original versioned retry evidence
         if: ${{ always() && steps.run.outcome != 'skipped' }}
         timeout-minutes: 1
-        run: |
-          awk '/^Sandbox (scenario|session) cleanup complete$/' sandbox-results/run.log > sandbox-results/cleanup.log
+        run: test -f sandbox-results/retry.json
       - name: Upload sanitized evidence even on failure
         if: ${{ always() }}
         timeout-minutes: 2
@@ -171,7 +170,9 @@ jobs:
           path: |
             tested/sandbox-results/*.json
             tested/sandbox-results/*.xml
-            tested/sandbox-results/cleanup.log
+            tested/sandbox-results/attempts/**/*.json
+            tested/sandbox-results/attempts/**/*.xml
+            tested/sandbox-results/attempts/**/cleanup.log
           retention-days: 7
           if-no-files-found: warn
 
@@ -198,7 +199,7 @@ jobs:
           path: sandbox-results
       - name: Verify exact full suite and fixture cleanup
         id: evidence
-        run: python3 scripts/sandbox_github.py evidence --junit sandbox-results/junit.xml --run-log sandbox-results/cleanup.log
+        run: python3 -m scripts.sandbox_github evidence --evidence-format retry-v1 --junit sandbox-results/junit.xml
 
   publish:
     needs: [prepare, pending, live, verify]
