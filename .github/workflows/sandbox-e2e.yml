@@ -1,0 +1,232 @@
+name: Sandbox live E2E
+run-name: Sandbox E2E - ${{ github.event_name }} PR ${{ inputs.pr_number || github.event.pull_request.number || 'master' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository PR targeting master
+        required: true
+        type: string
+  push:
+    branches: [master]
+  # Temporary bootstrap: only PR27 may pass the approval job below.
+  # Future PRs get an explicit not-run job, never implicit sandbox execution.
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+# Workflow-level serialization includes approval, all live cleanup and artifacts.
+# Documented queue: max supports up to 100 pending runs; overflow is canceled.
+# https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency
+concurrency:
+  group: autorepeater-sandbox
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  manual-required:
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.pull_request.number != 27 ||
+       github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: E2E explicitly not run
+        run: |
+          echo "Sandbox E2E NOT RUN: future PRs require workflow_dispatch; forks never receive secrets."
+          exit 1
+
+  bootstrap-approval:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 27 &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    environment: sandbox-e2e-bootstrap
+    steps:
+      - run: echo "Approved bootstrap workflow for the fixed PR27 event."
+
+  prepare:
+    needs: [bootstrap-approval]
+    if: >-
+      always() && !cancelled() &&
+      ((github.event_name != 'pull_request' && github.ref == 'refs/heads/master') ||
+       needs.bootstrap-approval.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      head_sha: ${{ steps.target.outputs.head_sha }}
+      trusted_sha: ${{ steps.target.outputs.trusted_sha }}
+      pr_number: ${{ steps.target.outputs.pr_number }}
+    steps:
+      - name: Checkout trusted preparation only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Authorize initiator and fix tested SHA
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 scripts/sandbox_github.py prepare
+
+  pending:
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish pending on the fixed SHA
+        uses: actions/github-script@v7
+        env:
+          TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
+        with:
+          script: |
+            if (!/^[0-9a-f]{40}$/.test(process.env.TESTED_SHA) || /^0+$/.test(process.env.TESTED_SHA)) {
+              throw new Error('Invalid fixed tested SHA');
+            }
+            await github.rest.repos.createCommitStatus({
+              ...context.repo, sha: process.env.TESTED_SHA, context: 'Sandbox E2E',
+              request: { timeout: 15000 },
+              state: 'pending', description: 'Full sandbox suite running; no acceptance yet',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
+
+  live:
+    needs: [prepare, pending]
+    runs-on: ubuntu-latest
+    # Queue and environment approval wait are outside this active job deadline.
+    # All seven step limits sum to 48m, leaving 7m for runner/action overhead.
+    # Cleanup (2m), markers (1m) and upload (2m) have explicitly reserved time.
+    timeout-minutes: 55
+    permissions:
+      contents: read
+    env:
+      SANDBOX_CI_SERIALIZED: "1"
+      PYTEST_ADDOPTS: ""
+    defaults:
+      run:
+        working-directory: tested
+    steps:
+      - name: Checkout the exact tested head
+        timeout-minutes: 2
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+          path: tested
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        timeout-minutes: 2
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        timeout-minutes: 6
+        run: make setup
+      - name: Run all real sandbox scenarios
+        id: run
+        timeout-minutes: 33
+        shell: bash
+        env:
+          SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+          E2E_ARTIFACT_DIR: ${{ github.workspace }}/tested/sandbox-results
+        run: |
+          test -n "$SANDBOX_TOKEN" || { echo "SANDBOX_TOKEN missing; E2E NOT RUN"; exit 1; }
+          mkdir -p sandbox-results
+          make e2e E2E_TIMEOUT=1800 E2E_ARGS="-s --junitxml=$GITHUB_WORKSPACE/tested/sandbox-results/junit.xml" | tee sandbox-results/run.log
+      - name: Final bounded CI orphan cleanup
+        id: cleanup
+        if: ${{ always() && steps.run.outcome != 'skipped' }}
+        timeout-minutes: 2
+        env:
+          SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+        run: timeout 90s .venv/bin/python -m scripts.sandbox_lifecycle cleanup --namespace ci
+      - name: Retain only fixed cleanup markers from console output
+        if: ${{ always() && steps.run.outcome != 'skipped' }}
+        timeout-minutes: 1
+        run: |
+          awk '/^Sandbox (scenario|session) cleanup complete$/' sandbox-results/run.log > sandbox-results/cleanup.log
+      - name: Upload sanitized evidence even on failure
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tested/sandbox-results/*.json
+            tested/sandbox-results/*.xml
+            tested/sandbox-results/cleanup.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  verify:
+    needs: [prepare, live]
+    if: ${{ !cancelled() && needs.live.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      complete: ${{ steps.evidence.outputs.complete }}
+      passed: ${{ steps.evidence.outputs.passed }}
+    steps:
+      - name: Checkout only the trusted validator on a fresh runner
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.trusted_sha }}
+          persist-credentials: false
+      - name: Download this workflow attempt evidence only
+        uses: actions/download-artifact@v4
+        with:
+          name: sandbox-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: sandbox-results
+      - name: Verify exact full suite and fixture cleanup
+        id: evidence
+        run: python3 scripts/sandbox_github.py evidence --junit sandbox-results/junit.xml --run-log sandbox-results/cleanup.log
+
+  publish:
+    needs: [prepare, pending, live, verify]
+    if: ${{ always() && !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish verified result on the originally fixed SHA only
+        uses: actions/github-script@v7
+        env:
+          TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
+          LIVE_RESULT: ${{ needs.live.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          COMPLETE: ${{ needs.verify.outputs.complete }}
+          PASSED: ${{ needs.verify.outputs.passed }}
+          RUN_CANCELLED: ${{ cancelled() }}
+        with:
+          script: |
+            if (!/^[0-9a-f]{40}$/.test(process.env.TESTED_SHA) || /^0+$/.test(process.env.TESTED_SHA)) {
+              throw new Error('Invalid fixed tested SHA');
+            }
+            const complete = process.env.LIVE_RESULT === 'success' &&
+              process.env.VERIFY_RESULT === 'success' &&
+              process.env.RUN_CANCELLED === 'false' &&
+              process.env.COMPLETE === 'true' && process.env.PASSED === '17';
+            await github.rest.repos.createCommitStatus({
+              ...context.repo, sha: process.env.TESTED_SHA, context: 'Sandbox E2E',
+              request: { timeout: 15000 },
+              state: complete ? 'success' : 'failure',
+              description: complete ? 'All 17 sandbox scenarios passed; cleanup confirmed' :
+                'Sandbox suite failed, canceled, not run or incomplete',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });

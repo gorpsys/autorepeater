@@ -8,6 +8,7 @@ files = [
     "scripts/sandbox_lifecycle.py",
     "scripts/sandbox_support.py",
     "scripts/sandbox_evidence.py",
+    "scripts/sandbox_github.py",
     "autorepeater/tinvest_requests.py",
 ]
 follow_imports = "silent"
