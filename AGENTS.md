@@ -13,20 +13,24 @@ COMPOSITE строят StrategyPlan по свежим данным; общий �
 ## Проверки и запуск
 
 ```bash
-pip install -r requirements.txt
+make setup
 pytest test/test_autorepeater.py
 pytest test/test_autorepeater.py -k имя_теста
-pytest --cov --cov-report=term-missing --cov-report=xml -q
-coverage report --fail-under=90
-diff-cover coverage.xml --compare-branch=origin/master --fail-under=90
-pylint $(git ls-files --cached --others --exclude-standard '*.py')
-flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+make test
+make coverage
+make lint
+make typecheck
 git diff --check
 python -m scripts.check_rebalance_policy --output /tmp/rebalance-policy-report.json
 make claude-yandex-archive
 ```
 
 CI: Python 3.12, pytest/pylint/flake8; общее и diff-покрытие >=90%.
+Make использует .venv/bin/python, если он существует, иначе python3;
+PYTHON переопределяет выбор для всех целей. make lint строгий: любое замечание
+Pylint, Flake8 или Mypy завершает цель с ошибкой, --exit-zero не используется.
+make typecheck запускает Mypy отдельно; явная начальная область в pyproject.toml
+включает Make/e2e helpers, evidence DTO и API-wrapper, не весь legacy-код.
 .coveragerc включает рабочие модули, main.py, handler.py, scripts; исключает
 тесты, сборочные копии и окружения. PR diff сравнивается с SHA базы, push
 master с предыдущим SHA; diff без исполняемых строк проходит без процента.
@@ -47,7 +51,7 @@ python main.py --algoritm COMPOSITE -s BALANCED -d <dst> --debug
 
 Оба селектора CLI обязательны, algoritm написан именно так.
 Src для всех встроенных алгоритмов является точным name JSON; ACCOUNT
-source_account_id находится внутри конфига и сохраняет ведущие ASCII-нули.
+source_account_id находится внутри конфига и передаётся API без преобразований.
 Регистр/пробелы не нормализуются. -t/--threshold и -r/--reserve отвергаются.
 Debug строит и проверяет планы с чтением данных, без submit_order.
 Облако по умолчанию COMPOSITE/BALANCED, run_sync без стрима и без debug.
@@ -77,8 +81,9 @@ INDEX_CONFIG_DIR либо IMOEX_CONFIG_PATH (configs/); COMPOSITE_CONFIG_DIR
 
 ACCOUNT обязательные name/source_account_id/reserve/allocation_drift_limit;
 дополнительные поля загрузчик не использует.
-Встроенные reserve="0.01", limit="0.0092"; source_account_id ASCII-цифры,
-не произвольный src. Reserve/limit конечные строки [0,1).
+Встроенные reserve="0.01", limit="0.0092"; source_account_id непустая строка
+без пробельных символов (включая числовой ID или UUID), не произвольный src.
+Ведущие нули и регистр сохраняются. Reserve/limit конечные строки [0,1).
 COMPOSITE строгие name/component_drift_limit/components; limit [0,1),
 непустые компоненты только algoritm/src/weight; weight (0,1], сумма по
 порядку при Decimal prec28 <=1, без нормализации. Собственного reserve нет.
@@ -325,6 +330,14 @@ ACCOUNT holdout 24000 seed20261003: .0092, совпадение91.3375%.
 Модельные FILL/комиссия/marks не гарантируют BESTPRICE/settlement/экономию.
 1000-сетка и крайние 0/null экстраполяции не гарантируют произвольные бюджеты.
 Live sandbox/GitHub CI отдельный санкционированный запуск; локальный pytest
-не закрывает их. Внешние проверки здесь не выполняются.
+не закрывает их. SANDBOX_TOKEN передавать только через окружение live-задания,
+без production fallback. Sandbox E2E проверяет конкретный head SHA PR;
+новый SHA требует полного повторного прогона. Fork/ошибка/отмена/неполный
+прогон не дают success. GitHub запуски PR/master сериализуются вместе с
+cleanup; локальный запуск при общей песочнице не пересекается с GitHub.
+Дамп/JUnit не должны содержать токен или SDK repr. Bootstrap первого PR
+требует одобрения sandbox-e2e-bootstrap; обычный ручной запуск после
+регистрации workflow в master через Actions > Sandbox live E2E > Run workflow
+(ref master, pr_number с номером открытого PR).
 Перекрывающиеся облачные вызовы/активные заявки проверить перед промышленным
 частым таймером; истории/кеша/внешнего хранилища этот проект не добавляет.

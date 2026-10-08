@@ -43,7 +43,7 @@ def test_old_oracle_preserves_lot_volume_units(lot, old_allowed):
     current = {'a': D(5100), 'b': D(4900)}
     target = {'a': D(5000), 'b': D(5000)}
     orders, allowed = calibration.legacy_orders(current, target, {'a': D(1), 'b': D(1)},
-                                               {'a': lot, 'b': lot}, D(10000) / D('.99'))
+                                                {'a': lot, 'b': lot}, D(10000) / D('.99'))
     assert allowed is old_allowed
     assert len(orders) == 2
     assert orders[0][:3] == ('a', 'SELL', 100 // lot)

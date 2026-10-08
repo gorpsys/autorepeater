@@ -113,7 +113,7 @@ def _target_budgets(budget: Decimal, weights: tuple[Decimal, ...],
 
 
 def _budgets(budget: Decimal, weights: tuple[Decimal, ...], capitals: tuple[Decimal, ...],
-              above_limit: bool) -> tuple[tuple[Decimal, ...], Decimal, str]:
+             above_limit: bool) -> tuple[tuple[Decimal, ...], Decimal, str]:
     """Apply the agreed priority and conserve the exact child pool after correction."""
     pool = exact_product(budget, exact_sum(weights))
     targets = _target_budgets(budget, weights, pool)
@@ -134,7 +134,7 @@ def _budgets(budget: Decimal, weights: tuple[Decimal, ...], capitals: tuple[Deci
 
 
 def _capital_shortfall(pool: Decimal, capitals: tuple[Decimal, ...],
-                        profiles: tuple[AllocationProfile, ...]) -> bool:
+                       profiles: tuple[AllocationProfile, ...]) -> bool:
     """Only leaf reserves may explain a reserve-only shortage of the pool."""
     reserves = exact_sum(exact_product(capital, profile.reserve_fraction)
                          for capital, profile in zip(capitals, profiles))
@@ -143,8 +143,8 @@ def _capital_shortfall(pool: Decimal, capitals: tuple[Decimal, ...],
 
 
 def _child_contexts(context: StrategyContext, attributed: PositionAttribution,
-                     capitals: tuple[Decimal, ...], budgets: tuple[Decimal, ...],
-                     force: bool) -> tuple[StrategyContext, ...]:
+                    capitals: tuple[Decimal, ...], budgets: tuple[Decimal, ...],
+                    force: bool) -> tuple[StrategyContext, ...]:
     children = tuple(StrategyContext(context.path + (index,), budget, capital,
                                      budget < capital and force, positions, context.marks)
                      for index, (budget, capital, positions)

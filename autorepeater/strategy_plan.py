@@ -193,6 +193,18 @@ def _validate_main_target(target: object) -> None:
             raise ValueError(f'plan target price must be positive for UID {uid}')
 
 
+def _validate_plan_context(plan: StrategyPlan, context: StrategyContext) -> None:
+    """Check the occurrence, assigned budget and mandatory reduction decision together."""
+    validate_context(context)
+    if plan.path != context.path or plan.budget != context.budget:
+        raise ValueError('plan path/budget must match context')
+    if plan.positions != context.positions:
+        raise ValueError('plan positions must match context')
+    if (context.budget_reduction_requires_rebalance
+            and plan.decision.mode != TradeMode.REBALANCE):
+        raise ValueError('budget reduction requires REBALANCE')
+
+
 def validate_plan(plan: object, context: StrategyContext | None = None) -> None:
     """Validate the entire future financial tree before any execution."""
     if not isinstance(plan, StrategyPlan):
@@ -204,14 +216,7 @@ def validate_plan(plan: object, context: StrategyContext | None = None) -> None:
         raise ValueError('cash_floor must not exceed budget')
     validate_decision(plan.decision)
     if context is not None:
-        validate_context(context)
-        if plan.path != context.path or plan.budget != context.budget:
-            raise ValueError('plan path/budget must match context')
-        if plan.positions != context.positions:
-            raise ValueError('plan positions must match context')
-        if (context.budget_reduction_requires_rebalance
-                and plan.decision.mode != TradeMode.REBALANCE):
-            raise ValueError('budget reduction requires REBALANCE')
+        _validate_plan_context(plan, context)
     _validate_main_target(plan.target)
     validate_map(plan.unassigned, 'unassigned')
     validate_positions(plan.positions)

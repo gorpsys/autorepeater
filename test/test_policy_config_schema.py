@@ -45,7 +45,7 @@ def test_account_required_fields(field):
 
 @pytest.mark.parametrize('field', ['reserve', 'allocation_drift_limit'])
 @pytest.mark.parametrize('value', [None, True, 0, 0.2, '', 'bad', 'NaN', 'sNaN',
-                                  'Infinity', '-Infinity', '-0.1', '1'])
+                                   'Infinity', '-Infinity', '-0.1', '1'])
 def test_account_policy_decimal_validation(field, value):
     """No coercion, nonfinite limits or fractions outside [0, 1)."""
     with pytest.raises(ValueError, match=field):
@@ -54,30 +54,45 @@ def test_account_policy_decimal_validation(field, value):
 
 @pytest.mark.parametrize('field, value', [
     ('name', ''), ('name', ' NAMED'), ('name', 'NA\tMED'), ('name', True),
-    ('source_account_id', ''), ('source_account_id', '１２３'),
-    ('source_account_id', '123 '), ('source_account_id', 123), ('source_account_id', 'a123'),
+    ('source_account_id', ''), ('source_account_id', ' '),
+    ('source_account_id', '123 '), ('source_account_id', ' 123'),
+    ('source_account_id', '12 3'), ('source_account_id', '12\t3'),
+    ('source_account_id', '123\n'), ('source_account_id', '12\u00a03'),
+    ('source_account_id', 123), ('source_account_id', None),
+    ('source_account_id', True), ('source_account_id', []), ('source_account_id', {}),
 ])
-def test_account_names_and_ascii_source(field, value):
-    """Source numbers preserve leading zeroes; names are exact non-whitespace strings."""
+def test_account_names_and_source_strings(field, value):
+    """Names and API identifiers are nonempty strings without whitespace or coercion."""
     with pytest.raises(ValueError, match=field):
         account_config.validate_account_config(account_document(**{field: value}))
 
 
+@pytest.mark.parametrize('source', [
+    '00123', 'a123', '１２３', '2a78f51a-42c0-4a3e-8f95-b9ef692d2da1',
+    '2A78F51A-42C0-4A3E-8F95-B9EF692D2DA1',
+])
+def test_account_source_is_preserved_as_opaque_string(source):
+    """The API owns identifier syntax; no integer or UUID normalization is applied."""
+    config = account_config.validate_account_config(account_document(source_account_id=source))
+    assert config.source_account_id == source
+
+
 @pytest.mark.parametrize('name', ['NAMED', '00123', 'ACCOUNT'])
-def test_account_catalog_freezes_named_source(tmp_path, monkeypatch, name):
+@pytest.mark.parametrize('source', ['00123', '2a78f51a-42c0-4a3e-8f95-b9ef692d2da1'])
+def test_account_catalog_freezes_named_source(tmp_path, monkeypatch, name, source):
     """One document read; factories never reread or reinterpret the name as an ID."""
     monkeypatch.setenv('ACCOUNT_CONFIG_DIR', str(tmp_path))
     path = tmp_path / 'unrelated.json'
-    path.write_text(json.dumps(account_document(name)), encoding='utf-8')
+    path.write_text(json.dumps(account_document(name, source_account_id=source)), encoding='utf-8')
     with patch.object(account_config, 'read_account_document',
                       wraps=account_config.read_account_document) as read:
         prepared = strategies.prepare_strategy('ACCOUNT', name)
     read.assert_called_once_with(path)
     path.write_text(json.dumps(account_document(name, source_account_id='0004',
-                                               allocation_drift_limit='0.02')), encoding='utf-8')
+                                                allocation_drift_limit='0.02')), encoding='utf-8')
     with patch('builtins.open', side_effect=AssertionError('factory I/O')):
         strategy = strategies.create_strategy(prepared)
-    assert strategy.src == '00123'
+    assert strategy.src == source
     assert strategy.config.name == name
     assert strategy.config.allocation_drift_limit == Decimal('0.0092')
     assert strategies.create_strategy(strategies.prepare_strategy('ACCOUNT', name)).src == '0004'
@@ -153,7 +168,7 @@ def test_account_directory_error_cause(tmp_path, monkeypatch, operation):
 
 
 @pytest.mark.parametrize('budget, expected', [('0', '0.05'), ('99.99', '0.05'),
-                                           ('100', '0'), ('1E20', '0')])
+                                              ('100', '0'), ('1E20', '0')])
 def test_index_ranges_preserve_half_open_boundaries(budget, expected):
     """The stored Decimal ranges uniquely cover zero, shared edges and large budgets."""
     config = index_config.validate_index_config(index_document())
@@ -202,9 +217,9 @@ def test_index_range_decimal_errors(field, value):
 
 
 @pytest.mark.parametrize('field, value', [('budget_from', '1'), ('budget_to', '0'),
-                                        ('budget_to', None), ('limit', '1'),
-                                        ('upper_inclusive', True), ('upper_inclusive', 0),
-                                        ('upper_inclusive', None), ('extra', '0')])
+                                          ('budget_to', None), ('limit', '1'),
+                                          ('upper_inclusive', True), ('upper_inclusive', 0),
+                                          ('upper_inclusive', None), ('extra', '0')])
 def test_index_range_structural_errors(field, value):
     """No finite inverted intervals, first-row nulls, inclusive edges or extensions."""
     payload = index_document()
@@ -231,7 +246,7 @@ def test_index_finite_last_endpoint():
 
 
 @pytest.mark.parametrize('value', [None, True, 0, '', 'bad', 'NaN', 'sNaN',
-                                  'Infinity', '-Infinity', '-0.1', '1'])
+                                   'Infinity', '-Infinity', '-0.1', '1'])
 def test_composite_required_decimal_limit(value):
     """Inter-component tolerance is required and unrelated to reserve or turnover."""
     payload = {'name': 'ROOT', 'component_drift_limit': value,

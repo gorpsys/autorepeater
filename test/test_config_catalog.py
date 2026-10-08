@@ -79,7 +79,7 @@ def test_public_selection_keeps_exact_warnings_and_fatal_errors(schema):
 def test_index_implicit_selection_and_strict_load_are_unchanged():
     """Implicit calibration rejects ambiguity; load-all stays fatal without warnings."""
     config = index_config.IndexConfig('GOOD', None, [], None,
-        allocation_drift_limits=(
+                                      allocation_drift_limits=(
             AllocationDriftRange(Decimal('0'), None, False, Decimal('0')),))
     paths = [Path('first.json'), Path('second.json')]
     with patch.object(index_config, '_discover_candidates', return_value=[

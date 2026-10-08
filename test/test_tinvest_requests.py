@@ -18,6 +18,35 @@ from autorepeater.tinvest_execution_data import _read
 from autorepeater.tinvest_requests import call_api
 
 
+@pytest.mark.parametrize('code,status', [
+    (StatusCode.DEADLINE_EXCEEDED, 'DEADLINE_EXCEEDED'),
+    (StatusCode.INTERNAL, 'INTERNAL'), ('private-code', 'UNKNOWN'),
+])
+def test_request_failure_logs_method_status_and_duration_only(monkeypatch, caplog, code, status):
+    """Diagnostics must identify the timed-out RPC without logging SDK text or arguments."""
+    secret = 'private-details-and-token'
+    error = invest.RequestError(code, secret, {'authorization': secret})
+    calls = []
+
+    def shares(**kwargs):
+        calls.append(kwargs)
+        raise error
+
+    clock = iter([100, 110.125])
+    monkeypatch.setattr('autorepeater.tinvest_requests.time.perf_counter', lambda: next(clock))
+    with caplog.at_level(logging.ERROR, logger='tinkoffBot'):
+        with pytest.raises(invest.RequestError) as raised:
+            call_api(shares, token=secret)
+    assert raised.value is error
+    assert calls == [{'token': secret}]
+    assert [record.message for record in caplog.records] == [
+        f'API request failed: method=shares status={status} elapsed_seconds=10.125']
+    assert secret not in caplog.text
+    record, = caplog.records
+    assert (record.api_method, record.grpc_status, record.elapsed_seconds) == (
+        'shares', status, 10.125)
+
+
 @pytest.mark.parametrize('attempts', [0, 1, 7, 101])
 def test_rate_limit_retries_until_success(attempts, caplog):
     """No retry cap; each rejected attempt waits exactly ten seconds."""

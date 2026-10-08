@@ -44,11 +44,12 @@ def fixture_runtime():
         'stock': TradeRules(1, 'rub', True, True, Decimal(100), 100, 100)}
     strategy.allocation_profile.return_value = AllocationProfile(
         {'stock': Decimal(1)}, {'stock': Decimal(10)}, Decimal(0))
+
     def build_plan(_snapshot, context):
         return StrategyPlan(context.path, context.budget,
                             TargetPortfolio({'stock': Decimal(10)}, {'stock': Decimal(10)}),
                             Decimal(0), StrategyDecision(TradeMode.BUY_ONLY, False,
-                                                        'initial', None, Decimal(0)), (), {},
+                                                         'initial', None, Decimal(0)), (), {},
                             context.positions)
     strategy.build_plan.side_effect = build_plan
     executor.submit_order.side_effect = lambda _account, intent: ExecutionReceipt(
@@ -146,8 +147,9 @@ def test_unknown_execution_stops_only_local_pass(runtime):
     strategy.event_accounts.return_value = ('dst',)
     strategy.should_rebalance.return_value = True
     data.position_events.side_effect = [iter([object()]), RuntimeError('end offline stream')]
-    executor.submit_order.side_effect = [OrderExecutionError('unknown'),
-                                       ExecutionReceipt('stock', 'BUY', 'next', 'FILL', 10, 10, {})]
+    executor.submit_order.side_effect = [
+        OrderExecutionError('unknown'),
+        ExecutionReceipt('stock', 'BUY', 'next', 'FILL', 10, 10, {})]
     with pytest.raises(RuntimeError, match='end offline stream'):
         AutoRepeater(strategy, data, execution, executor).mainflow('dst')
     assert executor.submit_order.call_count == 2
@@ -236,6 +238,7 @@ def test_sdk_unknown_result_stops_pass_but_mainflow_processes_next_event(
         execution_report_status=OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL)]
     stopped = []
     sync = engine.sync_accounts
+
     def observe_sync(dst):
         try:
             return sync(dst)
@@ -245,6 +248,7 @@ def test_sdk_unknown_result_stops_pass_but_mainflow_processes_next_event(
     monkeypatch.setattr(engine, 'sync_accounts', observe_sync)
     strategy.event_accounts.return_value = ('dst',)
     strategy.should_rebalance.return_value = True
+
     def events(_accounts):
         assert orders.mock_calls == [stock_post_call('first-request')]
         assert factory.mock_calls == [call()]
@@ -382,7 +386,7 @@ def test_entrypoints_use_same_real_engine(runtime, monkeypatch, entrypoint, empt
     monkeypatch.setattr(runner_module.Runner, '_create_repeater',
                         lambda self, _client: (engine.set_debug(self.params.debug), engine)[1])
     monkeypatch.setattr('sys.argv', ['main.py', '--algoritm', 'OFFLINE', '-s', 'source',
-                                   '-d', 'dst', '--debug'])
+                                     '-d', 'dst', '--debug'])
     expected = (pytest.raises(ValueError) if empty else
                 pytest.raises(RuntimeError, match='offline stream end') if entrypoint == 'cli'
                 else nullcontext())
@@ -402,6 +406,7 @@ def test_every_child_main_is_validated_before_unassigned_sale(runtime, bad_child
     """Invalid returned trees cannot liquidate an otherwise legitimate unrelated holding."""
     strategy, data, execution, executor = runtime
     original = strategy.build_plan.side_effect
+
     def build(snapshot, context):
         base = original(snapshot, context)
         children = tuple(replace(base, path=(index,), budget=Decimal(50),
@@ -454,6 +459,7 @@ def test_invalid_plan_ownership_and_empty_reason_fail_before_rules(runtime, dama
         execution.get_destination.return_value, portfolio=PortfolioSnapshot((entry,)),
         quantities={'stock': Decimal(2)}, marks={'stock': Decimal(10)})
     original = strategy.build_plan.side_effect
+
     def build(snapshot, context):
         plan = original(snapshot, context)
         if damage == 'overlap':

@@ -6,8 +6,8 @@ import json
 import logging
 import subprocess
 import sys
-from test.test_autorepeater import client_tinvest  # pylint: disable=unused-import
-from test.test_runtime_policy import fixture_runtime  # pylint: disable=unused-import
+from test.test_autorepeater import client_tinvest
+from test.test_runtime_policy import fixture_runtime
 from test.test_order_plan import destination, leaf, rules
 from unittest.mock import patch
 
@@ -20,6 +20,8 @@ from autorepeater.strategy_data import PositionEvent
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError
 from autorepeater.repeater import AutoRepeater
 from autorepeater.order_plan import build_order_plan
+
+__all__ = ['client_tinvest', 'fixture_runtime']
 
 
 @pytest.fixture(name='execution')
@@ -67,16 +69,6 @@ def test_unavailable_bestprice_is_info_skip(runtime, caplog):
     executor.submit_order.assert_not_called()
 
 
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize('algoritm, src', [('COMPOSITE', 'BALANCED'), ('INDEX', 'IMOEX')])
 def test_cloud_logs_resolved_selection_without_credentials(algoritm, src, caplog, monkeypatch):
     """Overrides must be visible; the token must never appear in diagnostic output."""
@@ -108,7 +100,7 @@ def test_rebalance_diagnostics_format_all_decimal_values(caplog):
     """Money and ownership maps use ordinary decimal text, including nano and integers."""
     node = leaf(target={'X': Decimal(1)}, budget='1', floor='0.000000001')
     node = replace(node, decision=replace(node.decision, metric=Decimal('1E-9'),
-                                         limit=Decimal(0)))
+                                          limit=Decimal(0)))
     plan = build_order_plan(node, destination(cash='1'), {(): {}},
                             {'X': Decimal('1E-9')}, rules('X'))
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
@@ -120,10 +112,6 @@ def test_rebalance_diagnostics_format_all_decimal_values(caplog):
     assert 'buy_money=100000000000000000000.0' in messages
     assert 'pieces={(): 1.0}' in messages
     assert 'Decimal(' not in messages and 'E-' not in messages and 'E+' not in messages
-
-
-
-
 
 
 def test_untriggered_event_reports_info(caplog):

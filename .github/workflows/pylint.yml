@@ -3,7 +3,8 @@ name: Pylint
 on: [push]
 
 jobs:
-  build:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -14,9 +15,6 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pylint
-        pip install pytest
+        make setup
     - name: Analysing the code with pylint
-      run: |
-        pylint $(git ls-files '*.py')
+      run: make lint

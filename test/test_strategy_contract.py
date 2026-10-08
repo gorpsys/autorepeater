@@ -345,9 +345,9 @@ def fixture_launch(monkeypatch):
                                  blocked=False, blocked_lots=invest.Quotation(0, 0))])
     client.instruments.get_instrument_by.return_value = invest.InstrumentResponse(
         instrument=invest.Instrument(
-        uid='uid', ticker='ONE', name='One', lot=1, currency='RUB',
-        api_trade_available_flag=True,
-        trading_status=invest.SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING))
+            uid='uid', ticker='ONE', name='One', lot=1, currency='RUB',
+            api_trade_available_flag=True,
+            trading_status=invest.SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING))
     client.users.get_accounts.return_value = invest.GetAccountsResponse(accounts=[])
     client.orders.post_order.return_value = invest.PostOrderResponse(order_id='test-order')
     data = contract_case('INDEPENDENT')[1]
@@ -389,6 +389,7 @@ def configure_filled_sdk(client):
     def cash_position():
         return next(item for item in client.operations.get_portfolio.return_value.positions
                     if item.instrument_type == 'currency')
+
     def cash():
         item = cash_position()
         return item.quantity.units + Decimal(item.quantity.nano) / 1_000_000_000
@@ -398,12 +399,13 @@ def configure_filled_sdk(client):
     client.orders.get_orders.return_value = invest.GetOrdersResponse(orders=[])
     client.market_data.get_trading_status.side_effect = lambda instrument_id: (
         invest.GetTradingStatusResponse(instrument_uid=instrument_id,
-                                       api_trade_available_flag=True,
-                                       bestprice_order_available_flag=True))
+                                        api_trade_available_flag=True,
+                                        bestprice_order_available_flag=True))
     client.orders.get_max_lots.side_effect = lambda request: invest.GetMaxLotsResponse(
         currency='rub', buy_limits=SimpleNamespace(
             buy_money_amount=invest.Quotation(int(cash()), int((cash() % 1) * 1_000_000_000)),
             buy_max_lots=1000000), sell_limits=SimpleNamespace(sell_max_lots=1000000))
+
     def fill(**params):
         uid = params['instrument_id']
         lots = params['quantity']
@@ -414,16 +416,16 @@ def configure_filled_sdk(client):
         held = next((item for item in positions if item.instrument_uid == uid), None)
         if held is None:
             held = invest.PortfolioPosition(instrument_uid=uid, instrument_type='share',
-                                           current_price=invest.MoneyValue('rub', price, 0),
-                                           quantity=invest.Quotation(0, 0), blocked=False,
-                                           blocked_lots=invest.Quotation(0, 0))
+                                            current_price=invest.MoneyValue('rub', price, 0),
+                                            quantity=invest.Quotation(0, 0), blocked=False,
+                                            blocked_lots=invest.Quotation(0, 0))
             positions.append(held)
         held.quantity.units += direction * amount
         cash_position().quantity.units -= direction * amount * price
         return invest.PostOrderResponse(instrument_uid=uid, direction=params['direction'],
-                                       order_id='offline', lots_requested=lots, lots_executed=lots,
-                                       execution_report_status=invest.OrderExecutionReportStatus.
-                                       EXECUTION_REPORT_STATUS_FILL)
+                                        order_id='offline', lots_requested=lots, lots_executed=lots,
+                                        execution_report_status=invest.OrderExecutionReportStatus.
+                                        EXECUTION_REPORT_STATUS_FILL)
     client.orders.post_order.side_effect = fill
 
 
@@ -437,7 +439,7 @@ def test_independent_algorithm_launches(entrypoint, invalid_config, launch, monk
 
     monkeypatch.delenv('IMOEX_CONFIG_PATH', raising=False)
     monkeypatch.setenv('INDEX_CONFIG_DIR', str(tmp_path / 'missing' if invalid_config == 'missing'
-                                           else tmp_path))
+                                               else tmp_path))
     if invalid_config == 'malformed':
         (tmp_path / 'broken.json').write_text('{broken', encoding='utf-8')
     elif invalid_config == 'conflicting_paths':
@@ -446,7 +448,7 @@ def test_independent_algorithm_launches(entrypoint, invalid_config, launch, monk
                         ('ALGORITM', 'INDEPENDENT'), ('SRC_ACCOUNT', 'quote:uid')]:
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(sys, 'argv', ['main.py', '--algoritm', 'INDEPENDENT',
-                                    '-s', 'quote:uid', '-d', 'dst'])
+                                      '-s', 'quote:uid', '-d', 'dst'])
     streaming = entrypoint in ('run', 'cli')
 
     def invoke():

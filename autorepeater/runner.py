@@ -2,7 +2,8 @@
 import dataclasses
 
 from t_tech.invest import Client
-from t_tech.invest.constants import INVEST_GRPC_API
+from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
+from t_tech.invest.sandbox.client import SandboxClient
 from t_tech.invest.services import Services
 
 from autorepeater.logging_config import configure_local_logging
@@ -30,8 +31,12 @@ class Runner:
                  token: str,
                  prepared_strategy: PreparedStrategy,
                  dst: str | None,
-                 params: RunnerParams | None = None) -> None:
+                 params: RunnerParams | None = None,
+                 *, sandbox: bool = False) -> None:
+        if not isinstance(sandbox, bool):
+            raise TypeError('sandbox must be bool')
         self.token = token
+        self.sandbox = sandbox
         self.params = params if params is not None else RunnerParams(debug=False)
         self.strategy = create_strategy(prepared_strategy)
         self.dst = dst
@@ -39,8 +44,7 @@ class Runner:
 
     def run(self) -> None:
         """run mainflow for server variant"""
-        with Client(token=self.token, target=INVEST_GRPC_API,
-                    interceptors=[UnaryDeadlineInterceptor()]) as client:
+        with self._create_client() as client:
             print_all_portfolio(client)
             autorepeater = self._create_repeater(client)
             if self.dst:
@@ -49,19 +53,25 @@ class Runner:
                 print_missing_destination('run')
 
     def run_sync(self) -> None:
-        """run one sync for serverless varian"""
-        with Client(token=self.token, target=INVEST_GRPC_API,
-                    interceptors=[UnaryDeadlineInterceptor()]) as client:
+        """Run one finite sync with the explicitly selected SDK endpoint."""
+        with self._create_client() as client:
             autorepeater = self._create_repeater(client)
             if self.dst:
                 autorepeater.sync_accounts(self.dst)
             else:
                 print_missing_destination('run_sync')
 
+    def _create_client(self) -> Client:
+        """Keep every service on one endpoint with finite unary deadlines."""
+        client_class = SandboxClient if self.sandbox else Client
+        target = INVEST_GRPC_API_SANDBOX if self.sandbox else INVEST_GRPC_API
+        return client_class(token=self.token, target=target,
+                            interceptors=[UnaryDeadlineInterceptor()])
+
     def _create_repeater(self, client: Services) -> AutoRepeater:
         """Apply the same risk parameters in both launch modes."""
         data = TInvestStrategyData(client)
         autorepeater = AutoRepeater(self.strategy, data, TInvestExecutionData(client, data),
-                                   TInvestOrderExecutor(client))
+                                    TInvestOrderExecutor(client))
         autorepeater.set_debug(self.params.debug)
         return autorepeater

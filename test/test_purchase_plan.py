@@ -51,8 +51,8 @@ def test_floor_only_once_and_cash_own_bound_intersection():
 
 
 @pytest.mark.parametrize('change', [{'api_trade_available': False},
-                                  {'bestprice_order_available': False}, {'buy_max_lots': 0},
-                                  {'currency': 'usd'}])
+                                    {'bestprice_order_available': False}, {'buy_max_lots': 0},
+                                    {'currency': 'usd'}])
 def test_unavailable_lot_or_currency_defers(change):
     """unavailable lot or currency defers."""
     result = build_order_plan(leaf(), destination(), {(): {}}, {'X': D(1)},
@@ -105,8 +105,8 @@ def test_unequal_prices_and_three_fractional_owners_conserve_lot_money():
     """unequal prices and three fractional owners conserve lot money."""
     tree = parent(tuple(leaf((index,), {'X': D(quantity)}, budget=budget)
                         for index, quantity, budget in [(0, '0.3', '0.9'),
-                                                       (1, '0.2', '0.6'),
-                                                       (2, '0.5', '1.5')]))
+                                                        (1, '0.2', '0.6'),
+                                                        (2, '0.5', '1.5')]))
     result = build_order_plan(tree, destination(cash='3'),
                               {(0,): {}, (1,): {}, (2,): {}}, {'X': D(3)}, rules('X'))
     assert result.buys[0].pieces == {(0,): D('.3'), (1,): D('.2'), (2,): D('.5')}

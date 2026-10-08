@@ -115,7 +115,7 @@ def test_invalid_account_path(tmp_path, monkeypatch, path):
 
 
 @pytest.mark.parametrize('payload', ['{', '', '{}', '[]', '{"reserve":true}',
-                                         '{"reserve":0.01}', '{"reserve":"NaN"}'])
+                                     '{"reserve":0.01}', '{"reserve":"NaN"}'])
 @pytest.mark.parametrize('entrypoint', ['prepare', 'cli', 'cloud'])
 def test_invalid_settings_before_client(tmp_path, monkeypatch, payload, entrypoint):
     """Bad settings stop entrypoints before credentials, construction or SDK access."""

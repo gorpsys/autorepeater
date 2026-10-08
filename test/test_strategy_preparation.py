@@ -216,7 +216,7 @@ def test_neutral_creation_validates_every_nested_factory_before_client(tree, mon
 
 
 def test_nested_index_reuse_reads_each_occurrence_only_during_preparation(tree, tmp_path,
-                                                                        monkeypatch):
+                                                                          monkeypatch):
     """INDEX keeps a read pass per occurrence; creation retains files and factories."""
     nodes, _, factory_tree, _, _ = tree
     nodes['root'] = (('INDEX', 'ONLY'), ('INDEX', 'ONLY'))

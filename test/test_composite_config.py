@@ -104,7 +104,7 @@ def test_invalid_components(components):
     """Components must be a nonempty list of objects."""
     with pytest.raises(ValueError, match='components'):
         composite_config.validate_composite_config({'component_drift_limit': '0.20',
-            'name': 'GOOD', 'components': components})
+                                                    'name': 'GOOD', 'components': components})
 
 
 @pytest.mark.parametrize('field', ['algoritm', 'src', 'weight'])

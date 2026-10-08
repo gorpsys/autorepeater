@@ -19,8 +19,8 @@ NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
            'execution_data', 'execution', 'order_plan', 'purchase_plan'}
 
 
-def forbidden_imports(source, module):
-    """Return forbidden static imports as (line, absolute module) pairs."""
+def forbidden_modules(module):
+    """Keep layer policy independent of the syntax used to import a dependency."""
     name = module.rsplit('.', 1)[-1]
     strategies = {f'autorepeater.{path.stem}' for path in PACKAGE.glob('*_strategy.py')}
     forbidden = set()
@@ -43,19 +43,28 @@ def forbidden_imports(source, module):
                                   'autorepeater.tinvest_execution_data',
                                   'autorepeater.order_execution'}
 
+    return forbidden
+
+
+def import_dependencies(node, module):
+    """Resolve import forms into the same absolute dependency names."""
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    if isinstance(node, ast.ImportFrom):
+        base = node.module or ''
+        if node.level:
+            base = resolve_name('.' * node.level + base, module.rsplit('.', 1)[0])
+        return ([f'{base}.{alias.name}' for alias in node.names]
+                if base == 'autorepeater' else [base])
+    return []
+
+
+def forbidden_imports(source, module):
+    """Return forbidden static imports as (line, absolute module) pairs."""
+    forbidden = forbidden_modules(module)
     violations = []
     for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            dependencies = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            base = node.module or ''
-            if node.level:
-                base = resolve_name('.' * node.level + base, module.rsplit('.', 1)[0])
-            dependencies = ([f'{base}.{alias.name}' for alias in node.names]
-                            if base == 'autorepeater' else [base])
-        else:
-            continue
-        for dependency in dependencies:
+        for dependency in import_dependencies(node, module):
             if any(dependency == banned or dependency.startswith(banned + '.')
                    for banned in forbidden):
                 violations.append((node.lineno, dependency))
@@ -151,11 +160,11 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
 
 
 @pytest.mark.parametrize('module', ['strategy_plan', 'strategy_allocation', 'execution',
-                                   'execution_data', 'order_plan', 'purchase_plan'])
+                                    'execution_data', 'order_plan', 'purchase_plan'])
 @pytest.mark.parametrize('dependency', ['t_tech.invest', 'grpc', 'autorepeater.strategies',
-                                       'autorepeater.account_strategy',
-                                       'autorepeater.index_strategy',
-                                       'autorepeater.composite_strategy'])
+                                        'autorepeater.account_strategy',
+                                        'autorepeater.index_strategy',
+                                        'autorepeater.composite_strategy'])
 def test_financial_models_are_neutral(module, dependency):
     """Future policy DTOs and attribution must not depend on concrete strategies."""
     assert forbidden_imports(f'import {dependency}', f'autorepeater.{module}') == [

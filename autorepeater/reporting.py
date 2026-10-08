@@ -95,7 +95,7 @@ def print_index_instrument_selected(instrument: InstrumentInfo) -> None:
 
 
 def print_index_selection_warning(ticker: str, chosen: InstrumentInfo,
-                                 available: Sequence[InstrumentInfo]) -> None:
+                                  available: Sequence[InstrumentInfo]) -> None:
     """Multiple live candidates use the API's original order, not a board preference."""
     details = ', '.join(f'{item.uid}/{item.class_code}' for item in available)
     logger.warning('Multiple API-tradable index instruments: %s; '
@@ -230,6 +230,7 @@ def format_index_calibration(report: Mapping[str, object]) -> str:
 def print_index_calibration(payload: str) -> None:
     """Display the same public data that can be saved for offline reproduction."""
     logger.log(IMPORTANT, '%s', payload)
+
 
 def _decimal_map(values: Mapping[KeyT, Decimal]) -> str:
     return '{' + ', '.join(f'{key}: {format_decimal(value)}'

@@ -160,7 +160,7 @@ def test_catalog_transport_failure_is_not_silently_bypassed(catalog_client):
 
 
 @pytest.mark.parametrize('endpoint', ['shares', 'etfs', 'get_instrument_by',
-                                     'find_instrument', 'get_last_prices'])
+                                      'find_instrument', 'get_last_prices'])
 def test_strategy_sdk_reads_retry_quota_in_shared_wrapper(catalog_client, endpoint):
     """Each source read, including bulk metadata, reaches the quota wrapper."""
     data = TInvestStrategyData(catalog_client)

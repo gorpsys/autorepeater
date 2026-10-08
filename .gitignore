@@ -122,6 +122,8 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+.sandbox_token
+.sandbox-token
 .env
 .venv
 env/

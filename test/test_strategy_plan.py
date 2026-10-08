@@ -80,7 +80,7 @@ def test_profile_sum_is_exact():
     """A tiny invalid excess must not disappear in the default context."""
     with pytest.raises(ValueError, match='sum'):
         validate_profile(AllocationProfile({'X': D(1), 'Y': D('1e-80')},
-                                          {'X': D(1), 'Y': D(1)}, D(0)))
+                                           {'X': D(1), 'Y': D(1)}, D(0)))
     assert exact_sum([D('1e80'), D('1e-80'), -D('1e80')]) == D('1e-80')
     assert exact_sum([]) == 0
     assert getcontext().prec == 28

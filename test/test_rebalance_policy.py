@@ -121,7 +121,7 @@ def test_deficit_below_limit_reduces_capital_without_redistribution():
 
 
 @pytest.mark.parametrize('budget,force', [('90', False), ('95', False),
-                                        ('89.99999999999999999999999999', True)])
+                                          ('89.99999999999999999999999999', True)])
 def test_reserve_boundary_without_epsilon(budget, force):
     """A=M and A<M<S are reserve-only; any strictly M<A cuts capital."""
     result = distribute(('60', '40'), budget, weights=('.6', '.4'), reserves=('.1', '.1'))
@@ -305,7 +305,7 @@ def test_target_partition_retries_negative_residual():
 
 
 @pytest.mark.parametrize('budget', ['0.99999999999999999999999999999',
-                                  '1000000000000000000000000000.1'])
+                                    '1000000000000000000000000000.1'])
 def test_full_pool_cannot_overspend_or_lose_parent_residual(budget):
     """W=1 exhausts exactly B, even when B has more than 28 significant digits."""
     result = distribute(('0', '0'), budget, weights=('.6', '.4'))

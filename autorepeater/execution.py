@@ -51,7 +51,6 @@ class OrderExecutor(Protocol):  # pylint: disable=too-few-public-methods
     def submit_order(self, account_id: str, intent: OrderIntent) -> ExecutionReceipt:
         """Submit one intent, returning documented execution facts."""
 
-
     def get_order_state(self, account_id: str, order_id: str) -> ExecutionReceipt:
         """Read an already submitted order; never submits or cancels it."""
 
@@ -264,7 +263,7 @@ def _execution_result(plan: OrderPlan, receipts: Sequence[ExecutionReceipt], sta
 
 
 def execute_plan(account_id: str, plan: OrderPlan, data: ExecutionData,
-                  executor: OrderExecutor) -> tuple[ExecutionReceipt, ...]:
+                 executor: OrderExecutor) -> tuple[ExecutionReceipt, ...]:
     # pylint: disable=too-many-locals
     """Sales confirmed individually; fresh positions/caps constrain a new BUY plan."""
     validate_plan(plan.strategy)

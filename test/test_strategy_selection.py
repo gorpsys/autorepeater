@@ -25,6 +25,7 @@ import main as cli
 
 pytestmark = pytest.mark.usefixtures('named_accounts')
 
+
 @pytest.fixture(autouse=True)
 def selection_environment(monkeypatch):
     """Every selection has controlled paths and a private registry."""
@@ -262,7 +263,7 @@ def test_old_creation_interface_is_removed():
 @pytest.mark.parametrize('entrypoint', ['cli', 'cloud', 'runner'])
 @pytest.mark.parametrize('foreign', ['schema', 'syntax', 'missing_name', 'duplicate'])
 def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog,
-                                      entrypoint, foreign):
+                                        entrypoint, foreign):
     """All application launches use one preparation, read pass, and warning pass."""
     caplog.set_level(logging.WARNING, logger='tinkoffBot')
     documents('good.json')
