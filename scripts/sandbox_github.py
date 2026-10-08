@@ -30,6 +30,7 @@ EXPECTED_SCENARIOS = (
     'test_full_balanced_imoex_oblg_gold',
 )
 MAX_EVIDENCE_BYTES = 2_000_000
+BOOTSTRAP_PR_NUMBER = 28
 
 
 class GitHubFailure(Exception):
@@ -145,10 +146,13 @@ def select_target(event: object, environment: dict[str, str], client: GitHubClie
     if event_name == 'pull_request':
         pull = record(data.get('pull_request'))
         raw_number = pull.get('number')
-        if isinstance(raw_number, bool) or not isinstance(raw_number, int) or raw_number != 27:
-            raise GitHubFailure('bootstrap only supports PR27; manual E2E required')
+        if (isinstance(raw_number, bool) or not isinstance(raw_number, int) or
+                raw_number != BOOTSTRAP_PR_NUMBER):
+            raise GitHubFailure(
+                'bootstrap only supports the workflow repair PR; manual E2E required')
         expected = commit_sha(record(pull.get('head')).get('sha'))
-        return validate_pull_request(client.read('pulls/27'), client.repository, 27, expected)
+        return validate_pull_request(client.read(f'pulls/{BOOTSTRAP_PR_NUMBER}'),
+                                     client.repository, BOOTSTRAP_PR_NUMBER, expected)
     raise GitHubFailure('unsupported GitHub event')
 
 

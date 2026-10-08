@@ -10,7 +10,7 @@ on:
         type: string
   push:
     branches: [master]
-  # Temporary bootstrap: only PR27 may pass the approval job below.
+  # Temporary bootstrap: only the workflow-repair PR28 may pass approval below.
   # Future PRs get an explicit not-run job, never implicit sandbox execution.
   pull_request:
     branches: [master]
@@ -31,7 +31,7 @@ jobs:
   manual-required:
     if: >-
       github.event_name == 'pull_request' &&
-      (github.event.pull_request.number != 27 ||
+      (github.event.pull_request.number != 28 ||
        github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -45,17 +45,19 @@ jobs:
   bootstrap-approval:
     if: >-
       github.event_name == 'pull_request' &&
-      github.event.pull_request.number == 27 &&
+      github.event.pull_request.number == 28 &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions: {}
     environment: sandbox-e2e-bootstrap
     steps:
-      - run: echo "Approved bootstrap workflow for the fixed PR27 event."
+      - run: echo "Approved bootstrap workflow for the fixed PR28 event."
 
   prepare:
-    needs: [bootstrap-approval]
+    # The route marker is skipped for approval/dispatch/push. This also verifies
+    # downstream execution after a skipped ancestor during the repair bootstrap.
+    needs: [bootstrap-approval, manual-required]
     if: >-
       always() && !cancelled() &&
       ((github.event_name != 'pull_request' && github.ref == 'refs/heads/master') ||
