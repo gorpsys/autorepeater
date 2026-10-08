@@ -91,8 +91,18 @@ def test_publisher_cancellation_after_successful_verification_is_blocked() -> No
     """An already passed live/verify pair is not enough after workflow cancellation."""
     text = job('publish')
     assert "if: ${{ always() && !cancelled() && needs.prepare.result == 'success' }}" in text
-    assert 'RUN_CANCELLED: ${{ cancelled() }}' in text
+    assert 'RUN_CANCELLED: ${{ job.status == \'cancelled\' }}' in text
+    assert "        if: ${{ !cancelled() }}" in text
     assert "process.env.RUN_CANCELLED === 'false'" in text
+
+
+def test_status_functions_are_used_only_in_if_expressions() -> None:
+    """GitHub permits status functions in conditions, not env or other fields."""
+    text = WORKFLOW.read_text(encoding='utf-8')
+    for expression in re.finditer(r'\$\{\{(.*?)\}\}', text, re.DOTALL):
+        if re.search(r'\b(always|cancelled|failure|success)\s*\(', expression.group(1)):
+            key = text[:expression.start()].rsplit('\n', 1)[-1].strip()
+            assert key.startswith('if:'), f'status function outside if: {key}'
 
 
 def test_publication_cannot_execute_tested_head_and_checks_full_success() -> None:
