@@ -12,6 +12,12 @@ NODE = 'e2e/test_sandbox.py::test_full_balanced_imoex_oblg_gold'
 OTHER = 'e2e/test_sandbox.py::test_child_own_drift_below_component_limit'
 
 
+@pytest.fixture(autouse=True)
+def isolate_ci_environment(monkeypatch):
+    """Small offline histories must not inherit the host runner's full-suite policy."""
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+
+
 def attempt(nodes=(NODE,), failed=(), *, status='DEADLINE_EXCEEDED'):
     """Build original phase facts, independently of controller execution."""
     phases = []
@@ -296,6 +302,25 @@ def test_controller_writes_requested_final_xml(tmp_path):
         ['e2e/', '--junitxml', str(final)], tmp_path, 100,
         runtime=sandbox_retry.RetryRuntime(run, lambda: 0)) == 0
     assert evidence.xml_states(final) == {NODE: 'passed'}
+
+
+def test_controller_requires_full_suite_in_github(tmp_path, monkeypatch):
+    """Isolated unit histories do not weaken the actual CI acceptance boundary."""
+    import subprocess  # pylint: disable=import-outside-toplevel
+    from scripts import sandbox_retry  # pylint: disable=import-outside-toplevel
+    monkeypatch.setenv('GITHUB_ACTIONS', 'true')
+    calls = []
+
+    def run(command, **_):
+        calls.append(command)
+        store(tmp_path, 1, attempt())
+        (tmp_path / 'retry.json').unlink()
+        return subprocess.CompletedProcess(command, 0)
+    with pytest.raises(evidence.RetryFailure, match='full initial 17-case collection required'):
+        sandbox_retry.run_attempts(
+            ['e2e/'], tmp_path, 100, runtime=sandbox_retry.RetryRuntime(run, lambda: 0))
+    assert len(calls) == 1
+    assert not (tmp_path / 'junit.xml').exists()
 
 
 @pytest.mark.parametrize('fault', ['supervision', 'timeout', 'run-id', 'evidence'])
