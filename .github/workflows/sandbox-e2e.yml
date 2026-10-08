@@ -84,6 +84,7 @@ jobs:
 
   pending:
     needs: [prepare]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
@@ -107,6 +108,7 @@ jobs:
 
   live:
     needs: [prepare, pending]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.pending.result == 'success' }}
     runs-on: ubuntu-latest
     # Queue and environment approval wait are outside this active job deadline.
     # All seven step limits sum to 48m, leaving 7m for runner/action overhead.
@@ -231,3 +233,4 @@ jobs:
                 'Sandbox suite failed, canceled, not run or incomplete',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
+            if (!complete) core.setFailed('Sandbox E2E not fully verified');

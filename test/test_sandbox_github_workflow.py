@@ -74,6 +74,38 @@ def test_evidence_is_verified_on_a_separate_readonly_runner() -> None:
     assert "needs.live.result == 'success'" in text
 
 
+@pytest.mark.parametrize('name,dependencies', [
+    ('pending', ('prepare',)),
+    ('live', ('prepare', 'pending')),
+])
+@pytest.mark.parametrize('result,cancelled,expected', [
+    ('success', False, True),
+    ('success', True, False),
+    ('failure', False, False),
+    ('cancelled', False, False),
+    ('skipped', False, False),
+])
+def test_live_chain_uses_explicit_status_guards_after_skipped_bootstrap(
+        name: str, dependencies: tuple[str, ...], result: str,
+        cancelled: bool, expected: bool) -> None:
+    """A skipped optional ancestor must not add GitHub's implicit success guard."""
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    condition = re.search(r'^    if: \$\{\{ (.*?) \}\}$', job(name), re.MULTILINE)
+    assert condition is not None, 'job requires an explicit status guard'
+    clauses = condition.group(1).split(' && ')
+    assert clauses[0] == '!cancelled()'
+    assert clauses[1:] == [f"needs.{dependency}.result == 'success'"
+                           for dependency in dependencies]
+    assert ((not cancelled) and all(result == 'success' for _ in dependencies)) is expected
+
+
+def test_incomplete_publication_fails_workflow_after_publishing_failure() -> None:
+    """A red required status must not leave the workflow misleadingly green."""
+    text = job('publish')
+    assert "if (!complete) core.setFailed('Sandbox E2E not fully verified');" in text
+    assert text.index('await github.rest.repos.createCommitStatus') < text.index('core.setFailed')
+
+
 def test_live_step_deadlines_reserve_cleanup_artifact_and_overhead_time() -> None:
     """Even worst-case step deadlines leave time before the active job expires."""
     text = job('live')
