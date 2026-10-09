@@ -58,6 +58,7 @@ jobs:
     env:
       DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
       FOLDER_ID: b1gdgrp5bnth11phova8
+      CLOUD_ID: b1gbga988v36vq19lmb7
       SA_ID: ajela8pd8l3bjeupa04s
       GITHUB_OIDC_AUDIENCE: https://github.com/gorpsys
       FUNCTION_NAME: python-function
