@@ -27,7 +27,8 @@ def facts():
 def event():
     """workflow_run is not automatically trusted just because it uses master code."""
     return {'workflow_run': {
-        'name': 'Sandbox live E2E', 'event': 'push', 'head_branch': 'master', 'head_sha': SHA,
+        'name': 'Sandbox E2E - push PR master', 'path': '.github/workflows/sandbox-e2e.yml',
+        'event': 'push', 'head_branch': 'master', 'head_sha': SHA,
         'status': 'completed', 'conclusion': 'success', 'head_repository': {'full_name': REPO},
     }}
 
@@ -62,7 +63,7 @@ def test_unsafe_trigger_cannot_reach_cloud(damage):
     elif damage == 'running':
         run['status'] = 'in_progress'
     elif damage == 'other-workflow':
-        run['name'] = 'Pylint'
+        run['path'] = '.github/workflows/pylint.yml'
     elif damage == 'other-branch':
         run['head_branch'] = 'feature'
     elif damage == 'event-branch':

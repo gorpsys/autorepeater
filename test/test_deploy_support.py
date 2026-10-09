@@ -1,5 +1,7 @@
 """Credential-bearing HTTP calls are bounded and never expose a provider error body."""
 from http.client import HTTPResponse
+from io import BytesIO
+import json
 from pathlib import Path
 import runpy
 from unittest.mock import create_autospec
@@ -87,3 +89,35 @@ def test_script_entrypoint_rejects_untrusted_launch(monkeypatch, capsys, script)
         runpy.run_path(str(path), run_name='__main__')
     assert error.value.code == 1
     assert 'Deployment' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('code,expected', [
+    ('invalid_grant', '; oauth=invalid_grant'),
+    ('invalid_request', '; oauth=invalid_request'),
+    ('private-token', ''),
+])
+def test_http_error_exposes_only_allowlisted_oauth_code(monkeypatch, code, expected):
+    """Provider descriptions and arbitrary error values must remain private."""
+    _, opener, _ = transport(monkeypatch)
+    body = json.dumps({'error': code, 'error_description': 'private-token'}).encode()
+    opener.open.side_effect = HTTPError(
+        'https://auth.yandex.cloud', 400, 'private-token', None, BytesIO(body))
+    with pytest.raises(support.DeployError) as error:
+        support.request_json(Request('https://auth.yandex.cloud/oauth/token'))
+    assert str(error.value) == 'HTTP request failed (status 400)' + expected
+
+
+@pytest.mark.parametrize('body', [b'invalid JSON', b'[]', b'x' * 4097])
+def test_unreadable_oauth_error_body_keeps_status_only(body):
+    """Malformed and oversized provider bodies never escape diagnostics."""
+    error = HTTPError('https://auth.yandex.cloud', 400, 'private', None, BytesIO(body))
+    assert not support.oauth_error_code(error)
+
+
+def test_oauth_error_body_read_failure_is_not_replaced_by_unsafe_exception(monkeypatch):
+    """A broken error stream still preserves the original safe status diagnostic."""
+    error = HTTPError('https://auth.yandex.cloud', 400, 'private', None, BytesIO())
+    reader = create_autospec(error.read, spec_set=True, side_effect=OSError('private-token'))
+    monkeypatch.setattr(error, 'read', reader)
+    assert not support.oauth_error_code(error)
+    reader.assert_called_once_with(4097)

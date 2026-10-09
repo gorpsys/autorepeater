@@ -96,20 +96,28 @@ def exchange_token(environment: dict[str, str], service_account_id: str) -> str:
     query = [(key, value) for key, value in parse_qsl(url.query) if key != 'audience']
     request_url = urlunsplit(url._replace(query=urlencode([*query, ('audience', audience)])))
     request_token = text(environment.get('ACTIONS_ID_TOKEN_REQUEST_TOKEN'), 'OIDC request token')
-    oidc = mask_token(record(request_json(Request(
-        request_url, headers={'Authorization': f'Bearer {request_token}'}))).get('value'))
+    oidc_request = Request(request_url, headers={'Authorization': f'Bearer {request_token}'})
+    oidc = mask_token(credential_response(oidc_request, 'GitHub OIDC').get('value'))
     body = urlencode({'grant_type': 'urn:ietf:params:oauth:grant-type:token-exchange',
                       'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
                       'audience': audience, 'subject_token': oidc,
                       'subject_token_type': 'urn:ietf:params:oauth:token-type:id_token'}).encode()
     request = Request('https://auth.yandex.cloud/oauth/token', data=body,
                       headers={'Content-Type': 'application/x-www-form-urlencoded'})
-    response = record(request_json(request))
+    response = credential_response(request, 'Yandex IAM exchange')
     expires = response.get('expires_in')
     if response.get('token_type') != 'Bearer' or isinstance(expires, bool) or (
             not isinstance(expires, int) or expires <= 0):
         raise DeployError('invalid IAM token response')
     return mask_token(response.get('access_token'))
+
+
+def credential_response(request: Request, stage: str) -> dict[str, object]:
+    """Name the failed boundary without exposing its URL, headers or provider body."""
+    try:
+        return record(request_json(request))
+    except DeployError as error:
+        raise DeployError(f'{stage} failed: {error}') from None
 
 
 class YandexCLI:  # pylint: disable=too-few-public-methods

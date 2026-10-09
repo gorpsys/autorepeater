@@ -15,7 +15,8 @@ COMPOSITE строят StrategyPlan по свежим данным; общий �
 .github/workflows/deploy-prod.yml запускается после успешного push-master
 Sandbox live E2E либо вручную только на master. scripts/deploy_gate.py
 требует текущий SHA и успешные Lint/Offline checks/Sandbox E2E с проверкой
-производителей; statuses читается newest-first из полного endpoint,
+производителей; workflow_run проверяется по path файла, не динамическому name;
+statuses читается newest-first из полного endpoint,
 не combined status без creator. Устаревший SHA пропускается. Перед OIDC
 повторная проверка. Не дублировать CI и не переименовывать архив:
 make claude-yandex-archive -> build/yandex-function.zip. OIDC без environment,
@@ -360,6 +361,9 @@ cleanup; локальный запуск при общей песочнице н
 Ручной запуск через Actions > Sandbox live E2E > Run workflow
 (ref master, pr_number с номером открытого PR).
 Обычный ручной запуск и автоматический master push одобрения не требуют.
+Live hook до fixture пишет flush-прогресс: attempt N [index/selected_count]
+и node ID. Повторы считают только выбранный subset; прогресс не evidence.
+Локально вывод в реальном времени включается E2E_ARGS="-s" (CI уже использует -s).
 Супервизор запускает scripts.sandbox_retry в одной группе процессов/run ID
 под общей блокировкой и общим E2E_TIMEOUT. До трёх дополнительных попыток
 только failed cases при DEADLINE_EXCEEDED/UNAVAILABLE; пауза 10s в том же
