@@ -19,6 +19,16 @@ class SandboxInterrupted(BaseException):
     """Let fixture finally blocks run on supervisor termination."""
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Show selected-test progress before even a slow session fixture starts."""
+    selected = item.session.items
+    index = selected.index(item) + 1
+    attempt = Path(os.environ.get('E2E_ATTEMPT_REPORT', '')).parent.name
+    prefix = f' attempt {int(attempt)}' if attempt.isascii() and attempt.isdecimal() else ''
+    print(f'Sandbox E2E{prefix} [{index}/{len(selected)}] {item.nodeid}', flush=True)
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Recording is enabled only by the supervised controller's explicit path."""
     path = os.environ.get('E2E_ATTEMPT_REPORT')

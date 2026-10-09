@@ -26,11 +26,15 @@ def select_sha(event: object, environment: dict[str, str]) -> str:
     if name != 'workflow_run':
         raise DeployError('unsupported deployment event')
     run = record(record(event).get('workflow_run'))
-    expected = {'name': 'Sandbox live E2E', 'event': 'push', 'head_branch': 'master',
+    expected = {'path': '.github/workflows/sandbox-e2e.yml',
+                'event': 'push', 'head_branch': 'master',
                 'status': 'completed', 'conclusion': 'success'}
-    if any(run.get(key) != value for key, value in expected.items()) or (
-            record(run.get('head_repository')).get('full_name') != REPOSITORY):
-        raise DeployError('only a successful master push E2E can initiate deployment')
+    mismatches = [key for key, value in expected.items() if run.get(key) != value]
+    if record(run.get('head_repository')).get('full_name') != REPOSITORY:
+        mismatches.append('head_repository')
+    if mismatches:
+        raise DeployError('only a successful master push E2E can initiate deployment; '
+                          'mismatched fields: ' + ', '.join(mismatches))
     return commit_sha(run.get('head_sha'))
 
 

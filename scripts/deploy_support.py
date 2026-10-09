@@ -6,6 +6,11 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_RESPONSE_BYTES = 2_000_000
 HTTP_TIMEOUT = 15
+OAUTH_ERROR_CODES = frozenset((
+    'invalid_request', 'invalid_client', 'invalid_grant', 'unauthorized_client',
+    'unsupported_grant_type', 'invalid_scope', 'invalid_target', 'invalid_token',
+    'unsupported_token_type', 'access_denied', 'server_error', 'temporarily_unavailable',
+))
 
 
 class DeployError(Exception):
@@ -31,9 +36,21 @@ def request_json(request: Request) -> object:
             raise DeployError('HTTP response exceeds size limit')
         return json.loads(raw)
     except HTTPError as error:
-        raise DeployError(f'HTTP request failed (status {error.code})') from None
+        raise DeployError(f'HTTP request failed (status {error.code})'
+                          + oauth_error_code(error)) from None
     except (OSError, URLError, ValueError):
         raise DeployError('HTTP request or JSON response failed') from None
+
+
+def oauth_error_code(error: HTTPError) -> str:
+    """Only standardized machine codes escape the private, bounded error response."""
+    try:
+        body = error.read(4097) if error.fp is not None else b''
+        data = json.loads(body) if len(body) <= 4096 else None
+    except (OSError, ValueError):
+        return ''
+    code = data.get('error') if isinstance(data, dict) else None
+    return f'; oauth={code}' if isinstance(code, str) and code in OAUTH_ERROR_CODES else ''
 
 
 def record(value: object) -> dict[str, object]:

@@ -384,3 +384,14 @@ def test_main_is_master_only_and_safely_reports_failures(monkeypatch, tmp_path, 
         assert publish.call_args.args[2:] == (SHA, '123', '1')
     error = capsys.readouterr().err
     assert 'synthetic-iam' not in error and 'private provider details' not in error
+
+
+@pytest.mark.parametrize('stage', ['GitHub OIDC', 'Yandex IAM exchange'])
+def test_credential_failures_identify_safe_stage(monkeypatch, tmp_path, stage):
+    """HTTP status alone must not conflate issuer and cloud exchange errors."""
+    failure = DeployError('HTTP request failed (status 400); oauth=invalid_grant')
+    responses = [failure] if stage == 'GitHub OIDC' else [{'value': 'synthetic-oidc'}, failure]
+    reader = create_autospec(deploy.request_json, spec_set=True, side_effect=responses)
+    monkeypatch.setattr(deploy, 'request_json', reader)
+    with pytest.raises(DeployError, match=stage):
+        deploy.exchange_token(deployment_environment(tmp_path), 'deploysa')

@@ -13,6 +13,32 @@ from scripts import sandbox_retry_report as reporting
 from scripts.sandbox_retry_evidence import read_report
 
 
+@pytest.mark.parametrize('count,index,attempt', [(17, 6, '01'), (3, 1, '02')])
+def test_live_progress_reports_selected_case_and_attempt(
+        monkeypatch, capsys, count, index, attempt):
+    """Progress uses the selected subset, including retry processes, before fixtures run."""
+    from e2e import conftest  # pylint: disable=import-outside-toplevel
+    items = [SimpleNamespace(nodeid=f'e2e/test_sandbox.py::test_case_{number}')
+             for number in range(count)]
+    session = SimpleNamespace(items=items)
+    item = items[index]
+    item.session = session
+    monkeypatch.setenv('E2E_ATTEMPT_REPORT', f'/tmp/attempts/{attempt}/report.json')
+    conftest.pytest_runtest_setup(item)
+    assert capsys.readouterr().out == (
+        f'Sandbox E2E attempt {int(attempt)} [{index + 1}/{count}] {item.nodeid}\n')
+
+
+def test_live_progress_does_not_print_arbitrary_report_path(monkeypatch, capsys):
+    """Only an attempt number is taken from the supervisor's report path."""
+    from e2e import conftest  # pylint: disable=import-outside-toplevel
+    item = SimpleNamespace(nodeid='e2e/test_sandbox.py::test_case')
+    item.session = SimpleNamespace(items=[item])
+    monkeypatch.setenv('E2E_ATTEMPT_REPORT', '/tmp/private-token/report.json')
+    conftest.pytest_runtest_setup(item)
+    assert capsys.readouterr().out == 'Sandbox E2E [1/1] e2e/test_sandbox.py::test_case\n'
+
+
 @pytest.mark.parametrize('status,expected', [
     (StatusCode.DEADLINE_EXCEEDED, 'DEADLINE_EXCEEDED'),
     (StatusCode.UNAVAILABLE, 'UNAVAILABLE'), (StatusCode.INTERNAL, None),
