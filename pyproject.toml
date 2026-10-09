@@ -12,6 +12,9 @@ files = [
     "scripts/sandbox_retry.py",
     "scripts/sandbox_retry_evidence.py",
     "scripts/sandbox_retry_report.py",
+    "scripts/deploy_support.py",
+    "scripts/deploy_gate.py",
+    "scripts/yandex_deploy.py",
     "autorepeater/tinvest_requests.py",
 ]
 follow_imports = "silent"

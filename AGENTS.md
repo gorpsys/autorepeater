@@ -10,6 +10,23 @@ COMPOSITE строят StrategyPlan по свежим данным; общий �
 Общий threshold удалён. Бизнес-правила и поля подробно описаны в [README.md](README.md).
 Исторические calibration docs/JSON/assets не являются актуальным runtime-контрактом.
 
+## Production deploy
+
+.github/workflows/deploy-prod.yml запускается после успешного push-master
+Sandbox live E2E либо вручную только на master. scripts/deploy_gate.py
+требует текущий SHA и успешные Lint/Offline checks/Sandbox E2E с проверкой
+производителей; statuses читается newest-first из полного endpoint,
+не combined status без creator. Устаревший SHA пропускается. Перед OIDC
+повторная проверка. Не дублировать CI и не переименовывать архив:
+make claude-yandex-archive -> build/yandex-function.zip. OIDC без environment,
+subject repo:gorpsys/autorepeater:ref:refs/heads/master. Ключ объекта уникален
+по SHA/run ID/attempt, пакет проверяется SHA-256. Ресурсы 256MB/60s, runtime
+SA и Lockbox t_token обязательны; текущие env/настройки сохранять либо отказ
+до upload при неподдерживаемых полях. Проверять ACTIVE и реальные настройки
+через чтение версии; production handler не вызывать. Credentials маскировать,
+yc запускать с отдельным временным HOME, не читать пользовательские профили.
+Защита master требует PR (approvals=0), строгие три checks и enforce_admins.
+
 ## Проверки и запуск
 
 ```bash
