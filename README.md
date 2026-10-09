@@ -493,6 +493,14 @@ secret `e6qc2ghhip6925lllhm7`, version `e6qqshm7lkthgotpdqf6`, key `t_token`.
 Новые cloud credentials в GitHub secrets добавлять не требуется;
 права deployment SA на бакет, функцию и её service accounts настраиваются
 в Yandex Cloud отдельно от защиты ветки GitHub.
+Для использования runtime SA `ajelpbq7as5bpe499962` deployment SA
+`ajela8pd8l3bjeupa04s` нужна роль `iam.serviceAccounts.user` на этом runtime SA
+либо эквивалентное унаследованное разрешение. Существование runtime SA
+и его собственные роли не дают deployment SA права использовать его.
+При `reason=service_account_unavailable` сначала проверьте доступность
+runtime SA и это разрешение; не убирайте `--service-account-id` или секрет
+из команды ради успешного создания версии. Права выдаются отдельно,
+деплой не изменяет IAM-привязки автоматически.
 При отказе получения credentials диагностика различает GitHub OIDC и Yandex
 IAM exchange, показывает HTTP-статус и известный стандартный OAuth-код.
 Описания ответов провайдера и токены не выводятся. `GITHUB_OIDC_AUDIENCE`
@@ -515,7 +523,10 @@ JSON-конфиг совместим с YAML-парсером CLI; переда�
 не выводятся, а GitHub masking включён до запуска.
 Конфиг удаляется после вызова, включая ошибку или тайм-аут. Диагностика CLI
 показывает только фиксированную категорию `reason` (например,
-`credentials_missing`, `permission_denied`, `not_found` или `unknown`).
+`credentials_missing`, `permission_denied`, `service_account_unavailable`,
+`invalid_argument`, `deadline_exceeded` или `unknown`) и полные UUID
+`x-request-id`/`x-client-trace-id`, если они доступны.
+Непроверенные значения идентификаторов и описания ошибок не выводятся.
 `yc config list` и дополнительный `iam create-token` для диагностики не нужны.
 
 ## Локальный токен песочницы

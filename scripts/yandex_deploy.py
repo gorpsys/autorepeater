@@ -156,7 +156,8 @@ class YandexCLI:  # pylint: disable=too-few-public-methods
             raise DeployError(f'cloud command unavailable or timed out: {label}') from None
         if result.returncode:
             raise DeployError(f'cloud command failed: {label}; exit={result.returncode}; '
-                              f'reason={cli_failure_reason(result.stderr)}')
+                              f'reason={cli_failure_reason(result.stderr)}'
+                              f'{cli_request_context(result.stderr, self.token)}')
         if len(result.stdout) > MAX_RESPONSE_BYTES:
             raise DeployError(f'cloud response exceeds size limit: {label}')
         try:
@@ -167,15 +168,40 @@ class YandexCLI:  # pylint: disable=too-few-public-methods
 
 def cli_failure_reason(stderr: bytes) -> str:
     """Never forward provider descriptions, arguments, credentials or raw stderr."""
+    if re.search(rb'code = InvalidArgument desc = Service account [a-z0-9]{20}'
+                 rb' is not available(?:\s|$)', stderr):
+        return 'service_account_unavailable'
     patterns = (
         (b"profile '", 'profile_missing'), (b'endpoint should be set', 'endpoint_missing'),
         (b'Failed to get credentials', 'credentials_missing'),
         (b'code = PermissionDenied', 'permission_denied'),
         (b'code = Unauthenticated', 'unauthenticated'), (b'code = NotFound', 'not_found'),
         (b'code = Unavailable', 'unavailable'), (b'code = DeadlineExceeded', 'deadline_exceeded'),
+        (b'InvalidArgument', 'invalid_argument'),
+        (b'code = FailedPrecondition', 'failed_precondition'),
+        (b'code = ResourceExhausted', 'resource_exhausted'),
+        (b'code = Internal', 'internal'), (b'code = Unimplemented', 'unimplemented'),
+        (b'code = Aborted', 'aborted'), (b'code = Canceled', 'cancelled'),
+        (b'code = OutOfRange', 'out_of_range'), (b'code = DataLoss', 'data_loss'),
+        (b'context deadline exceeded', 'deadline_exceeded'),
+        (b'error dialing endpoint', 'unavailable'),
         (b'unknown flag:', 'unsupported_flag'),
     )
     return next((reason for pattern, reason in patterns if pattern in stderr), 'unknown')
+
+
+def cli_request_context(stderr: bytes, token: str) -> str:
+    """Only complete UUID correlation IDs may supplement the fixed failure reason."""
+    context = []
+    for name in ('x-request-id', 'x-client-trace-id'):
+        match = re.search(
+            name.encode() + rb'\s*[:=]\s*([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})'
+            rb'(?![A-Za-z0-9-])', stderr, re.IGNORECASE)
+        if match:
+            identifier_value = match[1].decode('ascii')
+            if token not in identifier_value:
+                context.append(f'; {name}={identifier_value}')
+    return ''.join(context)
 
 
 def package_digest(path: Path) -> str:

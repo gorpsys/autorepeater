@@ -38,7 +38,12 @@ cloud-id из CLOUD_ID, folder-id из FOLDER_ID, endpoint api.cloud.yandex.net:
 --token в этой версии запускает OAuth-обмен IamTokenService/Create, не применять
 для готового IAM-токена. Credentials не писать в профиль/argv.
 Конфиг удаляется и при ошибке; argv/stdout/stderr CLI не логировать.
-Ошибки CLI показывают только фиксированный reason, без текста провайдера.
+Ошибки CLI показывают фиксированный reason и полные UUID x-request-id/
+x-client-trace-id, если доступны, без произвольных полей и текста провайдера.
+Service account ... is not available распознаётся как service_account_unavailable.
+Deployment SA нужна iam.serviceAccounts.user на runtime SA либо эквивалентное
+унаследованное право; IAM-привязки исправлять отдельно, не менять runtime SA
+и не убирать secret ради успешного деплоя.
 Не выполнять yc config list или iam create-token для диагностического вывода.
 Защита master требует PR (approvals=0), строгие три checks и enforce_admins.
 
