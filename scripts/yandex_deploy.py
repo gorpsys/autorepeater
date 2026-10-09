@@ -134,20 +134,20 @@ class YandexCLI:  # pylint: disable=too-few-public-methods
 
     def call(self, arguments: list[str], label: str, *, timeout: int = 30) -> dict[str, object]:
         """No retries of a mutation whose remote result could be unknown."""
-        environment = dict(os.environ, HOME=str(self.home))
+        environment = dict(os.environ, HOME=str(self.home), YC_IAM_TOKEN=self.token)
         environment.pop('YC_TOKEN', None)
         try:
             self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
             with TemporaryDirectory(prefix='yc-', dir=self.home) as directory:
                 config = Path(directory) / 'config.yaml'
-                # JSON is valid YAML; credentials are passed only as a CLI flag.
+                # JSON is valid YAML; the IAM token stays only in the child environment.
                 config.write_text(json.dumps({'current': 'ci', 'profiles': {'ci': {
                     'cloud-id': self.settings.cloud_id, 'folder-id': self.settings.folder_id,
                     'endpoint': 'api.cloud.yandex.net:443',
                 }}}), encoding='utf-8')
                 config.chmod(0o600)
                 command = ['yc', *arguments, '--config', str(config), '--profile', 'ci',
-                           '--token', self.token, '--folder-id', self.settings.folder_id,
+                           '--folder-id', self.settings.folder_id,
                            '--format', 'json-rest', '--timeout', f'{timeout}s', '--retry', '0',
                            '--no-user-output', '--no-browser']
                 result = subprocess.run(command, env=environment, capture_output=True,

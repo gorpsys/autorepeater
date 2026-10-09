@@ -33,8 +33,11 @@ yc запускать с отдельным временным HOME, не чит
 yc 1.40.0 требует профиль/endpoint и не подхватывает YC_TOKEN. Для каждого
 вызова создавать временный JSON-as-YAML config с current=ci и profiles.ci:
 cloud-id из CLOUD_ID, folder-id из FOLDER_ID, endpoint api.cloud.yandex.net:443.
-Передавать явные --config/--profile и IAM через --token, без записи credentials
-в профиль. Конфиг удаляется и при ошибке; argv/stdout/stderr CLI не логировать.
+Передавать явные --config/--profile и IAM только через YC_IAM_TOKEN в окружении
+дочернего процесса, заменяя унаследованный токен, не меняя окружение родителя.
+--token в этой версии запускает OAuth-обмен IamTokenService/Create, не применять
+для готового IAM-токена. Credentials не писать в профиль/argv.
+Конфиг удаляется и при ошибке; argv/stdout/stderr CLI не логировать.
 Ошибки CLI показывают только фиксированный reason, без текста провайдера.
 Не выполнять yc config list или iam create-token для диагностического вывода.
 Защита master требует PR (approvals=0), строгие три checks и enforce_admins.

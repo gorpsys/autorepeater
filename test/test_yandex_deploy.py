@@ -299,6 +299,7 @@ def test_cli_is_bounded_private_and_does_not_repeat_mutations(monkeypatch, tmp_p
     runner = create_autospec(subprocess.run, spec_set=True, side_effect=run)
     monkeypatch.setattr(deploy.subprocess, 'run', runner)
     monkeypatch.setenv('YC_TOKEN', 'unrelated-token')
+    monkeypatch.setenv('YC_IAM_TOKEN', 'inherited-iam')
     home = tmp_path / 'private-home'
     client = deploy.YandexCLI(settings(tmp_path), 'synthetic-iam', home)
     if failure:
@@ -315,7 +316,10 @@ def test_cli_is_bounded_private_and_does_not_repeat_mutations(monkeypatch, tmp_p
     assert runner.call_args.kwargs['timeout'] == 105
     assert runner.call_args.kwargs['env']['HOME'] == str(home)
     assert 'YC_TOKEN' not in runner.call_args.kwargs['env']
-    assert command[command.index('--token') + 1] == 'synthetic-iam'
+    assert runner.call_args.kwargs['env']['YC_IAM_TOKEN'] == 'synthetic-iam'
+    assert '--token' not in command and 'synthetic-iam' not in command
+    assert deploy.os.environ['YC_IAM_TOKEN'] == 'inherited-iam'
+    assert deploy.os.environ['YC_TOKEN'] == 'unrelated-token'
     assert command[command.index('--profile') + 1] == 'ci'
     assert len(configs) == 1 and not configs[0].parent.exists()
 
