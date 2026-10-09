@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request
 
@@ -50,7 +51,7 @@ class SecretBinding:
 
 
 @dataclass(frozen=True)
-class Settings:
+class Settings:  # pylint: disable=too-many-instance-attributes
     """Deployment identity is distinct from the function's runtime identity."""
     folder_id: str
     service_account_id: str
@@ -59,6 +60,7 @@ class Settings:
     archive: Path
     function: FunctionSettings
     secret: SecretBinding
+    cloud_id: str
 
 
 def settings_from_environment(environment: dict[str, str]) -> Settings:
@@ -74,7 +76,8 @@ def settings_from_environment(environment: dict[str, str]) -> Settings:
     return Settings(value('FOLDER_ID'), value('SA_ID'), value('BUCKET'), value('FUNCTION_NAME'),
                     Path(text(environment.get('ZIP_PATH'), 'ZIP_PATH')), function,
                     SecretBinding(value('LOCKBOX_SECRET_ID'), value('LOCKBOX_VERSION_ID'),
-                                  value('LOCKBOX_KEY'), value('LOCKBOX_ENVIRONMENT_VARIABLE')))
+                                  value('LOCKBOX_KEY'), value('LOCKBOX_ENVIRONMENT_VARIABLE')),
+                    value('CLOUD_ID'))
 
 
 def mask_token(value: object) -> str:
@@ -122,7 +125,7 @@ def credential_response(request: Request, stage: str) -> dict[str, object]:
 
 
 class YandexCLI:  # pylint: disable=too-few-public-methods
-    """Capture provider output privately, with finite command/RPC bounds and no profile keys."""
+    """Private CLI output and token-free temporary profiles, with finite command bounds."""
 
     def __init__(self, settings: Settings, token: str, home: Path):
         self.settings = settings
@@ -131,24 +134,48 @@ class YandexCLI:  # pylint: disable=too-few-public-methods
 
     def call(self, arguments: list[str], label: str, *, timeout: int = 30) -> dict[str, object]:
         """No retries of a mutation whose remote result could be unknown."""
-        self.home.mkdir(parents=True, exist_ok=True)
-        command = ['yc', *arguments, '--folder-id', self.settings.folder_id,
-                   '--format', 'json-rest', '--timeout', f'{timeout}s', '--retry', '0',
-                   '--no-user-output', '--no-browser']
-        environment = dict(os.environ, HOME=str(self.home), YC_TOKEN=self.token)
+        environment = dict(os.environ, HOME=str(self.home))
+        environment.pop('YC_TOKEN', None)
         try:
-            result = subprocess.run(command, env=environment, capture_output=True,
-                                    timeout=timeout + 15, check=False)
+            self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with TemporaryDirectory(prefix='yc-', dir=self.home) as directory:
+                config = Path(directory) / 'config.yaml'
+                # JSON is valid YAML; credentials are passed only as a CLI flag.
+                config.write_text(json.dumps({'current': 'ci', 'profiles': {'ci': {
+                    'cloud-id': self.settings.cloud_id, 'folder-id': self.settings.folder_id,
+                    'endpoint': 'api.cloud.yandex.net:443',
+                }}}), encoding='utf-8')
+                config.chmod(0o600)
+                command = ['yc', *arguments, '--config', str(config), '--profile', 'ci',
+                           '--token', self.token, '--folder-id', self.settings.folder_id,
+                           '--format', 'json-rest', '--timeout', f'{timeout}s', '--retry', '0',
+                           '--no-user-output', '--no-browser']
+                result = subprocess.run(command, env=environment, capture_output=True,
+                                        timeout=timeout + 15, check=False)
         except (OSError, subprocess.TimeoutExpired):
             raise DeployError(f'cloud command unavailable or timed out: {label}') from None
         if result.returncode:
-            raise DeployError(f'cloud command failed: {label}; exit={result.returncode}')
+            raise DeployError(f'cloud command failed: {label}; exit={result.returncode}; '
+                              f'reason={cli_failure_reason(result.stderr)}')
         if len(result.stdout) > MAX_RESPONSE_BYTES:
             raise DeployError(f'cloud response exceeds size limit: {label}')
         try:
             return record(json.loads(result.stdout))
         except (ValueError, UnicodeError):
             raise DeployError(f'invalid cloud JSON: {label}') from None
+
+
+def cli_failure_reason(stderr: bytes) -> str:
+    """Never forward provider descriptions, arguments, credentials or raw stderr."""
+    patterns = (
+        (b"profile '", 'profile_missing'), (b'endpoint should be set', 'endpoint_missing'),
+        (b'Failed to get credentials', 'credentials_missing'),
+        (b'code = PermissionDenied', 'permission_denied'),
+        (b'code = Unauthenticated', 'unauthenticated'), (b'code = NotFound', 'not_found'),
+        (b'code = Unavailable', 'unavailable'), (b'code = DeadlineExceeded', 'deadline_exceeded'),
+        (b'unknown flag:', 'unsupported_flag'),
+    )
+    return next((reason for pattern, reason in patterns if pattern in stderr), 'unknown')
 
 
 def package_digest(path: Path) -> str:

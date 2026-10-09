@@ -30,6 +30,13 @@ SA и Lockbox t_token обязательны; текущие env/настрой�
 до upload при неподдерживаемых полях. Проверять ACTIVE и реальные настройки
 через чтение версии; production handler не вызывать. Credentials маскировать,
 yc запускать с отдельным временным HOME, не читать пользовательские профили.
+yc 1.40.0 требует профиль/endpoint и не подхватывает YC_TOKEN. Для каждого
+вызова создавать временный JSON-as-YAML config с current=ci и profiles.ci:
+cloud-id из CLOUD_ID, folder-id из FOLDER_ID, endpoint api.cloud.yandex.net:443.
+Передавать явные --config/--profile и IAM через --token, без записи credentials
+в профиль. Конфиг удаляется и при ошибке; argv/stdout/stderr CLI не логировать.
+Ошибки CLI показывают только фиксированный reason, без текста провайдера.
+Не выполнять yc config list или iam create-token для диагностического вывода.
 Защита master требует PR (approvals=0), строгие три checks и enforce_admins.
 
 ## Проверки и запуск

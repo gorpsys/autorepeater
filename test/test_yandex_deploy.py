@@ -1,6 +1,8 @@
 """Cloud publication uses OIDC, exact package bytes and preserved environment, never trades."""
 import csv
 from copy import deepcopy
+import json
+from pathlib import Path
 import subprocess
 from unittest.mock import create_autospec
 from urllib.parse import parse_qs, urlsplit
@@ -20,7 +22,8 @@ def settings(tmp_path):
         'python-function', tmp_path / 'package.zip',
         deploy.FunctionSettings('python312', 'handler.handler', '256MB', '60s',
                                 'ajelpbq7as5bpe499962'),
-        deploy.SecretBinding('e6qc2ghhip6925lllhm7', 'e6qqshm7lkthgotpdqf6', 't_token', 't_token'))
+        deploy.SecretBinding('e6qc2ghhip6925lllhm7', 'e6qqshm7lkthgotpdqf6', 't_token', 't_token'),
+        'b1gbga988v36vq19lmb7')
 
 
 def current():
@@ -145,7 +148,7 @@ def test_missing_package_never_calls_cloud(tmp_path):
 def deployment_environment(tmp_path):
     """Explicit metadata and synthetic credentials, not production secret values."""
     return {
-        'FOLDER_ID': 'folder', 'SA_ID': 'deploysa', 'BUCKET': 'bucket',
+        'CLOUD_ID': 'cloud', 'FOLDER_ID': 'folder', 'SA_ID': 'deploysa', 'BUCKET': 'bucket',
         'FUNCTION_NAME': 'python-function', 'ZIP_PATH': str(tmp_path / 'package.zip'),
         'FUNCTION_RUNTIME': 'python312', 'FUNCTION_ENTRYPOINT': 'handler.handler',
         'FUNCTION_MEMORY': '256MB', 'FUNCTION_TIMEOUT': '60s', 'FUNCTION_SA_ID': 'runtimesa',
@@ -164,12 +167,13 @@ def test_settings_preserve_explicit_cloud_identities(tmp_path):
     """The deployment SA and function runtime SA are intentionally distinct."""
     cfg = deploy.settings_from_environment(deployment_environment(tmp_path))
     assert cfg.service_account_id == 'deploysa'
+    assert cfg.cloud_id == 'cloud'
     assert cfg.function.service_account_id == 'runtimesa'
     assert cfg.archive == tmp_path / 'package.zip'
 
 
 @pytest.mark.parametrize('key,value', [
-    ('SA_ID', ''), ('SA_ID', 'injected,value'), ('FUNCTION_MEMORY', '128MB'),
+    ('SA_ID', ''), ('SA_ID', 'injected,value'), ('CLOUD_ID', ''), ('FUNCTION_MEMORY', '128MB'),
     ('FUNCTION_TIMEOUT', '30s'), ('FUNCTION_RUNTIME', 'python311'),
 ])
 def test_invalid_settings_have_no_production_fallback(tmp_path, key, value):
@@ -265,12 +269,7 @@ def test_masking_escapes_workflow_command_characters(capsys):
 def test_cli_is_bounded_private_and_does_not_repeat_mutations(monkeypatch, tmp_path, failure):
     """yc uses an isolated home, finite timeouts and sanitized failure reporting."""
     result = subprocess.CompletedProcess(['yc'], 0, b'{"id":"version"}', b'private stderr')
-    runner = create_autospec(subprocess.run, spec_set=True, return_value=result)
-    if failure == 'os':
-        runner.side_effect = OSError('synthetic-iam')
-    elif failure == 'timeout':
-        runner.side_effect = subprocess.TimeoutExpired('synthetic-iam', 30)
-    elif failure == 'exit':
+    if failure == 'exit':
         result.returncode = 1
     elif failure == 'size':
         result.stdout = b'x' * (deploy.MAX_RESPONSE_BYTES + 1)
@@ -278,7 +277,28 @@ def test_cli_is_bounded_private_and_does_not_repeat_mutations(monkeypatch, tmp_p
         result.stdout = b'synthetic-iam'
     elif failure == 'shape':
         result.stdout = b'[]'
+    configs = []
+
+    def run(command, **_kwargs):
+        config = Path(command[command.index('--config') + 1])
+        configs.append(config)
+        assert json.loads(config.read_text(encoding='utf-8')) == {
+            'current': 'ci', 'profiles': {'ci': {
+                'cloud-id': 'b1gbga988v36vq19lmb7', 'folder-id': 'b1gdgrp5bnth11phova8',
+                'endpoint': 'api.cloud.yandex.net:443',
+            }},
+        }
+        assert config.stat().st_mode & 0o777 == 0o600
+        assert config.parent.stat().st_mode & 0o777 == 0o700
+        if failure == 'os':
+            raise OSError('synthetic-iam')
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired('synthetic-iam', 30)
+        return result
+
+    runner = create_autospec(subprocess.run, spec_set=True, side_effect=run)
     monkeypatch.setattr(deploy.subprocess, 'run', runner)
+    monkeypatch.setenv('YC_TOKEN', 'unrelated-token')
     home = tmp_path / 'private-home'
     client = deploy.YandexCLI(settings(tmp_path), 'synthetic-iam', home)
     if failure:
@@ -294,8 +314,48 @@ def test_cli_is_bounded_private_and_does_not_repeat_mutations(monkeypatch, tmp_p
     assert command[command.index('--timeout') + 1] == '90s'
     assert runner.call_args.kwargs['timeout'] == 105
     assert runner.call_args.kwargs['env']['HOME'] == str(home)
-    assert runner.call_args.kwargs['env']['YC_TOKEN'] == 'synthetic-iam'
-    assert 'synthetic-iam' not in command
+    assert 'YC_TOKEN' not in runner.call_args.kwargs['env']
+    assert command[command.index('--token') + 1] == 'synthetic-iam'
+    assert command[command.index('--profile') + 1] == 'ci'
+    assert len(configs) == 1 and not configs[0].parent.exists()
+
+
+def test_cli_profile_creation_failure_never_calls_cloud(monkeypatch, tmp_path):
+    """Local initialization failures are safe errors before any cloud command."""
+    runner = create_autospec(subprocess.run, spec_set=True)
+    monkeypatch.setattr(deploy.subprocess, 'run', runner)
+    home = tmp_path / 'not-a-directory'
+    home.write_text('metadata', encoding='utf-8')
+    client = deploy.YandexCLI(settings(tmp_path), 'synthetic-iam', home)
+    with pytest.raises(DeployError, match='unavailable or timed out') as error:
+        client.call(['serverless', 'function', 'version', 'get-by-tag'], 'read')
+    assert 'synthetic-iam' not in str(error.value)
+    runner.assert_not_called()
+
+
+@pytest.mark.parametrize('stderr,reason', [
+    (b"profile 'ci' not found private-token", 'profile_missing'),
+    (b'endpoint should be set private-token', 'endpoint_missing'),
+    (b'Failed to get credentials private-token', 'credentials_missing'),
+    (b'rpc error: code = PermissionDenied desc = private-token', 'permission_denied'),
+    (b'rpc error: code = Unauthenticated desc = private-token', 'unauthenticated'),
+    (b'rpc error: code = NotFound desc = private-token', 'not_found'),
+    (b'rpc error: code = Unavailable desc = private-token', 'unavailable'),
+    (b'rpc error: code = DeadlineExceeded desc = private-token', 'deadline_exceeded'),
+    (b'unknown flag: private-token', 'unsupported_flag'),
+    (b'private-token\xff', 'unknown'),
+    (b'', 'unknown'),
+])
+def test_cli_failure_categories_never_expose_provider_text(monkeypatch, tmp_path, stderr, reason):
+    """Only fixed allowlisted categories escape captured CLI output."""
+    result = subprocess.CompletedProcess(['yc'], 1, b'', stderr)
+    runner = create_autospec(subprocess.run, spec_set=True, return_value=result)
+    monkeypatch.setattr(deploy.subprocess, 'run', runner)
+    client = deploy.YandexCLI(settings(tmp_path), 'synthetic-iam', tmp_path / 'private-home')
+    with pytest.raises(DeployError) as error:
+        client.call(['serverless', 'function', 'version', 'get-by-tag'], 'read')
+    assert str(error.value) == f'cloud command failed: read; exit=1; reason={reason}'
+    runner.assert_called_once()
 
 
 @pytest.mark.parametrize('kind', ['empty', 'symlink', 'parent-symlink'])
