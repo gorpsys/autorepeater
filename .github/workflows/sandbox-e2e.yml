@@ -1,5 +1,5 @@
 name: Sandbox live E2E
-run-name: Sandbox E2E - ${{ github.event_name }} PR ${{ inputs.pr_number || github.event.pull_request.number || 'master' }}
+run-name: Sandbox E2E - ${{ github.event_name }} PR ${{ inputs.pr_number || 'master' }}
 
 on:
   workflow_dispatch:
@@ -10,11 +10,6 @@ on:
         type: string
   push:
     branches: [master]
-  # Temporary bootstrap: only the workflow-repair PR28 may pass approval below.
-  # Future PRs get an explicit not-run job, never implicit sandbox execution.
-  pull_request:
-    branches: [master]
-    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -28,40 +23,8 @@ concurrency:
   queue: max
 
 jobs:
-  manual-required:
-    if: >-
-      github.event_name == 'pull_request' &&
-      (github.event.pull_request.number != 28 ||
-       github.event.pull_request.head.repo.full_name != github.repository)
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions: {}
-    steps:
-      - name: E2E explicitly not run
-        run: |
-          echo "Sandbox E2E NOT RUN: future PRs require workflow_dispatch; forks never receive secrets."
-          exit 1
-
-  bootstrap-approval:
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.number == 28 &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions: {}
-    environment: sandbox-e2e-bootstrap
-    steps:
-      - run: echo "Approved bootstrap workflow for the fixed PR28 event."
-
   prepare:
-    # The route marker is skipped for approval/dispatch/push. This also verifies
-    # downstream execution after a skipped ancestor during the repair bootstrap.
-    needs: [bootstrap-approval, manual-required]
-    if: >-
-      always() && !cancelled() &&
-      ((github.event_name != 'pull_request' && github.ref == 'refs/heads/master') ||
-       needs.bootstrap-approval.result == 'success')
+    if: ${{ !cancelled() && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -75,7 +38,7 @@ jobs:
       - name: Checkout trusted preparation only
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Authorize initiator and fix tested SHA
         id: target
