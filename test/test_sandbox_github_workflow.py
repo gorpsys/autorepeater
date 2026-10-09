@@ -22,28 +22,30 @@ def test_shared_workflow_concurrency_covers_all_jobs() -> None:
     assert 'group: autorepeater-sandbox' in text
     assert 'cancel-in-progress: false' in text
     assert text.index('concurrency:') < text.index('jobs:')
-    assert 'workflow_dispatch:' in text and 'push:' in text and 'pull_request:' in text
+    assert 'workflow_dispatch:' in text and 'push:' in text
+    assert 'pull_request:' not in text
     assert 'pull_request_target' not in text
 
 
-def test_bootstrap_is_explicitly_approval_gated_for_repair_pr28_only() -> None:
-    """Future PR events must not implicitly run sandbox code with credentials."""
+def test_prs_require_manual_dispatch_without_automatic_failed_marker() -> None:
+    """Opening or updating a PR must not create deliberately failed workflows."""
     text = WORKFLOW.read_text(encoding='utf-8')
-    assert 'sandbox-e2e-bootstrap' in job('bootstrap-approval')
-    assert 'github.event.pull_request.number == 28' in job('bootstrap-approval')
-    assert 'github.event.pull_request.number != 28' in job('manual-required')
-    assert 'head.repo.full_name == github.repository' in job('bootstrap-approval')
+    assert 'pull_request:' not in text and 'pull_request_target' not in text
+    assert 'manual-required:' not in text and 'bootstrap-approval:' not in text
+    assert 'sandbox-e2e-bootstrap' not in text
+    assert 'exit 1' not in text.split('  prepare:', 1)[0]
     assert 'github.ref == \'refs/heads/master\'' in job('prepare')
     assert 'secrets.SANDBOX_TOKEN' not in job('prepare')
-    assert 'secrets.SANDBOX_TOKEN' not in job('manual-required')
-    assert 'secrets.SANDBOX_TOKEN' not in job('bootstrap-approval')
     assert 'Sandbox E2E' in text
 
 
-def test_bootstrap_also_exercises_the_skipped_manual_route_ancestor() -> None:
-    """An approved repair run must validate the same skipped-ancestor behavior."""
-    assert 'needs: [bootstrap-approval, manual-required]' in job('prepare')
-    assert 'always() && !cancelled()' in job('prepare')
+def test_preparation_uses_only_trusted_master_workflow_code() -> None:
+    """No bootstrap ancestors or PR-head code may participate in preparation."""
+    text = job('prepare')
+    assert 'needs:' not in text
+    assert "if: ${{ !cancelled() && github.ref == 'refs/heads/master' }}" in text
+    assert 'ref: ${{ github.sha }}' in text
+    assert 'github.event.pull_request' not in text
 
 
 def test_live_is_read_only_pinned_and_bounded() -> None:

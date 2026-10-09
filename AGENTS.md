@@ -346,15 +346,18 @@ ACCOUNT holdout 24000 seed20261003: .0092, совпадение91.3375%.
 резервные дефициты/вложенность/shared UID и оценочный риск владения.
 Модельные FILL/комиссия/marks не гарантируют BESTPRICE/settlement/экономию.
 1000-сетка и крайние 0/null экстраполяции не гарантируют произвольные бюджеты.
+Sandbox-workflow не подписан на pull_request: открытие/обновление PR не
+создаёт автоматический прогон или красный marker. Отсутствие обязательного
+Sandbox E2E для нового head SHA блокирует merge через защиту master.
 Live sandbox/GitHub CI отдельный санкционированный запуск; локальный pytest
 не закрывает их. SANDBOX_TOKEN передавать только через окружение live-задания,
 без production fallback. Sandbox E2E проверяет конкретный head SHA PR;
 новый SHA требует полного повторного прогона. Fork/ошибка/отмена/неполный
 прогон не дают success. GitHub запуски PR/master сериализуются вместе с
 cleanup; локальный запуск при общей песочнице не пересекается с GitHub.
-Дамп/JUnit не должны содержать токен или SDK repr. Bootstrap исправления в PR28
-требует одобрения sandbox-e2e-bootstrap; обычный ручной запуск после
-регистрации workflow в master через Actions > Sandbox live E2E > Run workflow
+Дамп/JUnit не должны содержать токен или SDK repr. Исторический bootstrap PR28
+требовал sandbox-e2e-bootstrap; его jobs удалены из рабочего workflow.
+Ручной запуск через Actions > Sandbox live E2E > Run workflow
 (ref master, pr_number с номером открытого PR).
 Обычный ручной запуск и автоматический master push одобрения не требуют.
 Супервизор запускает scripts.sandbox_retry в одной группе процессов/run ID
