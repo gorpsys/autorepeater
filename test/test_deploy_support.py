@@ -114,10 +114,10 @@ def test_unreadable_oauth_error_body_keeps_status_only(body):
     assert not support.oauth_error_code(error)
 
 
-def test_oauth_error_body_read_failure_is_not_replaced_by_unsafe_exception():
+def test_oauth_error_body_read_failure_is_not_replaced_by_unsafe_exception(monkeypatch):
     """A broken error stream still preserves the original safe status diagnostic."""
-    stream = create_autospec(BytesIO, instance=True, spec_set=True)
-    stream.read.side_effect = OSError('private-token')
-    error = HTTPError('https://auth.yandex.cloud', 400, 'private', None, stream)
+    error = HTTPError('https://auth.yandex.cloud', 400, 'private', None, BytesIO())
+    reader = create_autospec(error.read, spec_set=True, side_effect=OSError('private-token'))
+    monkeypatch.setattr(error, 'read', reader)
     assert not support.oauth_error_code(error)
-    stream.read.assert_called_once_with(4097)
+    reader.assert_called_once_with(4097)
