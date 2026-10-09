@@ -299,6 +299,7 @@ def test_cli_is_bounded_private_and_does_not_repeat_mutations(monkeypatch, tmp_p
     runner = create_autospec(subprocess.run, spec_set=True, side_effect=run)
     monkeypatch.setattr(deploy.subprocess, 'run', runner)
     monkeypatch.setenv('YC_TOKEN', 'unrelated-token')
+    monkeypatch.setenv('YC_IAM_TOKEN', 'inherited-iam')
     home = tmp_path / 'private-home'
     client = deploy.YandexCLI(settings(tmp_path), 'synthetic-iam', home)
     if failure:
@@ -315,7 +316,10 @@ def test_cli_is_bounded_private_and_does_not_repeat_mutations(monkeypatch, tmp_p
     assert runner.call_args.kwargs['timeout'] == 105
     assert runner.call_args.kwargs['env']['HOME'] == str(home)
     assert 'YC_TOKEN' not in runner.call_args.kwargs['env']
-    assert command[command.index('--token') + 1] == 'synthetic-iam'
+    assert runner.call_args.kwargs['env']['YC_IAM_TOKEN'] == 'synthetic-iam'
+    assert '--token' not in command and 'synthetic-iam' not in command
+    assert deploy.os.environ['YC_IAM_TOKEN'] == 'inherited-iam'
+    assert deploy.os.environ['YC_TOKEN'] == 'unrelated-token'
     assert command[command.index('--profile') + 1] == 'ci'
     assert len(configs) == 1 and not configs[0].parent.exists()
 
@@ -342,6 +346,26 @@ def test_cli_profile_creation_failure_never_calls_cloud(monkeypatch, tmp_path):
     (b'rpc error: code = NotFound desc = private-token', 'not_found'),
     (b'rpc error: code = Unavailable desc = private-token', 'unavailable'),
     (b'rpc error: code = DeadlineExceeded desc = private-token', 'deadline_exceeded'),
+    (b'rpc error: code = InvalidArgument desc = private-token', 'invalid_argument'),
+    (b'InvalidArgument: private-token', 'invalid_argument'),
+    (b'rpc error: code = InvalidArgument desc = Service account '
+     b'ajelpbq7as5bpe499962 is not available\nprivate-token', 'service_account_unavailable'),
+    (b'rpc error: code = InvalidArgument desc = Service account '
+     b'private-token is not available', 'invalid_argument'),
+    (b'rpc error: code = InvalidArgument desc = Service account '
+     b'ajelpbq7as5bpe499962 is not available-extra', 'invalid_argument'),
+    (b'rpc error: code = PermissionDenied desc = Service account '
+     b'ajelpbq7as5bpe499962 is not available', 'permission_denied'),
+    (b'rpc error: code = FailedPrecondition desc = private-token', 'failed_precondition'),
+    (b'rpc error: code = ResourceExhausted desc = private-token', 'resource_exhausted'),
+    (b'rpc error: code = Internal desc = private-token', 'internal'),
+    (b'rpc error: code = Unimplemented desc = private-token', 'unimplemented'),
+    (b'rpc error: code = Aborted desc = private-token', 'aborted'),
+    (b'rpc error: code = Canceled desc = private-token', 'cancelled'),
+    (b'rpc error: code = OutOfRange desc = private-token', 'out_of_range'),
+    (b'rpc error: code = DataLoss desc = private-token', 'data_loss'),
+    (b'error dialing endpoint private-token: context deadline exceeded', 'deadline_exceeded'),
+    (b'error dialing endpoint private-token: connection refused', 'unavailable'),
     (b'unknown flag: private-token', 'unsupported_flag'),
     (b'private-token\xff', 'unknown'),
     (b'', 'unknown'),
@@ -355,6 +379,49 @@ def test_cli_failure_categories_never_expose_provider_text(monkeypatch, tmp_path
     with pytest.raises(DeployError) as error:
         client.call(['serverless', 'function', 'version', 'get-by-tag'], 'read')
     assert str(error.value) == f'cloud command failed: read; exit=1; reason={reason}'
+    runner.assert_called_once()
+
+
+@pytest.mark.parametrize('request_id,trace_id,expected', [
+    ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002',
+     '; x-request-id=00000000-0000-0000-0000-000000000001'
+     '; x-client-trace-id=00000000-0000-0000-0000-000000000002'),
+    ('00000000-0000-0000-0000-000000000001', 'private-token',
+     '; x-request-id=00000000-0000-0000-0000-000000000001'),
+    ('private-token', '00000000-0000-0000-0000-000000000002',
+     '; x-client-trace-id=00000000-0000-0000-0000-000000000002'),
+    ('private-token', 'private-token', ''),
+    ('00000000-0000-0000-0000-000000000001private-token',
+     '00000000-0000-0000-0000-000000000002-extra', ''),
+])
+def test_cli_failure_adds_only_valid_correlation_ids(
+        monkeypatch, tmp_path, request_id, trace_id, expected):
+    """Cloud support gets validated IDs, never arbitrary provider text or ID suffixes."""
+    stderr = (f'InvalidArgument: private-token\n'
+              f'x-request-id = {request_id}\n'
+              f'x-client-trace-id: {trace_id}\n').encode()
+    result = subprocess.CompletedProcess(['yc'], 1, b'', stderr)
+    runner = create_autospec(subprocess.run, spec_set=True, return_value=result)
+    monkeypatch.setattr(deploy.subprocess, 'run', runner)
+    client = deploy.YandexCLI(settings(tmp_path), 'synthetic-iam', tmp_path / 'private-home')
+    with pytest.raises(DeployError) as error:
+        client.call(['serverless', 'function', 'version', 'create'], 'create')
+    assert str(error.value) == ('cloud command failed: create; exit=1; '
+                                f'reason=invalid_argument{expected}')
+    runner.assert_called_once()
+
+
+def test_cli_failure_does_not_log_token_as_correlation_id(monkeypatch, tmp_path):
+    """Even a UUID-shaped credential cannot be exposed by the diagnostics extractor."""
+    token = '00000000-0000-0000-0000-000000000001'
+    stderr = f'x-request-id: {token}\nx-client-trace-id: {token}\n'.encode()
+    result = subprocess.CompletedProcess(['yc'], 1, b'', stderr)
+    runner = create_autospec(subprocess.run, spec_set=True, return_value=result)
+    monkeypatch.setattr(deploy.subprocess, 'run', runner)
+    client = deploy.YandexCLI(settings(tmp_path), token, tmp_path / 'private-home')
+    with pytest.raises(DeployError) as error:
+        client.call(['serverless', 'function', 'version', 'create'], 'create')
+    assert str(error.value) == 'cloud command failed: create; exit=1; reason=unknown'
     runner.assert_called_once()
 
 
