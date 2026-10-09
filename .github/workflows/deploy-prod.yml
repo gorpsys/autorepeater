@@ -59,6 +59,7 @@ jobs:
       DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
       FOLDER_ID: b1gdgrp5bnth11phova8
       SA_ID: ajela8pd8l3bjeupa04s
+      GITHUB_OIDC_AUDIENCE: https://github.com/gorpsys
       FUNCTION_NAME: python-function
       FUNCTION_RUNTIME: python312
       FUNCTION_ENTRYPOINT: handler.handler

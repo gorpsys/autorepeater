@@ -153,6 +153,7 @@ def deployment_environment(tmp_path):
         'LOCKBOX_KEY': 't_token', 'LOCKBOX_ENVIRONMENT_VARIABLE': 't_token',
         'ACTIONS_ID_TOKEN_REQUEST_URL': 'https://example.actions.githubusercontent.com/token?a=b',
         'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'synthetic-request-token',
+        'GITHUB_OIDC_AUDIENCE': 'https://github.com/gorpsys',
         'GITHUB_REF': 'refs/heads/master', 'GITHUB_REPOSITORY': 'gorpsys/autorepeater',
         'DEPLOY_SHA': SHA, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
         'RUNNER_TEMP': str(tmp_path),
@@ -178,8 +179,8 @@ def test_invalid_settings_have_no_production_fallback(tmp_path, key, value):
         deploy.settings_from_environment(env)
 
 
-def test_oidc_exchange_uses_sa_audience_and_masks_both_tokens(monkeypatch, tmp_path, capsys):
-    """Both tokens remain in process; request audience is replaced, not duplicated."""
+def test_oidc_exchange_uses_distinct_audiences_and_masks_both_tokens(monkeypatch, tmp_path, capsys):
+    """GitHub targets the federation AUD; IAM exchange targets the deployment SA."""
     env = deployment_environment(tmp_path)
     env['ACTIONS_ID_TOKEN_REQUEST_URL'] += '&audience=old'
     reader = create_autospec(deploy.request_json, spec_set=True, side_effect=[
@@ -189,7 +190,9 @@ def test_oidc_exchange_uses_sa_audience_and_masks_both_tokens(monkeypatch, tmp_p
     monkeypatch.setattr(deploy, 'request_json', reader)
     assert deploy.exchange_token(env, 'deploysa') == 'synthetic-iam'
     first, second = [call.args[0] for call in reader.call_args_list]
-    assert parse_qs(urlsplit(first.full_url).query) == {'a': ['b'], 'audience': ['deploysa']}
+    assert parse_qs(urlsplit(first.full_url).query) == {
+        'a': ['b'], 'audience': ['https://github.com/gorpsys'],
+    }
     assert first.get_header('Authorization') == 'Bearer synthetic-request-token'
     assert second.full_url == 'https://auth.yandex.cloud/oauth/token'
     assert second.get_method() == 'POST'
@@ -201,6 +204,22 @@ def test_oidc_exchange_uses_sa_audience_and_masks_both_tokens(monkeypatch, tmp_p
     }
     assert capsys.readouterr().out == (
         '::add-mask::synthetic-oidc\n::add-mask::synthetic-iam\n')
+
+
+@pytest.mark.parametrize('audience', [None, '', ' ', 'https://github.com/gorpsys\n'])
+def test_missing_or_invalid_federation_audience_never_requests_tokens(
+        monkeypatch, tmp_path, audience):
+    """A missing AUD cannot fall back to the unrelated service account ID."""
+    env = deployment_environment(tmp_path)
+    if audience is None:
+        del env['GITHUB_OIDC_AUDIENCE']
+    else:
+        env['GITHUB_OIDC_AUDIENCE'] = audience
+    reader = create_autospec(deploy.request_json, spec_set=True)
+    monkeypatch.setattr(deploy, 'request_json', reader)
+    with pytest.raises(DeployError, match='GitHub OIDC audience'):
+        deploy.exchange_token(env, 'deploysa')
+    reader.assert_not_called()
 
 
 @pytest.mark.parametrize('url', [

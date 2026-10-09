@@ -495,8 +495,12 @@ secret `e6qc2ghhip6925lllhm7`, version `e6qqshm7lkthgotpdqf6`, key `t_token`.
 в Yandex Cloud отдельно от защиты ветки GitHub.
 При отказе получения credentials диагностика различает GitHub OIDC и Yandex
 IAM exchange, показывает HTTP-статус и известный стандартный OAuth-код.
-Описания ответов провайдера и токены не выводятся. Audience GitHub OIDC
-должен совпадать с допустимым AUD федерации; audience обмена IAM — ID deployment SA.
+Описания ответов провайдера и токены не выводятся. `GITHUB_OIDC_AUDIENCE`
+в workflow равен подтверждённому AUD федерации `https://github.com/gorpsys`;
+только это значение передаётся в audience запроса GitHub OIDC.
+Audience обмена IAM — отдельный параметр: ID deployment SA
+`ajela8pd8l3bjeupa04s` из `SA_ID`. Отсутствующий/пустой OIDC audience
+останавливает деплой до запросов токенов, без fallback на ID сервисного аккаунта.
 
 ## Локальный токен песочницы
 

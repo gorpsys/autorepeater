@@ -85,22 +85,23 @@ def mask_token(value: object) -> str:
 
 
 def exchange_token(environment: dict[str, str], service_account_id: str) -> str:
-    """Standard GitHub OIDC -> Yandex OAuth token exchange, without a static cloud key."""
+    """GitHub targets the federation AUD; Yandex exchange targets the deployment SA."""
     url = urlsplit(text(environment.get('ACTIONS_ID_TOKEN_REQUEST_URL'), 'OIDC request URL'))
     if url.scheme != 'https' or not url.hostname or not (
             url.hostname.endswith('.actions.githubusercontent.com')):
         raise DeployError('untrusted OIDC request URL')
     if url.username or url.password or url.port not in (None, 443):
         raise DeployError('untrusted OIDC request URL')
-    audience = identifier(service_account_id, 'deployment service account')
+    iam_audience = identifier(service_account_id, 'deployment service account')
+    oidc_audience = text(environment.get('GITHUB_OIDC_AUDIENCE'), 'GitHub OIDC audience')
     query = [(key, value) for key, value in parse_qsl(url.query) if key != 'audience']
-    request_url = urlunsplit(url._replace(query=urlencode([*query, ('audience', audience)])))
+    request_url = urlunsplit(url._replace(query=urlencode([*query, ('audience', oidc_audience)])))
     request_token = text(environment.get('ACTIONS_ID_TOKEN_REQUEST_TOKEN'), 'OIDC request token')
     oidc_request = Request(request_url, headers={'Authorization': f'Bearer {request_token}'})
     oidc = mask_token(credential_response(oidc_request, 'GitHub OIDC').get('value'))
     body = urlencode({'grant_type': 'urn:ietf:params:oauth:grant-type:token-exchange',
                       'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
-                      'audience': audience, 'subject_token': oidc,
+                      'audience': iam_audience, 'subject_token': oidc,
                       'subject_token_type': 'urn:ietf:params:oauth:token-type:id_token'}).encode()
     request = Request('https://auth.yandex.cloud/oauth/token', data=body,
                       headers={'Content-Type': 'application/x-www-form-urlencoded'})

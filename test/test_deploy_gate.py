@@ -167,6 +167,8 @@ def test_deployment_workflow_keeps_existing_ci_and_archive_contract():
     assert 'ref: ${{ needs.gate.outputs.sha }}' in text
     assert 'persist-credentials: false' in text
     assert 'python3 -m scripts.deploy_gate --check-once' in text
+    assert 'GITHUB_OIDC_AUDIENCE: https://github.com/gorpsys' in text
+    assert 'SA_ID: ajela8pd8l3bjeupa04s' in text
 
 
 def github_transport(monkeypatch, responses):

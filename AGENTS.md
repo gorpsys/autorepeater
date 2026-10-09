@@ -20,8 +20,12 @@ statuses читается newest-first из полного endpoint,
 не combined status без creator. Устаревший SHA пропускается. Перед OIDC
 повторная проверка. Не дублировать CI и не переименовывать архив:
 make claude-yandex-archive -> build/yandex-function.zip. OIDC без environment,
-subject repo:gorpsys/autorepeater:ref:refs/heads/master. Ключ объекта уникален
-по SHA/run ID/attempt, пакет проверяется SHA-256. Ресурсы 256MB/60s, runtime
+subject repo:gorpsys/autorepeater:ref:refs/heads/master.
+GITHUB_OIDC_AUDIENCE=https://github.com/gorpsys — подтверждённый AUD федерации
+для запроса GitHub; audience обмена Yandex IAM — отдельно SA_ID.
+Пустой/отсутствующий AUD фатален до запросов токенов, без fallback на SA_ID.
+Ключ объекта уникален по SHA/run ID/attempt, пакет проверяется SHA-256.
+Ресурсы 256MB/60s, runtime
 SA и Lockbox t_token обязательны; текущие env/настройки сохранять либо отказ
 до upload при неподдерживаемых полях. Проверять ACTIVE и реальные настройки
 через чтение версии; production handler не вызывать. Credentials маскировать,
