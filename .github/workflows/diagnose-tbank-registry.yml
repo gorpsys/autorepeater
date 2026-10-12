@@ -1,0 +1,167 @@
+name: Diagnose T-Bank package registry
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/diagnose-tbank-registry.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe DNS, TCP, TLS, HTTP and SDK version before any dependency install
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import http.client
+          import ipaddress
+          import json
+          import platform
+          import re
+          import sys
+          import socket
+          import ssl
+          import subprocess
+          import time
+          from datetime import datetime, timezone
+          from html.parser import HTMLParser
+          from urllib.parse import unquote, urljoin, urlsplit
+
+          HOST = "opensource.tbank.ru"
+          INDEX = "/api/v4/projects/238/packages/pypi/simple/t-tech-investments/"
+          CTX = ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt")
+
+          def addresses(host, family):
+              try:
+                  reply = subprocess.run(["getent", "ahostsv" + str(family), host],
+                                         capture_output=True, text=True, timeout=10, check=False)
+              except (OSError, subprocess.TimeoutExpired) as error:
+                  return {"addresses": [], "error_type": type(error).__name__}
+              result = []
+              for line in reply.stdout.splitlines():
+                  value = line.split()[0]
+                  address = ipaddress.ip_address(value)
+                  if family == 6 and address.ipv4_mapped is not None:
+                      continue
+                  if value not in result:
+                      result.append(value)
+              return {"exit": reply.returncode, "addresses": result}
+
+          class Links(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.links = []
+              def handle_starttag(self, tag, attrs):
+                  if tag == "a":
+                      href = dict(attrs).get("href")
+                      if href:
+                          self.links.append(href)
+
+          def probe(host, ip, request_path, parse_index=False):
+              started = time.monotonic()
+              deadline = started + 20
+              result = {"host": host, "ip": ip, "path": request_path,
+                        "route": "direct TCP; no HTTP proxy", "tls_verification": True}
+              connection = None
+              raw = None
+              stage = "tcp"
+              try:
+                  raw = socket.create_connection((ip, 443), timeout=5)
+                  result["tcp_seconds"] = round(time.monotonic() - started, 3)
+                  stage = "tls"
+                  raw.settimeout(min(8, deadline-time.monotonic()))
+                  secured = CTX.wrap_socket(raw, server_hostname=host)
+                  raw = secured
+                  result["tls"] = "OK"
+                  result["tls_version"] = secured.version()
+                  stage = "http"
+                  connection = http.client.HTTPSConnection(host, timeout=10, context=CTX)
+                  connection.sock = secured
+                  secured.settimeout(min(10, deadline-time.monotonic()))
+                  connection.request("GET", request_path, headers={
+                      "Host": host, "User-Agent": "autorepeater-connectivity-diagnostic/1",
+                      "Accept": "text/html", "Connection": "close"})
+                  response = connection.getresponse()
+                  result["http_status"] = response.status
+                  result["content_type"] = response.getheader("Content-Type", "")
+                  location = response.getheader("Location")
+                  if location:
+                      target = urlsplit(urljoin("https://" + host + request_path, location))
+                      result["redirect"] = target.scheme + "://" + str(target.hostname) + target.path
+                  if parse_index and response.status == 200:
+                      stage = "index_body"
+                      data = bytearray()
+                      max_size = 512*1024
+                      while len(data) < max_size:
+                          remaining = deadline - time.monotonic()
+                          if remaining <= 0:
+                              raise TimeoutError("total deadline")
+                          secured.settimeout(min(5, remaining))
+                          chunk = response.read(min(16384, max_size-len(data)))
+                          if not chunk:
+                              break
+                          data.extend(chunk)
+                      parser = Links()
+                      parser.feed(bytes(data).decode("utf-8", errors="replace"))
+                      names = [unquote(urlsplit(href).path.rsplit("/", 1)[-1])
+                               for href in parser.links]
+                      matches = sorted(set(name for name in names if re.fullmatch(
+                          r"t[-_]tech[-_]investments-1[.]51[.]0(?:-[^/]+[.]whl|[.]tar[.]gz|[.]zip)",
+                          name, flags=re.IGNORECASE)))
+                      result["index_bytes"] = len(data)
+                      result["body_size_limit_reached"] = len(data) == max_size
+                      result["package_links"] = len(parser.links)
+                      result["version_1_51_0_files"] = matches[:10]
+                  result["result"] = "HTTP response received"
+              except (OSError, http.client.HTTPException) as error:
+                  result["failed_stage"] = stage
+                  result["error_type"] = type(error).__name__
+                  result["errno"] = getattr(error, "errno", None)
+                  result["result"] = "timeout" if isinstance(error, TimeoutError) else "failure"
+              finally:
+                  if connection is not None:
+                      connection.close()
+                  if raw is not None:
+                      raw.close()
+                  result["total_seconds"] = round(time.monotonic()-started, 3)
+              return result
+
+          report = {"checked_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "location": "GitHub-hosted ubuntu-latest runner",
+                    "python": platform.python_version(),
+                    "target_ipv4": addresses(HOST, 4),
+                    "target_ipv6": addresses(HOST, 6),
+                    "checks": []}
+          print(json.dumps({"dns": {key: value for key, value in report.items()
+                                   if key != "checks"}}, ensure_ascii=False), flush=True)
+          for ip in report["target_ipv4"]["addresses"][:1]:
+              for endpoint in ["/", INDEX]:
+                  item = probe(HOST, ip, endpoint, parse_index=endpoint == INDEX)
+                  report["checks"].append(item)
+                  print(json.dumps(item, ensure_ascii=False), flush=True)
+          for ip in report["target_ipv6"]["addresses"][:1]:
+              item = probe(HOST, ip, INDEX, parse_index=True)
+              report["checks"].append(item)
+              print(json.dumps(item, ensure_ascii=False), flush=True)
+          control = addresses("pypi.org", 4)
+          if control["addresses"]:
+              item = probe("pypi.org", control["addresses"][0], "/simple/pip/")
+              report["checks"].append(item)
+              print(json.dumps(item, ensure_ascii=False), flush=True)
+
+          accepted = any(item.get("http_status") == 200
+                         and item.get("version_1_51_0_files")
+                         and not item.get("body_size_limit_reached", False)
+                         for item in report["checks"] if item["host"] == HOST and item["path"] == INDEX)
+          print(json.dumps({"index_version_1_51_0_confirmed": bool(accepted),
+                            "file_download_or_installation_checked": False},
+                           ensure_ascii=False), flush=True)
+          sys.exit(0 if accepted else 1)
+          PY
