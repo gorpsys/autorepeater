@@ -1,0 +1,27 @@
+name: Cloud package check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-smoke:
+    name: Cloud package smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.12"
+    - name: Network package smoke
+      timeout-minutes: 20
+      env:
+        CLOUD_PACKAGE_SHA: ${{ github.sha }}
+      run: make check-cloud-package

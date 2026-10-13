@@ -1,0 +1,25 @@
+# Generated from runtime-lock.json; use make update-runtime-lock.
+antlr4-python3-runtime==4.13.2
+astor==0.8.1
+cachetools==5.5.2
+certifi==2026.7.22
+charset-normalizer==3.5.2
+deprecation==2.1.0
+grpcio==1.84.0
+grpcio-tools==1.81.1
+idna==3.20
+iprotopy==0.3.0
+mypy-protobuf==5.1.0
+packaging==26.3
+proto-schema-parser==2.1.0
+protobuf==6.33.6
+python-dateutil==2.9.0.post0
+python-json-logger==3.3.0
+requests==2.34.2
+sentry-sdk==2.71.0
+setuptools==84.0.0
+six==1.17.0
+t-tech-investments==1.51.0
+types-protobuf==7.35.1.20260906
+typing-extensions==4.16.0
+urllib3==2.8.0

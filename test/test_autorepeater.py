@@ -1564,7 +1564,9 @@ def test_cloud_archive(tmp_path):
     project = tmp_path / 'project'
     config_dir = project / 'autorepeater/configs'
     config_dir.mkdir(parents=True)
-    for name in ['Makefile', 'main.py', 'handler.py', 'requirements.txt']:
+    for name in ['Makefile', 'main.py', 'handler.py', 'requirements.txt',
+                 'requirements-runtime.txt', 'requirements-runtime-constraints.txt',
+                 'requirements-runtime-pins.txt', 'runtime-lock.json']:
         shutil.copyfile(repository / name, project / name)
     (project / 'scripts').mkdir()
     shutil.copyfile(repository / 'scripts/build_yandex_archive.py',
@@ -1584,7 +1586,7 @@ def test_cloud_archive(tmp_path):
         capture_output=True, text=True, timeout=30)
     assert build.returncode == 0, build.stdout + build.stderr
     extracted = tmp_path / 'extracted'
-    expected = {'main.py', 'handler.py', 'requirements.txt'}
+    expected = {'main.py', 'handler.py', 'requirements.txt', 'requirements-runtime.txt'}
     expected.update(path.relative_to(project).as_posix() for path in config_dir.rglob('*.json'))
     expected.update(f'autorepeater/{path.name}'
                     for path in (repository / 'autorepeater').glob('*.py'))

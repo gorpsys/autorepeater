@@ -1,5 +1,6 @@
 """Offline contracts for the repository-wide Make test commands."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -106,7 +107,9 @@ def write_python_script(path, log_path, behavior='log'):
     forwarding = ('import os, sys\n'
                   'guard = os.path.join(os.path.dirname(os.environ["HELPER"]), '
                   '"make_environment.py")\n'
-                  'if sys.argv[1] in (os.environ["HELPER"], guard):\n'
+                  'if sys.argv[1] == guard:\n'
+                  '    raise SystemExit(0)\n'
+                  'if sys.argv[1] == os.environ["HELPER"]:\n'
                   '    os.execv(os.environ["REAL_PYTHON"], '
                   '[os.environ["REAL_PYTHON"], *sys.argv[1:]])\n')
     log_body = ('with open(os.environ["LOG_PATH"], "ab") as log:\n'
@@ -147,6 +150,52 @@ def command_log(log_path):
     records = log_path.read_bytes().split(b'\n')
     return [[part.decode(errors='replace') for part in record.split(b'\0') if part]
             for record in records if record]
+
+
+@pytest.mark.parametrize('flag,expected', [('0', []), ('1', ['--use-vendored-sdk'])])
+def test_make_archive_sdk_flag_uses_selected_python(fake_tools, git_repository, flag, expected):
+    """The same archive target passes only the explicit boolean CLI flag."""
+    python, log_path, environment = fake_tools
+    result = run_make('claude-yandex-archive', git_repository, environment,
+                      [f'PYTHON={python}', f'USE_VENDORED_SDK={flag}'])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert command_log(log_path) == [['scripts/build_yandex_archive.py', *expected]]
+
+
+@pytest.mark.parametrize('flag', ['', 'true', '2', '01', '0 1'])
+def test_make_archive_rejects_invalid_sdk_flag(fake_tools, git_repository, flag):
+    """A mistyped flag fails before launching Python or touching an output."""
+    python, log_path, environment = fake_tools
+    result = run_make('claude-yandex-archive', git_repository, environment,
+                      [f'PYTHON={python}', f'USE_VENDORED_SDK={flag}'])
+    assert result.returncode != 0
+    assert 'USE_VENDORED_SDK must be 0 or 1' in result.stderr
+    assert command_log(log_path) == []
+
+
+@pytest.mark.parametrize('sdk,offline,expected', [
+    ('0', '0', []), ('1', '0', ['--use-vendored-sdk']),
+    ('0', '1', ['--offline-archive']),
+    ('1', '1', ['--use-vendored-sdk', '--offline-archive']),
+])
+def test_make_archive_flag_matrix(fake_tools, git_repository, sdk, offline, expected):
+    """Both switches keep the existing target and selected interpreter."""
+    python, log_path, environment = fake_tools
+    result = run_make('claude-yandex-archive', git_repository, environment,
+                      [f'PYTHON={python}', f'USE_VENDORED_SDK={sdk}', f'OFFLINE_ARCHIVE={offline}'])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert command_log(log_path) == [['scripts/build_yandex_archive.py', *expected]]
+
+
+@pytest.mark.parametrize('flag', ['', 'true', '2', '01', '0 1'])
+def test_make_archive_rejects_invalid_offline_flag(fake_tools, git_repository, flag):
+    """An invalid mode never starts a default build."""
+    python, log_path, environment = fake_tools
+    result = run_make('claude-yandex-archive', git_repository, environment,
+                      [f'PYTHON={python}', f'OFFLINE_ARCHIVE={flag}'])
+    assert result.returncode != 0
+    assert 'OFFLINE_ARCHIVE must be 0 or 1' in result.stderr
+    assert command_log(log_path) == []
 
 
 def test_make_lint_uses_quoted_python_and_safe_files(tmp_path, git_repository):
@@ -277,7 +326,7 @@ def test_workflows_delegate_to_make_without_duplicate_pytest():
         encoding='utf-8')
     python_workflow = (REPOSITORY / '.github/workflows/python-app.yml').read_text(
         encoding='utf-8')
-    requirements = (REPOSITORY / 'requirements-dev.txt').read_text(encoding='utf-8')
+    requirements = effective_requirements(REPOSITORY / 'requirements-dev.txt')
     required_tools = ('pylint', 'flake8', 'pytest', 'pytest-cov==7.1.0',
                       'diff-cover==10.6.0', 'mypy==1.18.2')
     for tool in required_tools:
@@ -293,6 +342,42 @@ def test_workflows_delegate_to_make_without_duplicate_pytest():
     assert 'make lint' in python_workflow
     assert 'make coverage' in python_workflow
     assert 'github.event.pull_request.base.sha || github.event.before' in python_workflow
+
+
+def effective_requirements(path):
+    """Collect included inputs for tests without treating constraints as requirements."""
+    result = []
+    for line in path.read_text(encoding='utf-8').splitlines():
+        if line.startswith('-r '):
+            result.extend(effective_requirements(path.parent / line[3:]))
+        elif line and not line.startswith(('#', '-')):
+            result.append(line)
+    return result
+
+
+def test_generated_dev_runtime_is_hashless_and_constrained():
+    """Public development input remains usable before Task5's verified installer."""
+    document = json.loads((REPOSITORY / 'runtime-lock.json').read_text(encoding='utf-8'))
+    requirements = effective_requirements(REPOSITORY / 'requirements-dev.txt')
+    for package in document['packages']:
+        assert f'{package["name"]}=={package["version"]}' in requirements
+    assert not any('--hash=' in line for line in requirements)
+    development = (REPOSITORY / 'requirements-dev.txt').read_text(encoding='utf-8')
+    assert '-c requirements-runtime-constraints.txt' in development
+    assert '-r requirements-dev-tools.txt' in development
+    assert '--trusted-host' not in development
+
+
+@pytest.mark.parametrize('target,module', [
+    ('check-runtime-lock', 'scripts.runtime_lock'),
+    ('update-runtime-lock', 'scripts.update_runtime_lock'),
+])
+def test_explicit_lock_targets_use_selected_interpreter(fake_tools, git_repository, target, module):
+    """Only the explicit updater mutates lock; both targets honor PYTHON."""
+    python, log_path, environment = fake_tools
+    result = run_make(target, git_repository, environment, [f'PYTHON={python}'])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert command_log(log_path) == [['-m', module]]
     assert '--diff-range-notation=..' in make_offline.COVERAGE_DIFF_ARGUMENTS
     assert make_offline.DEFAULT_DIFF_BASE == 'origin/master'
 
@@ -307,6 +392,16 @@ def test_workflow_job_names_are_distinct_for_branch_protection():
     assert '  lint:\n    name: Lint\n' in pylint_workflow
     assert ('  offline-checks:\n'
             '    name: Offline checks\n') in python_workflow
+
+
+def test_cloud_package_make_uses_selected_python_and_sha(fake_tools, git_repository):
+    """The shared network goal delegates to one checker with the requested checkout SHA."""
+    python, log_path, environment = fake_tools
+    result = run_make('check-cloud-package', git_repository, environment,
+                      [f'PYTHON={python}', 'CLOUD_PACKAGE_SHA=' + 'a' * 40])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert command_log(log_path) == [[
+        '-m', 'scripts.check_cloud_bundle', '--expected-sha', 'a' * 40]]
 
 
 @pytest.mark.parametrize('statuses', [(0, 0, 0, 0), (7,), (0, 8), (0, 0, 9), (0, 0, 0, 10)])

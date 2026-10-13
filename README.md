@@ -15,7 +15,8 @@ python main.py --algoritm ACCOUNT -s 2193248994 -d <id_назначения> --d
 python main.py --algoritm COMPOSITE -s BALANCED -d <id_назначения> --debug
 ```
 
-Для локальных проверок один раз подготовьте окружение Python 3.12:
+Для локальных проверок подготовьте окружение CPython 3.12/Linux x86_64
+с glibc >=2.17:
 
 ```bash
 make setup
@@ -23,18 +24,30 @@ make lint
 make typecheck
 make test
 make coverage
-make e2e
 ```
 
-`make setup` создаёт `.venv` и устанавливает runtime-зависимости и инструменты
-проверок из `requirements-dev.txt`. Этот файл содержит те же инструменты,
-которые используются в CI; production-зависимости остаются в `requirements.txt`.
+`make setup` создаёт `.venv` и через общий helper устанавливает проверенные
+runtime wheels по [runtime-lock.json](runtime-lock.json), затем инструменты
+разработки под runtime constraints. Make проверяет версии и receipt установки.
+SDK `t-tech-investments==1.51.0` поступает из официального индекса T-Bank;
+при разрешённой недоступности используется [локальный резерв](vendor/t-tech-investments/README.md)
+с WARNING и проверкой целостности. Остальные пакеты поступают из PyPI;
+их бинарники в Git не хранятся. Setup и offline сборка требуют PyPI.
+Vendored сборка читает локальные материалы и проверяет индекс T-Bank;
+PyPI нужен для последующей установки зависимостей из этого ZIP.
+Официальный hash восстановленного SDK независимо не подтверждён;
+различие reserve/index hashes требует одобрения точной пары и обновления lock.
+Лицензия SDK: [Apache-2.0](vendor/t-tech-investments/LICENSE).
+Команды, ограничения и raw pip exports описаны в [техническом README](scripts/README.md).
 При наличии `.venv/bin/python` все цели Make используют его без активации;
 иначе используют `python3` из PATH. Другой интерпретатор выбирается явно:
 `make test PYTHON=/path/to/venv/bin/python`. Для создания окружения другим
 Python используйте `make setup VENV_PYTHON=python3.12`.
+Для внешнего интерпретатора сначала выполните им helper установки
+[из корня проекта](scripts/README.md#окружение-и-проверки).
 Проверки не устанавливают пакеты автоматически. Если зависимостей нет,
 выводится инструкция до запуска инструментов и чтения токена e2e.
+Live `make e2e` запускается отдельно с sandbox-токеном после согласования.
 `make lint` последовательно запускает Pylint, строгие проверки Flake8 и Mypy;
 любое замечание завершает цель с ошибкой. Оценка Pylint не является итогом Flake8.
 `make typecheck` запускает только Mypy. Начальная область проверки типов явно
@@ -446,9 +459,15 @@ t_token; dst: DST_ACCOUNT и DEFAULT_DST_ACCOUNT. CLI требует оба се
 Периодичность задаёт внешний таймер.
 
 `make claude-yandex-archive` создаёт build/yandex-function.zip:
-main.py, handler.py, requirements.txt, все плоские Python-модули autorepeater
-и нескрытые JSON дерева configs. Списка новых модулей вручную нет.
+main.py, handler.py, вложенные runtime requirements, все плоские Python-модули
+autorepeater и нескрытые JSON дерева configs. Списка новых модулей вручную нет.
 Внешние каталоги, тесты, утилиты и окружения не копируются.
+`USE_VENDORED_SDK=1` включает локальный SDK wheel: установка функции требует
+PyPI, но не T-Bank. `OFFLINE_ARCHIVE=1` включает готовый runtime payload:
+после сборки установка пакетов не нужна; сборка требует PyPI. Это не отключает
+API брокера при работе приложения. Команды трёх режимов, лицензии и
+[проверка готовых архивов](scripts/README.md#проверка-готовых-архивов)
+приведены в [техническом README](scripts/README.md#сборка-облачного-архива).
 Тесты извлекают архив вне репозитория и запускают CLI/облако с подменённым SDK
 и заблокированной сетью, включая независимый алгоритм с одной регистрацией.
 
@@ -457,6 +476,9 @@ main.py, handler.py, requirements.txt, все плоские Python-модули
 Master защищён: изменения только через PR, обязательны `Lint`,
 `Offline checks` и ручной `Sandbox E2E` для актуального head SHA.
 Правила действуют и для администратора; чужое одобрение PR не обязательно.
+`Offline checks` включает один offline coverage-прогон и отдельный обязательный
+сетевой package smoke без брокера и облака. Ручной `Cloud package smoke`
+не заменяет этот статус или Sandbox E2E.
 После мержа те же проверки запускаются для master, E2E автоматически.
 Workflow [deploy-prod](.github/workflows/deploy-prod.yml) ждёт успешного
 master E2E и проверяет все три результата именно для текущего SHA master.
@@ -487,6 +509,11 @@ secret `e6qc2ghhip6925lllhm7`, version `e6qqshm7lkthgotpdqf6`, key `t_token`.
 **не вызывается**. Облачные мутации не повторяются автоматически при ошибке.
 
 Для повторного деплоя: Actions → `deploy-prod` → Run workflow → branch `master`.
+Резервные режимы выбираются только вручную в
+[deploy-prod-reserve](.github/workflows/deploy-prod-reserve.yml), `mode=vendored`
+либо `offline`, с теми же SHA/checks/OIDC gates и общей очередью деплоя.
+Автоматического переключения деплоя на резерв нет. yc скачивается штатно,
+не хранится в репозитории и не имеет резерва; недоступность загрузки фатальна.
 Ручной запуск также требует всех трёх успешных проверок текущего master,
 но не требует отдельного одобрения. При неуспешном деплое сначала проверьте
 результат создания версии: сетевой тайм-аут не доказывает, что она не создана.

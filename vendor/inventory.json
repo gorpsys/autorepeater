@@ -1,0 +1,2275 @@
+{
+  "schema_version": 1,
+  "target": "cpython312-linux-x86_64",
+  "provided_tools": [
+    "Python",
+    "Git",
+    "Make",
+    "GitHub Actions"
+  ],
+  "entries": [
+    {
+      "name": "antlr4-python3-runtime",
+      "version": "4.13.2",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/antlr/antlr4",
+        "tag": "4.13.2",
+        "commit": "cc82115a4e7f53d71d9d905caa2c2dfa4da58899",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/antlr/antlr4/cc82115a4e7f53d71d9d905caa2c2dfa4da58899/runtime/Python3/pyproject.toml SHA256 cc36fa4753ea1a1068d40c1849d45bfd43b8d3e28b954ae8f2fc393307984ff1",
+          "https://raw.githubusercontent.com/antlr/antlr4/cc82115a4e7f53d71d9d905caa2c2dfa4da58899/runtime/Python3/src/antlr4/__init__.py SHA256 83c506a5f96794c59c0322ed8a17a3ceb8003f5528ddbf468707c8f109d98edc",
+          "git ls-remote refs/tags/4.13.2 resolves to cc82115a4e7f53d71d9d905caa2c2dfa4da58899"
+        ]
+      },
+      "license": {
+        "expression": "BSD-3-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/antlr/antlr4/cc82115a4e7f53d71d9d905caa2c2dfa4da58899/LICENSE.txt SHA256 3db1fb3ee79a4b4f9918fc4d0f6133bf18a3cf787f126cd22f8aa9b862281c0c"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "antlr4_python3_runtime-4.13.2-py3-none-any.whl",
+          "path": "vendor/antlr4-python3-runtime/antlr4_python3_runtime-4.13.2-py3-none-any.whl",
+          "sha256": "fe3835eb8d33daece0e799090eda89719dbccee7aa39ef94eed3818cafa5a7e8",
+          "size": 144462,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/89/03/a851e84fcbb85214dc637b6378121ef9a0dd61b4c65264675d8a5c9b1ae7/antlr4_python3_runtime-4.13.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "astor",
+      "version": "0.8.1",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/berkerpeksag/astor",
+        "tag": "0.8.1",
+        "commit": "c7553c79f9222e20783fe9bd8a553f932e918072",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/berkerpeksag/astor/c7553c79f9222e20783fe9bd8a553f932e918072/setup.py SHA256 843ac26c38a41abae578250bc0f9419194b320a0f67327d941037a4268f6cfe7",
+          "https://raw.githubusercontent.com/berkerpeksag/astor/c7553c79f9222e20783fe9bd8a553f932e918072/setup.cfg SHA256 3a7523366d0a5f1048561d927fc5be4e86659f57f766a832421288444ec32c17",
+          "https://raw.githubusercontent.com/berkerpeksag/astor/c7553c79f9222e20783fe9bd8a553f932e918072/astor/__init__.py SHA256 0bdae61f8bfd2bba64224dde0ee55186a3b9c142eddc1e36728a4d26c130f2bc",
+          "git ls-remote refs/tags/0.8.1 resolves to c7553c79f9222e20783fe9bd8a553f932e918072"
+        ]
+      },
+      "license": {
+        "expression": "BSD-3-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/berkerpeksag/astor/c7553c79f9222e20783fe9bd8a553f932e918072/LICENSE SHA256 ce41eafc2efc018d9c7c96a1c779668246c77db11a139e3889f347f464a61b9d"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "astor-0.8.1-py2.py3-none-any.whl",
+          "path": "vendor/astor/astor-0.8.1-py2.py3-none-any.whl",
+          "sha256": "070a54e890cefb5b3739d19f30f5a5ec840ffc9c50ffa7d23cc9fc1a38ebbfc5",
+          "size": 27488,
+          "tag": "py2.py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/c3/88/97eef84f48fa04fbd6750e62dcceafba6c63c81b7ac1420856c8dcc0a3f9/astor-0.8.1-py2.py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "astroid",
+      "version": "4.3.3",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pylint-dev/astroid",
+        "tag": "v4.3.3",
+        "commit": "fc14188234c79558201111ee220e96884224b424",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pylint-dev/astroid/fc14188234c79558201111ee220e96884224b424/pyproject.toml SHA256 d4bf8e314fe99f1a1bbfd00a96d798ebfd72e650c6aecd30bb7c8be4e16e2101",
+          "https://raw.githubusercontent.com/pylint-dev/astroid/fc14188234c79558201111ee220e96884224b424/astroid/__init__.py SHA256 140fb894513e9e436027d9cb861e810d86f6feb220a45c5a4b4517fcb154a82e",
+          "git ls-remote refs/tags/v4.3.3 resolves to fc14188234c79558201111ee220e96884224b424"
+        ]
+      },
+      "license": {
+        "expression": "LGPL-2.1-or-later",
+        "status": "conditional",
+        "evidence": [
+          "https://raw.githubusercontent.com/pylint-dev/astroid/fc14188234c79558201111ee220e96884224b424/LICENSE SHA256 fea16bda9e734dea0d9c8d9f5b909878ef4171626354329609fffcf3db42cb24"
+        ],
+        "obligations": [
+          "Retain licence, copyright and notices; include corresponding source/source form and source access information when distributing the actual payload",
+          "GitHub exclusion avoids repo binary distribution; generated ZIP licence/source retention must be verified before publication"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "astroid-4.3.3-py3-none-any.whl",
+          "path": "vendor/astroid/astroid-4.3.3-py3-none-any.whl",
+          "sha256": "366c99c2907b6407869b1bbfd8abb10f3aea5818309e9c93c9b9c93ecf14bc4f",
+          "size": 287404,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/23/be/54ffbdd679e2ea9f36f1923edd867c39fc1190b3810f111c8282a3f0b608/astroid-4.3.3-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "cachetools",
+      "version": "5.5.2",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/tkem/cachetools",
+        "tag": "v5.5.2",
+        "commit": "c403f9f4185e58090b904c1915345b9ba46d5a08",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/tkem/cachetools/c403f9f4185e58090b904c1915345b9ba46d5a08/pyproject.toml SHA256 07778f62074eb0a43248090b860ce613be3765c753bc8e52c613bdd83eb6547b",
+          "https://raw.githubusercontent.com/tkem/cachetools/c403f9f4185e58090b904c1915345b9ba46d5a08/setup.py SHA256 843ac26c38a41abae578250bc0f9419194b320a0f67327d941037a4268f6cfe7",
+          "https://raw.githubusercontent.com/tkem/cachetools/c403f9f4185e58090b904c1915345b9ba46d5a08/setup.cfg SHA256 6721dc858c016e2bda79ab62df74e1f1de87cbf4b7f9d7fa1e4a8a68ade40123",
+          "https://raw.githubusercontent.com/tkem/cachetools/c403f9f4185e58090b904c1915345b9ba46d5a08/src/cachetools/__init__.py SHA256 72eb5453a7c1d5b20c8a1d2ba3f4d508f2894cfc0cfaa3f87d2fcfc8d7d0956b",
+          "git ls-remote refs/tags/v5.5.2 resolves to c403f9f4185e58090b904c1915345b9ba46d5a08"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/tkem/cachetools/c403f9f4185e58090b904c1915345b9ba46d5a08/LICENSE SHA256 23c4eff7a1c027a977a0b79c4497e17582c334c5f17ef6ac8ca0b52d1e7d8417"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "cachetools-5.5.2-py3-none-any.whl",
+          "path": "vendor/cachetools/cachetools-5.5.2-py3-none-any.whl",
+          "sha256": "d26a22bcc62eb95c3beabd9f1ee5e820d3d2704fe2967cbe350e20c8ffcd3f0a",
+          "size": 10080,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/72/76/20fa66124dbe6be5cafeb312ece67de6b61dd91a0247d1ea13db4ebb33c2/cachetools-5.5.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/certifi/python-certifi",
+        "tag": "2026.07.22",
+        "commit": "f4bc676bc101fe2235846e37044e8c693d6cbaf4",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/certifi/python-certifi/f4bc676bc101fe2235846e37044e8c693d6cbaf4/certifi/__init__.py SHA256 7a52e5f4205f9b3d12a31898ceaa7e3f6837d19cc230700bcae1a9d91d1486c1",
+          "git ls-remote refs/tags/2026.07.22 resolves to f4bc676bc101fe2235846e37044e8c693d6cbaf4"
+        ]
+      },
+      "license": {
+        "expression": "MPL-2.0",
+        "status": "conditional",
+        "evidence": [
+          "https://raw.githubusercontent.com/certifi/python-certifi/f4bc676bc101fe2235846e37044e8c693d6cbaf4/LICENSE SHA256 e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+        ],
+        "obligations": [
+          "Retain licence, copyright and notices; include corresponding source/source form and source access information when distributing the actual payload",
+          "GitHub exclusion avoids repo binary distribution; generated ZIP licence/source retention must be verified before publication"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "certifi-2026.7.22-py3-none-any.whl",
+          "path": "vendor/certifi/certifi-2026.7.22-py3-none-any.whl",
+          "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+          "size": 136983,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "chardet",
+      "version": "7.6.0",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/chardet/chardet",
+        "tag": "7.6.0",
+        "commit": "dcf07fb97b082df57cf06125a0f0778e9aaef79d",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/chardet/chardet/dcf07fb97b082df57cf06125a0f0778e9aaef79d/pyproject.toml SHA256 aaddb6b80f801f7845279f408dbb01f6160d5798b035adcc08c7f90a2dcb8c5c",
+          "https://raw.githubusercontent.com/chardet/chardet/dcf07fb97b082df57cf06125a0f0778e9aaef79d/src/chardet/__init__.py SHA256 9174c1f23aa487cde826a1cb3b46e96a2dc1d903adb9fec09f577dda61692a01",
+          "git ls-remote refs/tags/7.6.0 resolves to dcf07fb97b082df57cf06125a0f0778e9aaef79d"
+        ]
+      },
+      "license": {
+        "expression": "0BSD",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/chardet/chardet/dcf07fb97b082df57cf06125a0f0778e9aaef79d/LICENSE SHA256 0d4cf67e7a26e9957b8948e7dfc0e380e61b427a94b061e618889aba89bb9616"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "chardet-7.6.0-py3-none-any.whl",
+          "path": "vendor/chardet/chardet-7.6.0-py3-none-any.whl",
+          "sha256": "4076d795897ce45239825956a1334e134322ecc4bfe84dbb12acd5390de0fbc1",
+          "size": 680279,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/cf/6e/5a0b348fa4cd7847567a28c6e697ccf58391960bfd13a6e7473ee23ca2f2/chardet-7.6.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.2",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/jawah/charset_normalizer",
+        "tag": "3.5.2",
+        "commit": "935c29ad2d0d6e62fcf3a6e0617c55dc6e85db8f",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/jawah/charset_normalizer/935c29ad2d0d6e62fcf3a6e0617c55dc6e85db8f/pyproject.toml SHA256 70075afafa963cee98104fd0dc0b460c142e479769ab46a36e222396d20890ce",
+          "https://raw.githubusercontent.com/jawah/charset_normalizer/935c29ad2d0d6e62fcf3a6e0617c55dc6e85db8f/setup.py SHA256 391250bb9a999121f239a4ddbd8c142f93aa94cff35f4a539f549ff7d3a4bf18",
+          "https://raw.githubusercontent.com/jawah/charset_normalizer/935c29ad2d0d6e62fcf3a6e0617c55dc6e85db8f/src/charset_normalizer/__init__.py SHA256 997c6fda6b13aee46c685bb1f96e6ee0d37c06702ac4cc38bfb30acce0f1f5b6",
+          "git ls-remote refs/tags/3.5.2 resolves to 935c29ad2d0d6e62fcf3a6e0617c55dc6e85db8f"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/jawah/charset_normalizer/935c29ad2d0d6e62fcf3a6e0617c55dc6e85db8f/LICENSE SHA256 6d0d41bfe170ac6c7dc248c9a63e254d0fb45a60d50a8257d0af92c6e249b887"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "charset_normalizer-3.5.2-py3-none-any.whl",
+          "path": "vendor/charset-normalizer/charset_normalizer-3.5.2-py3-none-any.whl",
+          "sha256": "b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685",
+          "size": 68872,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/fc/ad/d07d7862a62ffa6d79d68074d14823243dd235a77c45262acbf6adeb28bf/charset_normalizer-3.5.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "coverage",
+      "version": "7.16.2",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/coveragepy/coveragepy",
+        "tag": "7.16.2",
+        "commit": "5643ae7c682bbd56ee1ac2b11556145ab8c2cab0",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/coveragepy/coveragepy/5643ae7c682bbd56ee1ac2b11556145ab8c2cab0/pyproject.toml SHA256 495f6cba11d714970228d230e0828611215ad6b0bd06b136f5acf0e22ea857b9",
+          "https://raw.githubusercontent.com/coveragepy/coveragepy/5643ae7c682bbd56ee1ac2b11556145ab8c2cab0/setup.py SHA256 a272ef0f13c9be9f2370812afbbd1586d2b5ed27efbfd8ab4b6c8557d8649505",
+          "https://raw.githubusercontent.com/coveragepy/coveragepy/5643ae7c682bbd56ee1ac2b11556145ab8c2cab0/coverage/__init__.py SHA256 6786a80e474605e54f6eb5c13563cfa60b4ce3106301e253e07a187ea33d2563",
+          "git ls-remote refs/tags/7.16.2 resolves to 5643ae7c682bbd56ee1ac2b11556145ab8c2cab0"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/coveragepy/coveragepy/5643ae7c682bbd56ee1ac2b11556145ab8c2cab0/LICENSE.txt SHA256 0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "coverage-7.16.2-py3-none-any.whl",
+          "path": "vendor/coverage/coverage-7.16.2-py3-none-any.whl",
+          "sha256": "11d28e9123a9156cb405d8d27b44256c9a58fb5decc2073a8f17862057e3aa0f",
+          "size": 215754,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/3f/0c/7a64e1ac90541a8edf50daef0914848011fb057a5bf55284a4811e21939a/coverage-7.16.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "deprecation",
+      "version": "2.1.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "packaging"
+      ],
+      "source": {
+        "url": "https://github.com/briancurtin/deprecation",
+        "tag": null,
+        "commit": "2a0ec0710a9fce97161886d81a10cebd8bf0d882",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/briancurtin/deprecation/2a0ec0710a9fce97161886d81a10cebd8bf0d882/deprecation.py SHA256 67ca8f542fa36a701fecfa68735c184e24d6bc649d4a312b395d630e19c73746"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/briancurtin/deprecation/2a0ec0710a9fce97161886d81a10cebd8bf0d882/LICENSE SHA256 b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "deprecation-2.1.0-py2.py3-none-any.whl",
+          "path": "vendor/deprecation/deprecation-2.1.0-py2.py3-none-any.whl",
+          "sha256": "a10811591210e1fb0e768a8c25517cabeabcba6f0bf96564f8ff45189f90b14a",
+          "size": 11178,
+          "tag": "py2.py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/02/c3/253a89ee03fc9b9682f1541728eb66db7db22148cd94f89ab22528cd1e1b/deprecation-2.1.0-py2.py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "diff-cover",
+      "version": "10.6.0",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [
+        "chardet",
+        "jinja2",
+        "pluggy",
+        "pygments"
+      ],
+      "source": {
+        "url": "https://github.com/Bachmann1234/diff-cover",
+        "tag": "v10.6.0",
+        "commit": "c3894bc7b1b86ea52abf7fabf99a5219a03556df",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/Bachmann1234/diff-cover/c3894bc7b1b86ea52abf7fabf99a5219a03556df/pyproject.toml SHA256 bb2ac7310a0f4f37ee16c0de25066b5c364b3d5a0ef272ac3f250da17bcc9c31",
+          "https://raw.githubusercontent.com/Bachmann1234/diff-cover/c3894bc7b1b86ea52abf7fabf99a5219a03556df/diff_cover/__init__.py SHA256 665a9aac707b27e1f46973b607ba00c295a0ba0198c1497910df3018a7048bfb",
+          "git ls-remote refs/tags/v10.6.0 resolves to c3894bc7b1b86ea52abf7fabf99a5219a03556df"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/Bachmann1234/diff-cover/c3894bc7b1b86ea52abf7fabf99a5219a03556df/LICENSE SHA256 0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "diff_cover-10.6.0-py3-none-any.whl",
+          "path": "vendor/diff-cover/diff_cover-10.6.0-py3-none-any.whl",
+          "sha256": "a701553060f72d59b81f9cb1645b75ef66204427eb9dd99873c91092220e52ce",
+          "size": 63351,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/47/04/7130707bb385835cca7f168c80d812c9b42af9ae8230a26b3e21c9437c98/diff_cover-10.6.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "dill",
+      "version": "0.4.1",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/uqfoundation/dill",
+        "tag": "0.4.1",
+        "commit": "a9d4d39c411296fb3608c4ffd142134559942d21",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/uqfoundation/dill/a9d4d39c411296fb3608c4ffd142134559942d21/pyproject.toml SHA256 fdc7a4dd6c33ba7ea47f06e93f80ad4b551a6d7f2e35ae13555833e559408e78",
+          "https://raw.githubusercontent.com/uqfoundation/dill/a9d4d39c411296fb3608c4ffd142134559942d21/setup.py SHA256 353a7685d3eccbf2d84d7382d04c864c51cd02e27d737895efea700fccd3d630",
+          "https://raw.githubusercontent.com/uqfoundation/dill/a9d4d39c411296fb3608c4ffd142134559942d21/setup.cfg SHA256 3a0676406d85a10802b1911f523a1b88080b6b6040bd820bd49ab00288313fbb",
+          "https://raw.githubusercontent.com/uqfoundation/dill/a9d4d39c411296fb3608c4ffd142134559942d21/dill/__init__.py SHA256 63cbac9f3a5fb1c949c53e93bd16066ab117916117a6bbf8942d992746c63366",
+          "git ls-remote refs/tags/0.4.1 resolves to a9d4d39c411296fb3608c4ffd142134559942d21"
+        ]
+      },
+      "license": {
+        "expression": "BSD-3-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/uqfoundation/dill/a9d4d39c411296fb3608c4ffd142134559942d21/LICENSE SHA256 f669d63bebf765baaa0b20d8b0c1193296a7e0ea0c22c50a308b74d76ab3939c"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "dill-0.4.1-py3-none-any.whl",
+          "path": "vendor/dill/dill-0.4.1-py3-none-any.whl",
+          "sha256": "1e1ce33e978ae97fcfcff5638477032b801c46c7c65cf717f95fbc2248f79a9d",
+          "size": 120019,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/1e/77/dc8c558f7593132cf8fefec57c4f60c83b16941c574ac5f619abb3ae7933/dill-0.4.1-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "flake8",
+      "version": "7.4.1",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [
+        "mccabe",
+        "pycodestyle",
+        "pyflakes"
+      ],
+      "source": {
+        "url": "https://github.com/pycqa/flake8",
+        "tag": "7.4.1",
+        "commit": "7eccf20b526fe4f2230bf9afeeef2fc9f97faf8d",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pycqa/flake8/7eccf20b526fe4f2230bf9afeeef2fc9f97faf8d/setup.py SHA256 94c748f1039853b29faf8035620e6aa5f44c05636960b339355c19c55c366969",
+          "https://raw.githubusercontent.com/pycqa/flake8/7eccf20b526fe4f2230bf9afeeef2fc9f97faf8d/setup.cfg SHA256 2b0b6ed34ef4eb169ea87bdadb4011ec87b1453264fed65bfd674f26d75798e2",
+          "https://raw.githubusercontent.com/pycqa/flake8/7eccf20b526fe4f2230bf9afeeef2fc9f97faf8d/src/flake8/__init__.py SHA256 effa20029a1a4451cd2ab7885f227aaa6b976c97eea031e143e7a571778c6eac",
+          "git ls-remote refs/tags/7.4.1 resolves to 7eccf20b526fe4f2230bf9afeeef2fc9f97faf8d"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pycqa/flake8/7eccf20b526fe4f2230bf9afeeef2fc9f97faf8d/LICENSE SHA256 e46df9e59cebfbe0b14492e5cde341e8ec42d252a99b6a583fc4608863a5dabe"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "flake8-7.4.1-py2.py3-none-any.whl",
+          "path": "vendor/flake8/flake8-7.4.1-py2.py3-none-any.whl",
+          "sha256": "78480274a6d7289d9cb8eafeda241fac57d4ea687d26e32dfdca37b72cdeddad",
+          "size": 57449,
+          "tag": "py2.py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/b5/d4/8e58a7221419bf8cb194f362ab26abf504c983135975e4c785fac0852886/flake8-7.4.1-py2.py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "grpcio",
+      "version": "1.84.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "typing-extensions"
+      ],
+      "source": {
+        "url": "https://github.com/grpc/grpc",
+        "tag": "v1.84.0",
+        "commit": "3252a89f10d8e92997862167ca7d095ecda85973",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/grpc/grpc/3252a89f10d8e92997862167ca7d095ecda85973/src/python/grpcio/grpc/__init__.py SHA256 7e3a88cf8430c74ec70ca65ba615a3c0419d3a4f59f9c59c01500ade2d88dd39",
+          "https://raw.githubusercontent.com/grpc/grpc/3252a89f10d8e92997862167ca7d095ecda85973/tools/distrib/python/grpcio_tools/setup.py SHA256 5b7a6b73d465be0eede321a78848cb566f3f91acc7508191686138e5d541e0c1",
+          "git ls-remote refs/tags/v1.84.0 resolves to 3252a89f10d8e92997862167ca7d095ecda85973"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/grpc/grpc/3252a89f10d8e92997862167ca7d095ecda85973/LICENSE SHA256 58c86a3f2b5cca0ebdf9ed3e7f4e6dc38e3b38796d8c3dc92064c62a4e39d0dd"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "grpcio-1.84.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "path": "vendor/grpcio/grpcio-1.84.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "sha256": "b44f0a0fc7bc6677d38cc80bca1a32814ce6c8f200fb8b3c1a61c9d77eaefbf3",
+          "size": 7156115,
+          "tag": "cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/a0/bf/258cd7c0a7ed92745dc93c31666d462d05b702807a689744bd49fb833bde/grpcio-1.84.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "grpcio-tools",
+      "version": "1.81.1",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "grpcio",
+        "protobuf",
+        "setuptools"
+      ],
+      "source": {
+        "url": "https://github.com/grpc/grpc",
+        "tag": "v1.81.1",
+        "commit": "e84a8a2f04095f2772ba42a4abccde4f9243e75b",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/grpc/grpc/e84a8a2f04095f2772ba42a4abccde4f9243e75b/src/python/grpcio/grpc/__init__.py SHA256 f37449e686417effa9427e943db24a05c31dfc2c370a07b2ad339219a792ef24",
+          "https://raw.githubusercontent.com/grpc/grpc/e84a8a2f04095f2772ba42a4abccde4f9243e75b/tools/distrib/python/grpcio_tools/setup.py SHA256 560b45601dbcb1faeadeb42367732951013040e6202619e12c4af8b481e8a245",
+          "https://raw.githubusercontent.com/grpc/grpc/e84a8a2f04095f2772ba42a4abccde4f9243e75b/tools/distrib/python/grpcio_tools/grpc_tools/__init__.py SHA256 4b10feca6add33b84aa031a30838dc0374d268569d69267d903b629ebd03ae8a",
+          "git ls-remote refs/tags/v1.81.1 resolves to e84a8a2f04095f2772ba42a4abccde4f9243e75b"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/grpc/grpc/e84a8a2f04095f2772ba42a4abccde4f9243e75b/LICENSE SHA256 58c86a3f2b5cca0ebdf9ed3e7f4e6dc38e3b38796d8c3dc92064c62a4e39d0dd"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "grpcio_tools-1.81.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "path": "vendor/grpcio-tools/grpcio_tools-1.81.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "sha256": "ba8f1ae82ad199f43448995715445cc623fb20d3882382e4be61f0da8ccb3f0e",
+          "size": 2698439,
+          "tag": "cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/35/68/14013cb2942bdac354746b643b4c37dd91906da8dce00f41c616e88bf33d/grpcio_tools-1.81.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/kjd/idna",
+        "tag": "v3.20",
+        "commit": "d55e65e1a3b1ede7f556bc202738066f5597e249",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/kjd/idna/d55e65e1a3b1ede7f556bc202738066f5597e249/pyproject.toml SHA256 7c1a0500a1cfc39dba472fcc7907a7e3038e37a0b9f05a42c04aa66d67c132eb",
+          "https://raw.githubusercontent.com/kjd/idna/d55e65e1a3b1ede7f556bc202738066f5597e249/idna/__init__.py SHA256 8514c3ed53136a3596ebdf512fa487bbdd7da5a99adcaed82e0363d2c306d3af",
+          "git ls-remote refs/tags/v3.20 resolves to d55e65e1a3b1ede7f556bc202738066f5597e249"
+        ]
+      },
+      "license": {
+        "expression": "BSD-3-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/kjd/idna/d55e65e1a3b1ede7f556bc202738066f5597e249/LICENSE.md SHA256 1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "idna-3.20-py3-none-any.whl",
+          "path": "vendor/idna/idna-3.20-py3-none-any.whl",
+          "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+          "size": 69583,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "iniconfig",
+      "version": "2.3.1",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pytest-dev/iniconfig",
+        "tag": "v2.3.1",
+        "commit": "316fbfaf2752d89326e1e75b45cd070f5b5ace9a",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pytest-dev/iniconfig/316fbfaf2752d89326e1e75b45cd070f5b5ace9a/pyproject.toml SHA256 38a961dfaf0673c57eba9fb42a13b38738ad9be5c8a0845aa574d3db4e9b97a1",
+          "https://raw.githubusercontent.com/pytest-dev/iniconfig/316fbfaf2752d89326e1e75b45cd070f5b5ace9a/src/iniconfig/__init__.py SHA256 bb1c9017eea0053a104bd0703f3d8d13e7b9a854e4a364ee765ad64da7220819",
+          "git ls-remote refs/tags/v2.3.1 resolves to 316fbfaf2752d89326e1e75b45cd070f5b5ace9a"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pytest-dev/iniconfig/316fbfaf2752d89326e1e75b45cd070f5b5ace9a/LICENSE SHA256 3409fa91f7ace557894632676656e32264fe5ef7581535725dc9a23774551bd4"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "iniconfig-2.3.1-py3-none-any.whl",
+          "path": "vendor/iniconfig/iniconfig-2.3.1-py3-none-any.whl",
+          "sha256": "9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7",
+          "size": 7552,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/56/43/4ca9e49d27a1fcf6bece6f6aec0ea46bb9112489b93d4b688fb415457bdb/iniconfig-2.3.1-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "iprotopy",
+      "version": "0.3.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "astor",
+        "grpcio",
+        "grpcio-tools",
+        "mypy-protobuf",
+        "proto-schema-parser"
+      ],
+      "source": {
+        "url": "https://github.com/irusland/iprotopy",
+        "tag": "v0.3.0",
+        "commit": "031ae0a6536f07964c9802dfe099efeb701e1c25",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/irusland/iprotopy/031ae0a6536f07964c9802dfe099efeb701e1c25/pyproject.toml SHA256 7810a747f16468bd16f57ca7f38e6a7662c76c6b28e58d81d4b28ec3bc709684",
+          "https://raw.githubusercontent.com/irusland/iprotopy/031ae0a6536f07964c9802dfe099efeb701e1c25/iprotopy/__init__.py SHA256 49b5f75c7a0b86d2c263d1b4f60d08844828c15bb9770d68ef0909d58b922695",
+          "git ls-remote refs/tags/v0.3.0 resolves to 031ae0a6536f07964c9802dfe099efeb701e1c25",
+          "v0.3.0 pyproject declares stale 0.1.0; all 20 iprotopy/ source blobs match SHA256-verified PyPI wheel 0.3.0 exactly"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "conditional",
+        "evidence": [
+          "Author pyproject at v0.3.0 explicitly declares license=\"MIT\" and authors=[\"Ruslan Sirazhetdinov <ruslansir@icloud.com>\"], SHA256 7810a747f16468bd16f57ca7f38e6a7662c76c6b28e58d81d4b28ec3bc709684. PyPI METADATA repeats License: MIT, Author: Ruslan Sirazhetdinov. This is upstream licence declaration, not merely a classifier.",
+          "No standalone licence/copyright text in complete source tree, README (SHA256 5a927589e79b4f5b829ad99a7ed262a6e0d1c2ae6bbb8110668511f628bff2d4), wheel or sdist inspected on 2026-10-12; absence is not proof of forbidden redistribution or absence of MIT permission.",
+          "PyPI wheel SHA256 bd7baa564e40ad583e10ab439f6eae631a3fa6f45390d1a1a6f4bce957d0cdd7; sdist SHA256 006db16dada95db965e845437b2001ea5ad28ea8fe94188819cab60838db1239"
+        ],
+        "obligations": [
+          "Retain original pyproject author/licence/source declarations and published METADATA; reference the exact GitHub source. Do not invent an upstream copyright year or notice.",
+          "Before public payload distribution resolve whether original declarations plus unmodified standard MIT permission text fulfil notice obligations, or request authoritative notice text from the author. Private generation/inspection alone is not public redistribution and is not certified by this inventory."
+        ],
+        "fulfilled": false
+      },
+      "artifacts": [
+        {
+          "filename": "iprotopy-0.3.0-py3-none-any.whl",
+          "path": "vendor/iprotopy/iprotopy-0.3.0-py3-none-any.whl",
+          "sha256": "bd7baa564e40ad583e10ab439f6eae631a3fa6f45390d1a1a6f4bce957d0cdd7",
+          "size": 17392,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/89/db/896be7b15725e3ca63dbe6c8b254ec5ca6bad21b0f918749c70b16c47522/iprotopy-0.3.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Git binary excluded by exact GitHub source independently of licence. Explicit author MIT declaration is recorded; separate public-payload notice compliance remains conditional, not a finding of forbidden redistribution. Private generation/inspection is distinct from publication."
+    },
+    {
+      "name": "isort",
+      "version": "9.0.2",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [
+        "mypy-extensions"
+      ],
+      "source": {
+        "url": "https://github.com/PyCQA/isort",
+        "tag": "9.0.2",
+        "commit": "9f905615631c545f5aea2516508109350d1d2f7d",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/PyCQA/isort/9f905615631c545f5aea2516508109350d1d2f7d/pyproject.toml SHA256 793c649649edff3569f0fcae367dbfd58b8ba782394b7c4f88861ab1b641eedf",
+          "https://raw.githubusercontent.com/PyCQA/isort/9f905615631c545f5aea2516508109350d1d2f7d/isort/__init__.py SHA256 8b330299e3c1a25ecd0d710c5d9bcc1170af67f45fce58be92de9d3a2954d4dd",
+          "git ls-remote refs/tags/9.0.2 resolves to 9f905615631c545f5aea2516508109350d1d2f7d"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/PyCQA/isort/9f905615631c545f5aea2516508109350d1d2f7d/LICENSE SHA256 063294001c3d523dbacbab9dd54ac229982756ccaf592ca53240b2b0cdd82065"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "isort-9.0.2-py3-none-any.whl",
+          "path": "vendor/isort/isort-9.0.2-py3-none-any.whl",
+          "sha256": "6c29deeb39698a8717823b7f75b2ac58c5e8ab8dcf6cf31205a72a6617fb454e",
+          "size": 105052,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/8b/c9/0849e74b868ef10312eecfc24278710e97dd14bc49c1df629d7df142d318/isort-9.0.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "jinja2",
+      "version": "3.1.6",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [
+        "markupsafe"
+      ],
+      "source": {
+        "url": "https://github.com/pallets/jinja",
+        "tag": "3.1.6",
+        "commit": "15206881c006c79667fe5154fe80c01c65410679",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pallets/jinja/15206881c006c79667fe5154fe80c01c65410679/pyproject.toml SHA256 2a791a16ef1c63fba78621a79b839bf7369bdf5c6dae543df9d859bb0ab76ae0",
+          "https://raw.githubusercontent.com/pallets/jinja/15206881c006c79667fe5154fe80c01c65410679/src/jinja2/__init__.py SHA256 c717a93bd8bb0c7b2a910ae004476e2ed7e8cf6402b93ebf81b2f85d237585b5",
+          "git ls-remote refs/tags/3.1.6 resolves to 15206881c006c79667fe5154fe80c01c65410679"
+        ]
+      },
+      "license": {
+        "expression": "BSD-3-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pallets/jinja/15206881c006c79667fe5154fe80c01c65410679/LICENSE.txt SHA256 3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "jinja2-3.1.6-py3-none-any.whl",
+          "path": "vendor/jinja2/jinja2-3.1.6-py3-none-any.whl",
+          "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+          "size": 134899,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "markupsafe",
+      "version": "3.0.4",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pallets/markupsafe",
+        "tag": "3.0.4",
+        "commit": "ece26078ec168ebac69f02877238e68d4b376c91",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pallets/markupsafe/ece26078ec168ebac69f02877238e68d4b376c91/pyproject.toml SHA256 f177449f075d9ada5de58f5083e58515d7c8bbd9d2cd95e09d28ad273313dbdc",
+          "https://raw.githubusercontent.com/pallets/markupsafe/ece26078ec168ebac69f02877238e68d4b376c91/setup.py SHA256 5be9fbbf9fd1fd08ea88498bc6c4918dbc4d3b2621a0f0bf1b7be45084dec77b",
+          "https://raw.githubusercontent.com/pallets/markupsafe/ece26078ec168ebac69f02877238e68d4b376c91/src/markupsafe/__init__.py SHA256 1f512743b0ba6e96c1d7a9450e425889e9978eb3d2d15e72dd57c8c47f518686",
+          "git ls-remote refs/tags/3.0.4 resolves to ece26078ec168ebac69f02877238e68d4b376c91"
+        ]
+      },
+      "license": {
+        "expression": "BSD-3-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pallets/markupsafe/ece26078ec168ebac69f02877238e68d4b376c91/LICENSE.txt SHA256 489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "markupsafe-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+          "path": "vendor/markupsafe/markupsafe-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+          "sha256": "8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581",
+          "size": 22985,
+          "tag": "cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/4f/a7/aeedb5140afa41fc74c225e9184ab96723a6e873b6ee1c9fede7283456d8/markupsafe-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "mccabe",
+      "version": "0.7.0",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pycqa/mccabe",
+        "tag": "0.7.0",
+        "commit": "835a5400881b7460998be51d871fd36f836db3c9",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pycqa/mccabe/835a5400881b7460998be51d871fd36f836db3c9/setup.py SHA256 516d9adb0589d29943d9f8b981ab81db8bafc55344641dbfc06f5a904e4bcf92",
+          "https://raw.githubusercontent.com/pycqa/mccabe/835a5400881b7460998be51d871fd36f836db3c9/setup.cfg SHA256 9dd20a5ada090b01dd22055f32bdaa56315d3a14b0fd168dbe12013fa09fe5b1",
+          "https://raw.githubusercontent.com/pycqa/mccabe/835a5400881b7460998be51d871fd36f836db3c9/mccabe.py SHA256 83f901f283e294d2de99d3a2acf699ca6432ca3a801f4928c2b9dc51069ac34d",
+          "git ls-remote refs/tags/0.7.0 resolves to 835a5400881b7460998be51d871fd36f836db3c9"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pycqa/mccabe/835a5400881b7460998be51d871fd36f836db3c9/LICENSE SHA256 10fbc003cbaf8a6b3cf7195b80dac96c86daf390039b2abf6e7b6e735afd7d74"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "mccabe-0.7.0-py2.py3-none-any.whl",
+          "path": "vendor/mccabe/mccabe-0.7.0-py2.py3-none-any.whl",
+          "sha256": "6c2d30ab6be0e4a46919781807b4f0d834ebdd6c6e3dca0bda5a15f863427b6e",
+          "size": 7350,
+          "tag": "py2.py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/27/1a/1f68f9ba0c207934b35b86a8ca3aad8395a3d6dd7921c0686e23853ff5a9/mccabe-0.7.0-py2.py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "mypy",
+      "version": "1.18.2",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [
+        "mypy-extensions",
+        "pathspec",
+        "typing-extensions"
+      ],
+      "source": {
+        "url": "https://github.com/python/mypy",
+        "tag": "v1.18.2",
+        "commit": "df05f05555ee62dbdb9960c64cad186172e92be1",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/python/mypy/df05f05555ee62dbdb9960c64cad186172e92be1/pyproject.toml SHA256 63244f23a7680d26dcd05501c7e77a5f4504d168f9d342c4a470f73b1b3d18ee",
+          "https://raw.githubusercontent.com/python/mypy/df05f05555ee62dbdb9960c64cad186172e92be1/setup.py SHA256 70e265640905a5c613dd1f0f6fdb3eaa2692ff43c341df1b47bbea4f58604f10",
+          "https://raw.githubusercontent.com/python/mypy/df05f05555ee62dbdb9960c64cad186172e92be1/mypy/__init__.py SHA256 e32a78dea340659d15881a559f9e8173b300e07d943177b459354f7643833fa9",
+          "git ls-remote refs/tags/v1.18.2 resolves to df05f05555ee62dbdb9960c64cad186172e92be1"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/python/mypy/df05f05555ee62dbdb9960c64cad186172e92be1/LICENSE SHA256 de341f6e031d021aab9eb27bdf713cc6fb844dee832ef3bcd4688bff5517220b"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "mypy-1.18.2-py3-none-any.whl",
+          "path": "vendor/mypy/mypy-1.18.2-py3-none-any.whl",
+          "sha256": "22a1748707dd62b58d2ae53562ffc4d7f8bcc727e8ac7cbc69c053ddc874d47e",
+          "size": 2352367,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/87/e3/be76d87158ebafa0309946c4a73831974d4d6ab4f4ef40c3b53a385a66fd/mypy-1.18.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "mypy-extensions",
+      "version": "1.1.0",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/python/mypy_extensions",
+        "tag": "1.1.0",
+        "commit": "70d9435779df27a522b146f2c5dee06ccacae373",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/python/mypy_extensions/70d9435779df27a522b146f2c5dee06ccacae373/pyproject.toml SHA256 53e7e99e0ad85daf4b6c3837c5d10ef490d97e013e896c8172439412216521a7",
+          "https://raw.githubusercontent.com/python/mypy_extensions/70d9435779df27a522b146f2c5dee06ccacae373/mypy_extensions.py SHA256 198ee22e5da53ea6cb0fdd0f4e6d94fd2c40e0c6afbf0bf3a4cf0c112620a919",
+          "git ls-remote refs/tags/1.1.0 resolves to 70d9435779df27a522b146f2c5dee06ccacae373"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/python/mypy_extensions/70d9435779df27a522b146f2c5dee06ccacae373/LICENSE SHA256 a50450da1d53cd777b80ced77c58ff96abe0ccd879706bd142c3ec20e245f0b4"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "mypy_extensions-1.1.0-py3-none-any.whl",
+          "path": "vendor/mypy-extensions/mypy_extensions-1.1.0-py3-none-any.whl",
+          "sha256": "1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505",
+          "size": 4963,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "mypy-protobuf",
+      "version": "5.1.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "protobuf",
+        "types-protobuf"
+      ],
+      "source": {
+        "url": "https://github.com/nipunn1313/mypy-protobuf",
+        "tag": "v5.1.0",
+        "commit": "e92875b9ae3a123bfd7b1e249935a33ed7b16a34",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/nipunn1313/mypy-protobuf/e92875b9ae3a123bfd7b1e249935a33ed7b16a34/pyproject.toml SHA256 901fd722b2ad9fd0f1ff4ff04eee449d0cebb17043a115cd4058806c29c9b39f",
+          "https://raw.githubusercontent.com/nipunn1313/mypy-protobuf/e92875b9ae3a123bfd7b1e249935a33ed7b16a34/mypy_protobuf/__init__.py SHA256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "git ls-remote refs/tags/v5.1.0 resolves to e92875b9ae3a123bfd7b1e249935a33ed7b16a34"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/nipunn1313/mypy-protobuf/e92875b9ae3a123bfd7b1e249935a33ed7b16a34/LICENSE SHA256 0888c7c9596c9a705a68c6c8d7030c2e3762320a4be3d8552d55fd0d2d51c165"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "mypy_protobuf-5.1.0-py3-none-any.whl",
+          "path": "vendor/mypy-protobuf/mypy_protobuf-5.1.0-py3-none-any.whl",
+          "sha256": "d7031f563f806b8bcd448a3e86768bf0994c0af5b0017b344a4fbbba4191f43c",
+          "size": 26313,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/e8/ec/5ffcf8f5f53757e01afdece10c664e694ac60d2f17c2036811b85b842a5b/mypy_protobuf-5.1.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "kind": "python",
+      "scopes": [
+        "runtime",
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pypa/packaging",
+        "tag": "26.3",
+        "commit": "929fd4b1410ac7ef61ef3f45b2f5d7e87711a9b5",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pypa/packaging/929fd4b1410ac7ef61ef3f45b2f5d7e87711a9b5/pyproject.toml SHA256 8497e780f8cb36c109fb25dd26e2981086cd5964074e017f03d36bb1f2fe5e9a",
+          "https://raw.githubusercontent.com/pypa/packaging/929fd4b1410ac7ef61ef3f45b2f5d7e87711a9b5/src/packaging/__init__.py SHA256 6e758cdd0028b2cad74c739b9adc9c9f06f054932306280b878bfe59d39219b5",
+          "git ls-remote refs/tags/26.3 resolves to 929fd4b1410ac7ef61ef3f45b2f5d7e87711a9b5"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0 OR BSD-2-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pypa/packaging/929fd4b1410ac7ef61ef3f45b2f5d7e87711a9b5/LICENSE SHA256 cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48",
+          "https://raw.githubusercontent.com/pypa/packaging/929fd4b1410ac7ef61ef3f45b2f5d7e87711a9b5/LICENSE.BSD SHA256 b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5",
+          "https://raw.githubusercontent.com/pypa/packaging/929fd4b1410ac7ef61ef3f45b2f5d7e87711a9b5/LICENSE.APACHE SHA256 0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "packaging-26.3-py3-none-any.whl",
+          "path": "vendor/packaging/packaging-26.3-py3-none-any.whl",
+          "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+          "size": 129956,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "pathspec",
+      "version": "1.1.1",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/cpburnz/python-pathspec",
+        "tag": "v1.1.1",
+        "commit": "ecf71a99ca739479d450b9830f43416ea0c519c7",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/cpburnz/python-pathspec/ecf71a99ca739479d450b9830f43416ea0c519c7/pyproject.toml SHA256 a4c6ac26b18b1048c441b90237b3de31dd90908a52fa90cf905fc844ec1b4776",
+          "https://raw.githubusercontent.com/cpburnz/python-pathspec/ecf71a99ca739479d450b9830f43416ea0c519c7/setup.py SHA256 987da970f15fea9ef749ecc51a466c49f819776f4e8343dfa0c4b35b4e6bbb24",
+          "https://raw.githubusercontent.com/cpburnz/python-pathspec/ecf71a99ca739479d450b9830f43416ea0c519c7/setup.cfg SHA256 64a2c06b965cc547ab3a9827c01f1d7a4e4855cb79d8f61308d68458ac86e3ff",
+          "https://raw.githubusercontent.com/cpburnz/python-pathspec/ecf71a99ca739479d450b9830f43416ea0c519c7/pathspec/__init__.py SHA256 d0f9d909e715a38523b1f0341051ac0148a4cb3d6348316640ff600a82975bf6",
+          "git ls-remote refs/tags/v1.1.1 resolves to ecf71a99ca739479d450b9830f43416ea0c519c7"
+        ]
+      },
+      "license": {
+        "expression": "MPL-2.0",
+        "status": "conditional",
+        "evidence": [
+          "https://raw.githubusercontent.com/cpburnz/python-pathspec/ecf71a99ca739479d450b9830f43416ea0c519c7/LICENSE SHA256 fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+        ],
+        "obligations": [
+          "Retain licence, copyright and notices; include corresponding source/source form and source access information when distributing the actual payload",
+          "GitHub exclusion avoids repo binary distribution; generated ZIP licence/source retention must be verified before publication"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pathspec-1.1.1-py3-none-any.whl",
+          "path": "vendor/pathspec/pathspec-1.1.1-py3-none-any.whl",
+          "sha256": "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
+          "size": 57328,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "platformdirs",
+      "version": "4.12.3",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/tox-dev/platformdirs",
+        "tag": "4.12.3",
+        "commit": "960ff632eb575deb6f0d5bf49519d5a2ee2098b6",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/tox-dev/platformdirs/960ff632eb575deb6f0d5bf49519d5a2ee2098b6/pyproject.toml SHA256 3ca05a23ca45f8f47bb78a602e0db843b76b2b1c341f7623dea8518be11c84c2",
+          "https://raw.githubusercontent.com/tox-dev/platformdirs/960ff632eb575deb6f0d5bf49519d5a2ee2098b6/src/platformdirs/__init__.py SHA256 3d249a2b0495667a946d3a8a9d9015846e69316dcc127cf59a6063745e66b3f1",
+          "git ls-remote refs/tags/4.12.3 resolves to 960ff632eb575deb6f0d5bf49519d5a2ee2098b6"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/tox-dev/platformdirs/960ff632eb575deb6f0d5bf49519d5a2ee2098b6/LICENSE SHA256 29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "platformdirs-4.12.3-py3-none-any.whl",
+          "path": "vendor/platformdirs/platformdirs-4.12.3-py3-none-any.whl",
+          "sha256": "080f3b39423b5abfca9a23d84c4e9795f54d395cd8459867a8ded44084fcd5f8",
+          "size": 32493,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/c5/9b/6ce1ead737fe496611bda600c263b9a11ae7bd8f41bb13f9bd7e0a2c37a4/platformdirs-4.12.3-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "pluggy",
+      "version": "1.6.0",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pytest-dev/pluggy",
+        "tag": "1.6.0",
+        "commit": "fd08ab5f811a9b2fa9124ae8cbbd393221151e2c",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pytest-dev/pluggy/fd08ab5f811a9b2fa9124ae8cbbd393221151e2c/pyproject.toml SHA256 a80661d4d18b92dba406d0df5c9e886d2bceb0d283314ed244aaf0c161a35e2b",
+          "https://raw.githubusercontent.com/pytest-dev/pluggy/fd08ab5f811a9b2fa9124ae8cbbd393221151e2c/src/pluggy/__init__.py SHA256 0fa769d609840e3b43a7c840c1073eaab81aba59cbe2296daea90b0ddfa0f6d8",
+          "git ls-remote refs/tags/1.6.0 resolves to fd08ab5f811a9b2fa9124ae8cbbd393221151e2c"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pytest-dev/pluggy/fd08ab5f811a9b2fa9124ae8cbbd393221151e2c/LICENSE SHA256 d6b65e6c213a5d0b577911d34d6e5949b9f59d76c238c5071a2f3fc16cfb2606"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pluggy-1.6.0-py3-none-any.whl",
+          "path": "vendor/pluggy/pluggy-1.6.0-py3-none-any.whl",
+          "sha256": "e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746",
+          "size": 20538,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "proto-schema-parser",
+      "version": "2.1.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "antlr4-python3-runtime"
+      ],
+      "source": {
+        "url": "https://github.com/criccomini/proto-schema-parser",
+        "tag": "2.1.0",
+        "commit": "cae4c6359e3db2b3093acbaa4ae72f5ce73c0d01",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/criccomini/proto-schema-parser/cae4c6359e3db2b3093acbaa4ae72f5ce73c0d01/pyproject.toml SHA256 53c656973feb2353284b9c183cc269c4dbbb580be94308ba7a9f187654a2c43b",
+          "https://raw.githubusercontent.com/criccomini/proto-schema-parser/cae4c6359e3db2b3093acbaa4ae72f5ce73c0d01/proto_schema_parser/__init__.py SHA256 f495ad637901dd98b213e1063d174c7fa4cec4fc847211580574251dbec2b7fd",
+          "git ls-remote refs/tags/2.1.0 resolves to cae4c6359e3db2b3093acbaa4ae72f5ce73c0d01"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/criccomini/proto-schema-parser/cae4c6359e3db2b3093acbaa4ae72f5ce73c0d01/LICENSE SHA256 7d6d72ac07bd9fa329ce54daef9b06e93975506c09391b760a9653b7060774d8"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "proto_schema_parser-2.1.0-py3-none-any.whl",
+          "path": "vendor/proto-schema-parser/proto_schema_parser-2.1.0-py3-none-any.whl",
+          "sha256": "c9c9febec427e77a12e65d041c6fb46d3dfdd473312e713cc9db82f50a9b0574",
+          "size": 66284,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/2b/02/9bcd5329004262d25f18beb5fde95f188d0b9944512a621c93e422b50805/proto_schema_parser-2.1.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "protobuf",
+      "version": "6.33.6",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/protocolbuffers/protobuf",
+        "tag": "v33.6",
+        "commit": "6e1998413a5bca7c058b85999667893f167434bc",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/protocolbuffers/protobuf/6e1998413a5bca7c058b85999667893f167434bc/python/google/protobuf/__init__.py SHA256 3d66aee60879ae8b66cfa5548c120e9f32b42d03e9a4743832b701b76c8027fd",
+          "git ls-remote refs/tags/v33.6 resolves to 6e1998413a5bca7c058b85999667893f167434bc"
+        ]
+      },
+      "license": {
+        "expression": "BSD-3-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/protocolbuffers/protobuf/6e1998413a5bca7c058b85999667893f167434bc/LICENSE SHA256 6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "protobuf-6.33.6-py3-none-any.whl",
+          "path": "vendor/protobuf/protobuf-6.33.6-py3-none-any.whl",
+          "sha256": "77179e006c476e69bf8e8ce866640091ec42e1beb80b213c3900006ecfba6901",
+          "size": 170656,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/c4/72/02445137af02769918a93807b2b7890047c32bfb9f90371cbc12688819eb/protobuf-6.33.6-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "pycodestyle",
+      "version": "2.15.0",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/PyCQA/pycodestyle",
+        "tag": "2.15.0",
+        "commit": "9647851c7c9f9b901ca8a14e508f9546c6f6fd49",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/PyCQA/pycodestyle/9647851c7c9f9b901ca8a14e508f9546c6f6fd49/setup.py SHA256 76189f7511a9eb8dab0ccaf022097f598fa32c3026ce2c2174ea7e7c3fccc71e",
+          "https://raw.githubusercontent.com/PyCQA/pycodestyle/9647851c7c9f9b901ca8a14e508f9546c6f6fd49/setup.cfg SHA256 88653a0d2adda935807a48ae7e8dbeab1902bb2cb60759ff5350a5b53d7357b7",
+          "https://raw.githubusercontent.com/PyCQA/pycodestyle/9647851c7c9f9b901ca8a14e508f9546c6f6fd49/pycodestyle.py SHA256 04d95f3133ff3f8f0d8f1f38f8a8c5f8ec7ec965ebf7d54a43ffdd4cc3a155fe",
+          "git ls-remote refs/tags/2.15.0 resolves to 9647851c7c9f9b901ca8a14e508f9546c6f6fd49"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/PyCQA/pycodestyle/9647851c7c9f9b901ca8a14e508f9546c6f6fd49/LICENSE SHA256 f772295e81af3478d34e88e52d076200230ec7dd6a39e123bc5cb35aa66abdae"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pycodestyle-2.15.0-py2.py3-none-any.whl",
+          "path": "vendor/pycodestyle/pycodestyle-2.15.0-py2.py3-none-any.whl",
+          "sha256": "12fd2f73c7b8ee8845a0431111df8faf4c1a07d6e64e2ee7f0c74014dab14181",
+          "size": 31583,
+          "tag": "py2.py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/56/e2/480bcdb153feecde4d736b18c908c7eee4846f11d7547d2e0c71499af630/pycodestyle-2.15.0-py2.py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "pyflakes",
+      "version": "4.0.2",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/PyCQA/pyflakes",
+        "tag": "4.0.2",
+        "commit": "4756a379502d8692cc5023f1b19aa92d190bfb3d",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/PyCQA/pyflakes/4756a379502d8692cc5023f1b19aa92d190bfb3d/setup.py SHA256 793ab9aae77170ab117d9c293bd80e94033da485a0954e8f70fc49e88eccf4c8",
+          "https://raw.githubusercontent.com/PyCQA/pyflakes/4756a379502d8692cc5023f1b19aa92d190bfb3d/setup.cfg SHA256 9f8ae3983fe4bb4f98545f93e7ece28313a40c8a066a2d83e5f1f9f1f020a76c",
+          "https://raw.githubusercontent.com/PyCQA/pyflakes/4756a379502d8692cc5023f1b19aa92d190bfb3d/pyflakes/__init__.py SHA256 b50dc1ba28392a7324bfab07079bf1134c353737ca67e4d0b7e82cc77947a6b7",
+          "git ls-remote refs/tags/4.0.2 resolves to 4756a379502d8692cc5023f1b19aa92d190bfb3d"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/PyCQA/pyflakes/4756a379502d8692cc5023f1b19aa92d190bfb3d/LICENSE SHA256 22c47569cc0aae531b372361366818af01c6fc2e314770584a7866c92b3a0463"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pyflakes-4.0.2-py2.py3-none-any.whl",
+          "path": "vendor/pyflakes/pyflakes-4.0.2-py2.py3-none-any.whl",
+          "sha256": "01faee1160feadfd9d58c9631a895126ba2032c2e8748e32a96ab51cbd084c6d",
+          "size": 66216,
+          "tag": "py2.py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/b6/a8/7df0a3b4f8166c2fb7fe0195f88a0a643cfb7cd1b0430c19f74bd01771f5/pyflakes-4.0.2-py2.py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "pygments",
+      "version": "2.21.0",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pygments/pygments",
+        "tag": "2.21.0",
+        "commit": "a43b45dcf081b6010c6ab4428f149f7f6d2499c4",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pygments/pygments/a43b45dcf081b6010c6ab4428f149f7f6d2499c4/pyproject.toml SHA256 77427e5aace8ec5b3430172819011f8d18c186669eca004775ba7b98f0661a6d",
+          "https://raw.githubusercontent.com/pygments/pygments/a43b45dcf081b6010c6ab4428f149f7f6d2499c4/pygments/__init__.py SHA256 83fe99688e06ed80d7d44d325f79027de83a434c60f249bceffd67fda3e7d2b1",
+          "git ls-remote refs/tags/2.21.0 resolves to a43b45dcf081b6010c6ab4428f149f7f6d2499c4"
+        ]
+      },
+      "license": {
+        "expression": "BSD-2-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pygments/pygments/a43b45dcf081b6010c6ab4428f149f7f6d2499c4/LICENSE SHA256 a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pygments-2.21.0-py3-none-any.whl",
+          "path": "vendor/pygments/pygments-2.21.0-py3-none-any.whl",
+          "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+          "size": 1250147,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "pylint",
+      "version": "4.1.2",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [
+        "astroid",
+        "dill",
+        "isort",
+        "mccabe",
+        "platformdirs",
+        "tomlkit"
+      ],
+      "source": {
+        "url": "https://github.com/pylint-dev/pylint",
+        "tag": "v4.1.2",
+        "commit": "40be3a2f729cdf667eae46272369aeffe1abf651",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pylint-dev/pylint/40be3a2f729cdf667eae46272369aeffe1abf651/pyproject.toml SHA256 0102ed305e4a98e1ab2e24d30fa5a6a31b95eea80d3ea2a1037d1e01ede81581",
+          "https://raw.githubusercontent.com/pylint-dev/pylint/40be3a2f729cdf667eae46272369aeffe1abf651/pylint/__init__.py SHA256 aca14c14b4a402a4489e744179561be3f1c9e5a769712b533d6ff323b1ae55a6",
+          "git ls-remote refs/tags/v4.1.2 resolves to 40be3a2f729cdf667eae46272369aeffe1abf651"
+        ]
+      },
+      "license": {
+        "expression": "GPL-2.0-or-later",
+        "status": "conditional",
+        "evidence": [
+          "https://raw.githubusercontent.com/pylint-dev/pylint/40be3a2f729cdf667eae46272369aeffe1abf651/LICENSE SHA256 f97b14080de8b8490d60eb3d620ebc419943e0779466d1dd0d5d6f68fe195dcd"
+        ],
+        "obligations": [
+          "Retain licence, copyright and notices; include corresponding source/source form and source access information when distributing the actual payload",
+          "GitHub exclusion avoids repo binary distribution; generated ZIP licence/source retention must be verified before publication"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pylint-4.1.2-py3-none-any.whl",
+          "path": "vendor/pylint/pylint-4.1.2-py3-none-any.whl",
+          "sha256": "e34c8636edc7d60a2eaadca4ad6c18a49e202361987a26e81b2a17fa92be28e1",
+          "size": 585512,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/90/61/b76698429225f848921f4d620f5c7b16f616daf53f99cc25afd1c86496fc/pylint-4.1.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "pytest",
+      "version": "9.1.1",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [
+        "iniconfig",
+        "packaging",
+        "pluggy",
+        "pygments"
+      ],
+      "source": {
+        "url": "https://github.com/pytest-dev/pytest",
+        "tag": "9.1.1",
+        "commit": "cf470ec0bf7eb89cd97dd56df4859eae5db46447",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pytest-dev/pytest/cf470ec0bf7eb89cd97dd56df4859eae5db46447/pyproject.toml SHA256 e1e42d06821c51f2e5d1006ca6aefc389875451da0e29e2260e61817127a1dc6",
+          "https://raw.githubusercontent.com/pytest-dev/pytest/cf470ec0bf7eb89cd97dd56df4859eae5db46447/src/_pytest/__init__.py SHA256 e087512619d6e571b62a568990ec67e7f4c2f56790e6d5c3485eed6dbe2f12ca",
+          "git ls-remote refs/tags/9.1.1 resolves to cf470ec0bf7eb89cd97dd56df4859eae5db46447"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pytest-dev/pytest/cf470ec0bf7eb89cd97dd56df4859eae5db46447/LICENSE SHA256 ca836a5f9ecca3b2f350230faa20a48fb8b145653b5568d784862df864706b9b"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pytest-9.1.1-py3-none-any.whl",
+          "path": "vendor/pytest/pytest-9.1.1-py3-none-any.whl",
+          "sha256": "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c",
+          "size": 386536,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "pytest-cov",
+      "version": "7.1.0",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [
+        "coverage",
+        "pluggy",
+        "pytest"
+      ],
+      "source": {
+        "url": "https://github.com/pytest-dev/pytest-cov",
+        "tag": "v7.1.0",
+        "commit": "66c8a526b1246b5eb8fb1bc218878131bc628622",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pytest-dev/pytest-cov/66c8a526b1246b5eb8fb1bc218878131bc628622/pyproject.toml SHA256 b34cb3d74d8f671357d9475ac0426e5ff9a46775e8be164206ebf434823651a2",
+          "https://raw.githubusercontent.com/pytest-dev/pytest-cov/66c8a526b1246b5eb8fb1bc218878131bc628622/src/pytest_cov/__init__.py SHA256 e4b008d64388b309e3d9b5a0173d6e3c51fe9caa0b43c520e2246e5d1e2e4445",
+          "git ls-remote refs/tags/v7.1.0 resolves to 66c8a526b1246b5eb8fb1bc218878131bc628622"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pytest-dev/pytest-cov/66c8a526b1246b5eb8fb1bc218878131bc628622/LICENSE SHA256 835586ae156766a24e3c103fbc55d9af6b1a16df57ca932c97482a2737fd83d5"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pytest_cov-7.1.0-py3-none-any.whl",
+          "path": "vendor/pytest-cov/pytest_cov-7.1.0-py3-none-any.whl",
+          "sha256": "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678",
+          "size": 22876,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/9d/7a/d968e294073affff457b041c2be9868a40c1c71f4a35fcc1e45e5493067b/pytest_cov-7.1.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "six"
+      ],
+      "source": {
+        "url": "https://github.com/dateutil/dateutil",
+        "tag": "2.9.0.post0",
+        "commit": "1ae807774053c071acc9e7d3d27778fba0a7773e",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/dateutil/dateutil/1ae807774053c071acc9e7d3d27778fba0a7773e/pyproject.toml SHA256 d230c9bcfabf9020bf5bb1d4f8e9587285ac657f075fe8c2d45179102588a34c",
+          "https://raw.githubusercontent.com/dateutil/dateutil/1ae807774053c071acc9e7d3d27778fba0a7773e/setup.py SHA256 d94405eec2b79875768247834d9423acdab22488f499ebca957038b3ff2174c7",
+          "https://raw.githubusercontent.com/dateutil/dateutil/1ae807774053c071acc9e7d3d27778fba0a7773e/setup.cfg SHA256 a71204afa83fdc09e7377952cfdaadc4cb23bc24f2dc237663444e0e2c40ad0c",
+          "https://raw.githubusercontent.com/dateutil/dateutil/1ae807774053c071acc9e7d3d27778fba0a7773e/src/dateutil/__init__.py SHA256 32a6a6ebb58ef4891399417223aeaf4ba2284974e9f46dfcf0369d1f62c230b6",
+          "git ls-remote refs/tags/2.9.0.post0 resolves to 1ae807774053c071acc9e7d3d27778fba0a7773e"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0 OR BSD-3-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/dateutil/dateutil/1ae807774053c071acc9e7d3d27778fba0a7773e/LICENSE SHA256 ba00f51a0d92823b5a1cde27d8b5b9d2321e67ed8da9bc163eff96d5e17e577e"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+          "path": "vendor/python-dateutil/python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+          "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+          "size": 229892,
+          "tag": "py2.py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "python-json-logger",
+      "version": "3.3.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/nhairs/python-json-logger",
+        "tag": "v3.3.0",
+        "commit": "9e6cb679dfb56cb82d9a8cc91f956efd72427055",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/nhairs/python-json-logger/9e6cb679dfb56cb82d9a8cc91f956efd72427055/pyproject.toml SHA256 f2ba6079d4b05c637ffa86e348904725f5ec0364512794f1991440b7aed5bd13",
+          "https://raw.githubusercontent.com/nhairs/python-json-logger/9e6cb679dfb56cb82d9a8cc91f956efd72427055/src/pythonjsonlogger/__init__.py SHA256 d9072f7ae21dd740b25df7ff06d27fea45c86ab1d3e68abae971c730589a13cb",
+          "git ls-remote refs/tags/v3.3.0 resolves to 9e6cb679dfb56cb82d9a8cc91f956efd72427055"
+        ]
+      },
+      "license": {
+        "expression": "BSD-2-Clause",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/nhairs/python-json-logger/9e6cb679dfb56cb82d9a8cc91f956efd72427055/LICENSE SHA256 18ea95179e3a5e0e24eb6ce16c40fbfbe23133c2502933a2f75f8a3e1a055b54"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "python_json_logger-3.3.0-py3-none-any.whl",
+          "path": "vendor/python-json-logger/python_json_logger-3.3.0-py3-none-any.whl",
+          "sha256": "dd980fae8cffb24c13caf6e158d3d61c0d6d22342f932cb6e9deedab3d35eec7",
+          "size": 15163,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/08/20/0f2523b9e50a8052bc6a8b732dfc8568abbdc42010aef03a2d750bdab3b2/python_json_logger-3.3.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "certifi",
+        "charset-normalizer",
+        "idna",
+        "urllib3"
+      ],
+      "source": {
+        "url": "https://github.com/psf/requests",
+        "tag": "v2.34.2",
+        "commit": "6e83187b8feb273ed4c6cdab5efd8d54901dfab3",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/psf/requests/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/pyproject.toml SHA256 249147c8688043884fd91b951a013c5bf0aef445894527ad75124a12a41225e1",
+          "https://raw.githubusercontent.com/psf/requests/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/setup.py SHA256 1728c11af4134997015ab07547544852e2f7e103c79a5b0486a8486799f50e0a",
+          "https://raw.githubusercontent.com/psf/requests/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/src/requests/__init__.py SHA256 311157e7fa4aa9166c827d5237e6fd694eeb5ca549ee40e2e90f89f21abcd56e",
+          "git ls-remote refs/tags/v2.34.2 resolves to 6e83187b8feb273ed4c6cdab5efd8d54901dfab3"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/psf/requests/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/LICENSE SHA256 09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "requests-2.34.2-py3-none-any.whl",
+          "path": "vendor/requests/requests-2.34.2-py3-none-any.whl",
+          "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+          "size": 73075,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "sentry-sdk",
+      "version": "2.71.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "certifi",
+        "urllib3"
+      ],
+      "source": {
+        "url": "https://github.com/getsentry/sentry-python",
+        "tag": "2.71.0",
+        "commit": "7d0255842d0cc41fcb5a80ef172ab164719fbb8b",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/getsentry/sentry-python/7d0255842d0cc41fcb5a80ef172ab164719fbb8b/pyproject.toml SHA256 c3f34f4d5cfc844a1aec009756f4c9ef0eae51afd144d440546cd3dfe35e238c",
+          "https://raw.githubusercontent.com/getsentry/sentry-python/7d0255842d0cc41fcb5a80ef172ab164719fbb8b/setup.py SHA256 f3fa31ceb0f444fdfc39b883c358249e96469aca2ffb11604158c343f9bbcdba",
+          "https://raw.githubusercontent.com/getsentry/sentry-python/7d0255842d0cc41fcb5a80ef172ab164719fbb8b/sentry_sdk/__init__.py SHA256 df001987a4fd4594f3921a38eb58047459f3b8224689af0d84285dc64919e987",
+          "git ls-remote refs/tags/2.71.0 resolves to 7d0255842d0cc41fcb5a80ef172ab164719fbb8b"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/getsentry/sentry-python/7d0255842d0cc41fcb5a80ef172ab164719fbb8b/LICENSE SHA256 2a140d660f462812fa290bc740d04633126c5ec45d84b79b569e127b0eeddd0b"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "sentry_sdk-2.71.0-py3-none-any.whl",
+          "path": "vendor/sentry-sdk/sentry_sdk-2.71.0-py3-none-any.whl",
+          "sha256": "9ed36b4c206048aa67b5ddba0a6e28d59fc55cf10d60f5f7aea2c3917184bf4a",
+          "size": 534254,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/a4/f6/b3e68b2e08e9a52e6c8a279ca2fc0d3a535f3886222375f54ef9efbd694d/sentry_sdk-2.71.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "setuptools",
+      "version": "84.0.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pypa/setuptools",
+        "tag": "v84.0.0",
+        "commit": "72e919a8b10aaafc041205d4e3ae0e6a2e1e5f87",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/pypa/setuptools/72e919a8b10aaafc041205d4e3ae0e6a2e1e5f87/pyproject.toml SHA256 7bb2169a946d4f92e0c425c99eae4402e252de91195c7901e78d9e9b8a6d8d7e",
+          "https://raw.githubusercontent.com/pypa/setuptools/72e919a8b10aaafc041205d4e3ae0e6a2e1e5f87/setup.py SHA256 f70886dffd959c53411444b91e6223617c83f8fb84af5033db3218f1e69a22d7",
+          "https://raw.githubusercontent.com/pypa/setuptools/72e919a8b10aaafc041205d4e3ae0e6a2e1e5f87/setuptools/__init__.py SHA256 04d3cd11754df1af03e547cf9e930e8f46330c2c46772b43545b75993667978f",
+          "git ls-remote refs/tags/v84.0.0 resolves to 72e919a8b10aaafc041205d4e3ae0e6a2e1e5f87"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pypa/setuptools/72e919a8b10aaafc041205d4e3ae0e6a2e1e5f87/LICENSE SHA256 86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "setuptools-84.0.0-py3-none-any.whl",
+          "path": "vendor/setuptools/setuptools-84.0.0-py3-none-any.whl",
+          "sha256": "51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670",
+          "size": 818216,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "six",
+      "version": "1.17.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/benjaminp/six",
+        "tag": "1.17.0",
+        "commit": "ebd9b3af90247b8858d415a05e96e9ee61e48d07",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/benjaminp/six/ebd9b3af90247b8858d415a05e96e9ee61e48d07/setup.py SHA256 317ace0d106fbffce6d754a2454b0e38b345105f298e8e5614bea48516a268d9",
+          "https://raw.githubusercontent.com/benjaminp/six/ebd9b3af90247b8858d415a05e96e9ee61e48d07/setup.cfg SHA256 efe4f61cc8f3944109c5c192c1ecf587a1555990a48e437a6e3c0df348f9c29c",
+          "https://raw.githubusercontent.com/benjaminp/six/ebd9b3af90247b8858d415a05e96e9ee61e48d07/six.py SHA256 c51c91f703d3d4b3696c923cb5fec213e05e75d9215393befac7f2fa6a3904df",
+          "git ls-remote refs/tags/1.17.0 resolves to ebd9b3af90247b8858d415a05e96e9ee61e48d07"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/benjaminp/six/ebd9b3af90247b8858d415a05e96e9ee61e48d07/LICENSE SHA256 4375ba20e2b9c6c4e7cad2940a628fd90e95cc3d50ee92aae755715d8ba1fbd0"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "six-1.17.0-py2.py3-none-any.whl",
+          "path": "vendor/six/six-1.17.0-py2.py3-none-any.whl",
+          "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+          "size": 11050,
+          "tag": "py2.py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "t-tech-investments",
+      "version": "1.51.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [
+        "cachetools",
+        "deprecation",
+        "grpcio",
+        "iprotopy",
+        "protobuf",
+        "python-dateutil",
+        "requests",
+        "sentry-sdk"
+      ],
+      "source": {
+        "url": "https://github.com/Invest-SDK/invest-python",
+        "tag": null,
+        "commit": "0110e451cb0316e975ac5fc5ee027b95246f6396",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/Invest-SDK/invest-python/0110e451cb0316e975ac5fc5ee027b95246f6396/pyproject.toml SHA256 6d6514d814e4e198f73512d530a31bbdf452dd55636169f7d0cbdb14fa21d6bf",
+          "https://raw.githubusercontent.com/Invest-SDK/invest-python/0110e451cb0316e975ac5fc5ee027b95246f6396/t_tech/invest/services.py SHA256 2c6a84bd27c35dd60e01b2138d27f04b606037ef2ab1960af389db58295dfa5a",
+          "Complete GitHub tree (338 blobs, not truncated); all 125 t_tech/ wheel files have identical Git blob SHA1; ZIP CRC clean. Code comparison is not independent official artifact provenance.",
+          "Both project and poetry version declarations are 1.51.0; build backend poetry.core.masonry.api requires poetry-core>=1.0.0; no source build was executed.",
+          "Official index unavailable; recovered SHA256 f0fe22cbed727cecd9971200032d893c19702838b971c08abc2831fe25fa2856 not independently checked against official index."
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/Invest-SDK/invest-python/0110e451cb0316e975ac5fc5ee027b95246f6396/LICENSE SHA256 5484c945bc04994e2080cd022e6df8ef3977230fcd65168846be50e0ecdfde89",
+          "Recovered wheel t_tech_investments-1.51.0.dist-info/licenses/LICENSE SHA256 5484c945bc04994e2080cd022e6df8ef3977230fcd65168846be50e0ecdfde89 includes Copyright 2023 Tinkoff; no upstream NOTICE exists in wheel"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "t_tech_investments-1.51.0-py3-none-any.whl",
+          "path": "vendor/t-tech-investments/t_tech_investments-1.51.0-py3-none-any.whl",
+          "sha256": "f0fe22cbed727cecd9971200032d893c19702838b971c08abc2831fe25fa2856",
+          "size": 316190,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://opensource.tbank.ru/invest/invest-python"
+        },
+        {
+          "filename": "LICENSE",
+          "path": "vendor/t-tech-investments/LICENSE",
+          "sha256": "5484c945bc04994e2080cd022e6df8ef3977230fcd65168846be50e0ecdfde89",
+          "size": 11540,
+          "tag": null,
+          "role": "license",
+          "url": "https://raw.githubusercontent.com/Invest-SDK/invest-python/0110e451cb0316e975ac5fc5ee027b95246f6396/LICENSE"
+        }
+      ],
+      "storage": "eligible",
+      "reason": "User explicitly authorised the recovered t-tech-investments==1.51.0 wheel despite exact GitHub source. Exception is restricted to this version/hash/size; Task2 copies bytes. Official index hash is unverified; no exact mismatch pair approved.",
+      "override": "explicit-user-sdk-1.51.0-recovered-wheel"
+    },
+    {
+      "name": "tomlkit",
+      "version": "0.15.1",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/python-poetry/tomlkit",
+        "tag": "0.15.1",
+        "commit": "1bd7e3bc5bcc957d359a6c4d8e420163f32ac009",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/python-poetry/tomlkit/1bd7e3bc5bcc957d359a6c4d8e420163f32ac009/pyproject.toml SHA256 780e61fc1fc1c1ddb7641eeeb66fc36c932877b7f0a12372c90c47bd18412b41",
+          "https://raw.githubusercontent.com/python-poetry/tomlkit/1bd7e3bc5bcc957d359a6c4d8e420163f32ac009/tomlkit/__init__.py SHA256 68a7a968a8a90b1d1fcf824d20db14533625b3e4929fd1699878d0079ecd79a2",
+          "git ls-remote refs/tags/0.15.1 resolves to 1bd7e3bc5bcc957d359a6c4d8e420163f32ac009"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/python-poetry/tomlkit/1bd7e3bc5bcc957d359a6c4d8e420163f32ac009/LICENSE SHA256 f2f9b460ba719da6626add264d3782f275a4ff7aab677beda08b330911e23adb"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "tomlkit-0.15.1-py3-none-any.whl",
+          "path": "vendor/tomlkit/tomlkit-0.15.1-py3-none-any.whl",
+          "sha256": "177a05aece5a8ca5266fd3c448abb47b8d352f09d477d3ca8332db4d89b24304",
+          "size": 49449,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "types-protobuf",
+      "version": "7.35.1.20260906",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/python/typeshed",
+        "tag": null,
+        "commit": "dfb509fb0e8a5178b457c40e3ab68d685ee269e2",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/python/typeshed/dfb509fb0e8a5178b457c40e3ab68d685ee269e2/stubs/protobuf/google/protobuf/__init__.pyi SHA256 1bc0f1ada46ee63106faf7b4ea6b29f57a07a90c2d9c512356d0922deeef693c",
+          "PyPI 7.35.1.20260906 description explicitly identifies typeshed commit dfb509fb0e8a5178b457c40e3ab68d685ee269e2; stubs/protobuf code fetched at that commit"
+        ]
+      },
+      "license": {
+        "expression": "Apache-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/python/typeshed/dfb509fb0e8a5178b457c40e3ab68d685ee269e2/LICENSE SHA256 295f8538c94ae5c3043301cf7cff1c852dab6a786a8ddee471e061b40d5ecabe"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "types_protobuf-7.35.1.20260906-py3-none-any.whl",
+          "path": "vendor/types-protobuf/types_protobuf-7.35.1.20260906-py3-none-any.whl",
+          "sha256": "5155e48569e0dabff303fdf578db96cd31ea9a4a63b18018a4ceac6b0ae17462",
+          "size": 86419,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/44/4e/f63e826c68f77ef875506d72f225918800346545ee99847bc28f3394f18d/types_protobuf-7.35.1.20260906-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "kind": "python",
+      "scopes": [
+        "runtime",
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/python/typing_extensions",
+        "tag": "4.16.0",
+        "commit": "f29cd28d8ed7642cafb1d18daf5aa41be6a5c0aa",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/python/typing_extensions/f29cd28d8ed7642cafb1d18daf5aa41be6a5c0aa/pyproject.toml SHA256 78bc1fcc5e354c7586d13a9d3311f1c6475c2de5354b170924ebdbef956a9528",
+          "https://raw.githubusercontent.com/python/typing_extensions/f29cd28d8ed7642cafb1d18daf5aa41be6a5c0aa/src/typing_extensions.py SHA256 4040ca1a1ecbee00d1385c12a93084d1c5bd46f0b774f07e5ae7e91c4f55e696",
+          "git ls-remote refs/tags/4.16.0 resolves to f29cd28d8ed7642cafb1d18daf5aa41be6a5c0aa"
+        ]
+      },
+      "license": {
+        "expression": "PSF-2.0",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/python/typing_extensions/f29cd28d8ed7642cafb1d18daf5aa41be6a5c0aa/LICENSE SHA256 3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+          "path": "vendor/typing-extensions/typing_extensions-4.16.0-py3-none-any.whl",
+          "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+          "size": 45571,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "kind": "python",
+      "scopes": [
+        "runtime"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/urllib3/urllib3",
+        "tag": "2.8.0",
+        "commit": "b1d30ab61fe0db8f11092805e8c5ac43e091064a",
+        "github": "exact",
+        "evidence": [
+          "2026-10-12: exact release source checked via tag/commit and actual Python module",
+          "https://raw.githubusercontent.com/urllib3/urllib3/b1d30ab61fe0db8f11092805e8c5ac43e091064a/pyproject.toml SHA256 7bfde47a897e8f0c706d418b0c904e608f98aa2ddbc9c838630d136f4f0677f3",
+          "https://raw.githubusercontent.com/urllib3/urllib3/b1d30ab61fe0db8f11092805e8c5ac43e091064a/setup.cfg SHA256 7de27222bf9075653dce01ac58d8748847bef51bf1cb8bdff081a48a06727580",
+          "https://raw.githubusercontent.com/urllib3/urllib3/b1d30ab61fe0db8f11092805e8c5ac43e091064a/src/urllib3/__init__.py SHA256 24ca35b60d67215d40789daf10d0bf4f17e5d1ee61e86ce5f43195935ad645ba",
+          "git ls-remote refs/tags/2.8.0 resolves to b1d30ab61fe0db8f11092805e8c5ac43e091064a"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/urllib3/urllib3/b1d30ab61fe0db8f11092805e8c5ac43e091064a/LICENSE.txt SHA256 130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+        ],
+        "obligations": [
+          "Retain all upstream licence, copyright, attribution and existing NOTICE files with any distributed artifact; no upstream endorsement"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "urllib3-2.8.0-py3-none-any.whl",
+          "path": "vendor/urllib3/urllib3-2.8.0-py3-none-any.whl",
+          "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+          "size": 135717,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
+      "name": "yc",
+      "version": "1.40.0",
+      "kind": "deployment",
+      "scopes": [
+        "deployment"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://storage.yandexcloud.net/yandexcloud-yc/release/1.40.0/linux/amd64/yc",
+        "tag": null,
+        "commit": null,
+        "github": "unverified",
+        "evidence": [
+          "2026-10-12 official artifact HEAD HTTP 200; Content-Length 192229560, no binary downloaded or executed",
+          "GitHub repository search yandex-cloud-cli in:name returns installation wrappers, not matching yc source; yandex-cloud/yandex-cloud-cli repository HTTP404. This bounded search is not proof of global absence.",
+          "https://yandex.cloud/en/docs/cli/operations/install-cli; project deploy-prod.yml explicitly requests yc 1.40.0"
+        ]
+      },
+      "license": {
+        "expression": "LicenseRef-Unverified-Yandex-Cloud-CLI",
+        "status": "unknown",
+        "fulfilled": false,
+        "evidence": [
+          "No licence grant retrieved for yc 1.40.0; official /LICENSE and version release.json endpoints returned HTTP404. Install documentation is not redistribution permission."
+        ],
+        "obligations": [
+          "Obtain authoritative redistribution licence and source decision; agree storage for 192229560 bytes exceeding ordinary GitHub Git limit before publication; no implicit LFS/releases"
+        ]
+      },
+      "artifacts": [],
+      "storage": "blocked",
+      "reason": "Licence and matching source are unverified, so no publication is allowed. Official binary also exceeds ordinary GitHub Git 100 MB limit; separate storage decision required."
+    }
+  ]
+}

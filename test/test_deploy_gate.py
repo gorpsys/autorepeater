@@ -279,3 +279,51 @@ def test_main_outputs_only_authorized_facts(monkeypatch, tmp_path, capsys, mode)
     else:
         assert result == 1 and not output.exists()
     assert 'test-credential' not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('damage', [
+    'pr', 'fork', 'ref', 'stale', 'lint', 'offline', 'sandbox',
+    'check-producer', 'status-producer', 'check-sha', 'status-sha',
+])
+@pytest.mark.parametrize('check_once', [False, True])
+def test_manual_reserve_gate_never_outputs_authorization_for_unsafe_facts(
+        monkeypatch, tmp_path, damage, check_once):
+    """Both actual CLI gate calls fail before the workflow can reach OIDC/upload."""
+    doc, output = tmp_path / 'event.json', tmp_path / 'output.txt'
+    doc.write_text('{}', encoding='utf-8')
+    env = dict(environment(), GITHUB_EVENT_NAME='workflow_dispatch',
+               GITHUB_EVENT_PATH=str(doc), GITHUB_OUTPUT=str(output), GH_TOKEN='test-token')
+    env.update({
+        'pr': {'GITHUB_EVENT_NAME': 'pull_request'},
+        'fork': {'GITHUB_REPOSITORY': 'fork/autorepeater'},
+        'ref': {'GITHUB_REF': 'refs/heads/feature'},
+    }.get(damage, {}))
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    client = create_autospec(gate.GitHub, instance=True, spec_set=True)
+    client.master_sha.return_value = 'b' * 40 if damage == 'stale' else SHA
+    checks, statuses = facts()
+    changes = {
+        'lint': (checks[0], {'conclusion': 'failure'}),
+        'offline': (checks[1], {'conclusion': 'failure'}),
+        'sandbox': (statuses['statuses'][0], {'state': 'failure'}),
+        'check-producer': (checks[0]['app'], {'slug': 'custom-app'}),
+        'status-producer': (statuses['statuses'][0]['creator'], {'login': 'human'}),
+        'check-sha': (checks[0], {'head_sha': 'b' * 40}),
+        'status-sha': (statuses, {'sha': 'b' * 40}),
+    }.get(damage)
+    if changes:
+        changes[0].update(changes[1])
+    client.checks.return_value, client.statuses.return_value = checks, statuses
+    factory = create_autospec(gate.GitHub, spec_set=True, return_value=client)
+    monkeypatch.setattr(gate, 'GitHub', factory)
+    result = gate.main(['--check-once'] if check_once else [])
+    if damage == 'stale' and not check_once:
+        assert result == 0 and output.read_text() == f'sha={SHA}\nready=false\n'
+    else:
+        assert result == 1 and not output.exists()
+    if damage in ('pr', 'fork', 'ref'):
+        factory.assert_not_called()
+    if damage == 'stale':
+        client.checks.assert_not_called()
+        client.statuses.assert_not_called()

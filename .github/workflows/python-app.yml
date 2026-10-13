@@ -21,11 +21,13 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
+        persist-credentials: false
     - name: Set up Python 3.12
       uses: actions/setup-python@v3
       with:
         python-version: "3.12"
-    - name: Install dependencies
+    - name: Install verified dependencies with SDK fallback
       run: |
         python -m pip install --upgrade pip
         make setup
@@ -37,6 +39,11 @@ jobs:
       env:
         DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
       run: make coverage
+    - name: Network package smoke
+      timeout-minutes: 20
+      env:
+        CLOUD_PACKAGE_SHA: ${{ github.sha }}
+      run: make check-cloud-package
     - name: Upload coverage report
       if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
       uses: actions/upload-artifact@v4
