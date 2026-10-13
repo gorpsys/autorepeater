@@ -1,16 +1,19 @@
 """Direct, coverage-visible checks of archive selection, writing and entrypoint."""
 import json
+from copy import deepcopy
+from dataclasses import replace
 import runpy
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import create_autospec, patch
 from zipfile import ZipFile
 
 import pytest
 
 from scripts import build_yandex_archive as builder
+from scripts import runtime_lock, sdk_wheel
 
 
 @pytest.fixture(name='project')
@@ -19,6 +22,7 @@ def fixture_project(tmp_path):
     root = tmp_path / 'project'
     contents = {
         'main.py': b'main', 'handler.py': b'handler', 'requirements.txt': b'requirements',
+        'requirements-runtime.txt': b'locked runtime requirements',
         'autorepeater/__init__.py': b'', 'autorepeater/new_strategy.py': b'new module',
         'autorepeater/configs/index.json': b'{"reserve":"0.01"}',
         'autorepeater/configs/account/account.json': b'{"reserve":"0.01"}',
@@ -55,7 +59,8 @@ def fixture_project(tmp_path):
 
 
 EXPECTED = {
-    'main.py', 'handler.py', 'requirements.txt', 'autorepeater/__init__.py',
+    'main.py', 'handler.py', 'requirements.txt', 'requirements-runtime.txt',
+    'autorepeater/__init__.py',
     'autorepeater/new_strategy.py', 'autorepeater/configs/index.json',
     'autorepeater/configs/account/account.json',
     'autorepeater/configs/composite/balanced.json',
@@ -162,12 +167,404 @@ def test_archive_write_error(project, tmp_path):
         builder.build_archive(project, tmp_path)
 
 
+@pytest.fixture(name='vendored_project')
+def fixture_vendored_project(project):
+    """Copy only the reviewed local policy and wheels; never install packages."""
+    repository = Path(__file__).resolve().parents[1]
+    for name in ('runtime-lock.json', 'requirements.txt', 'requirements-runtime.txt',
+                 'vendor/inventory.json', 'vendor/t-tech-investments/manifest.json',
+                 'vendor/t-tech-investments/LICENSE',
+                 'vendor/t-tech-investments/' + sdk_wheel.FILENAME):
+        destination = project / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repository / name, destination)
+    return project
+
+
+@pytest.fixture(name='acquisition')
+def fixture_acquisition(vendored_project, monkeypatch):
+    """The strict acquisition port supplies already validated immutable bytes."""
+    acquire = create_autospec(sdk_wheel.acquire_sdk, spec_set=True)
+    acquire.return_value = sdk_wheel.Selection(
+        sdk_wheel.Source.VENDORED, sdk_wheel.Reason.EXPLICIT_VENDORED,
+        sdk_wheel.load_vendored_wheel(vendored_project), sdk_wheel.SDK_HASH)
+    monkeypatch.setattr(sdk_wheel, 'acquire_sdk', acquire)
+    return acquire
+
+
+def test_vendored_archive_locked_requirements_and_owned_bytes(vendored_project, acquisition):
+    """Only the ZIP receives local SDK requirements, hashes and upstream license."""
+    original = {name: (vendored_project / name).read_bytes()
+                for name in ('requirements.txt', 'requirements-runtime.txt',
+                             'vendor/t-tech-investments/manifest.json')}
+    owned = acquisition.return_value.wheel
+
+    def selected(root, mode):
+        assert root == vendored_project and mode == 'vendored'
+        # A consumer must use the validated bytes, not reread the source wheel/license.
+        (root / 'vendor/t-tech-investments' / sdk_wheel.FILENAME).write_bytes(b'changed')
+        (root / 'vendor/t-tech-investments/LICENSE').write_bytes(b'changed')
+        return acquisition.return_value
+
+    acquisition.side_effect = selected
+    output = builder.build_archive(vendored_project, use_vendored_sdk=True)
+    acquisition.assert_called_once_with(vendored_project, 'vendored')
+    prefix = 'vendor/t-tech-investments/'
+    with ZipFile(output) as archive:
+        assert archive.testzip() is None
+        assert set(archive.namelist()) == EXPECTED | {
+            prefix + sdk_wheel.FILENAME, prefix + 'LICENSE', prefix + 'manifest.json'}
+        assert archive.read(prefix + sdk_wheel.FILENAME) == owned.data
+        assert archive.read(prefix + 'LICENSE') == owned.license_bytes
+        assert json.loads(archive.read(prefix + 'manifest.json')) == json.loads(
+            original[prefix + 'manifest.json'])
+        requirements = archive.read('requirements.txt').decode()
+        assert requirements.splitlines() == [
+            '--index-url https://pypi.org/simple',
+            './' + prefix + sdk_wheel.FILENAME + ' --hash=sha256:' + sdk_wheel.SDK_HASH,
+            '-r requirements-runtime.txt']
+        assert archive.read('requirements-runtime.txt') == original['requirements-runtime.txt']
+        for name in ('requirements.txt', 'requirements-runtime.txt'):
+            assert b'tbank' not in archive.read(name)
+            assert b'extra-index' not in archive.read(name)
+            assert b'trusted-host' not in archive.read(name)
+    for name, content in original.items():
+        assert (vendored_project / name).read_bytes() == content
+
+
+@pytest.mark.parametrize('failure', ['approval_required', 'TLS certificate', 'SDK hash'])
+def test_vendored_selection_failure_preserves_zip(vendored_project, acquisition, failure):
+    """Policy/transport integrity failures never publish a partial replacement."""
+    output = builder.build_archive(vendored_project)
+    original = output.read_bytes()
+    acquisition.side_effect = sdk_wheel.WheelError(failure)
+    with pytest.raises(sdk_wheel.WheelError, match=failure):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    assert output.read_bytes() == original
+    assert list(output.parent.iterdir()) == [output]
+
+
+@pytest.mark.parametrize('relative', [
+    'vendor/t-tech-investments/manifest.json', 'vendor/t-tech-investments/LICENSE',
+    'vendor/t-tech-investments/' + sdk_wheel.FILENAME])
+def test_invalid_reserve_precedes_output(vendored_project, acquisition, relative):
+    """All local reserve validation precedes acquisition and ZIP creation."""
+    (vendored_project / relative).write_bytes(b'invalid')
+    with pytest.raises(ValueError):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    acquisition.assert_not_called()
+    assert not (vendored_project / 'build').exists()
+
+
+def test_vendored_requirements_drift_is_not_packaged(vendored_project, acquisition):
+    """An edited nested input cannot smuggle another index or unpinned dependency."""
+    with (vendored_project / 'requirements-runtime.txt').open('ab') as stream:
+        stream.write(b'--extra-index-url https://untrusted.invalid\n')
+    with pytest.raises(ValueError, match='requirements drift'):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    acquisition.assert_not_called()
+    assert not (vendored_project / 'build').exists()
+
+
+def test_selected_sdk_outside_lock_is_rejected(vendored_project, acquisition):
+    """A successful selection still needs the canonical lock's artifact identity."""
+    selected = acquisition.return_value
+    acquisition.return_value = replace(selected, wheel=replace(
+        selected.wheel, manifest=replace(selected.wheel.manifest, sha256='1' * 64)))
+    with pytest.raises(ValueError, match='SDK artifact outside runtime lock'):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    assert not (vendored_project / 'build').exists()
+
+
+def test_vendored_sdk_dependency_metadata_matches_lock(vendored_project, acquisition, monkeypatch):
+    """Artifact identity alone cannot replace verification of the locked dependency graph."""
+    document = deepcopy(runtime_lock.load_lock(vendored_project))
+    next(p for p in document['packages']
+         if p['name'] == sdk_wheel.NAME)['requires_dist'] = []
+    monkeypatch.setattr(runtime_lock, 'load_lock', create_autospec(
+        runtime_lock.load_lock, spec_set=True, return_value=document))
+    with pytest.raises(ValueError, match='SDK dependency metadata drift'):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    acquisition.assert_called_once()
+    assert not (vendored_project / 'build').exists()
+
+
+@pytest.mark.parametrize('field', ['source', 'reason', 'manifest'])
+def test_vendored_selection_policy_drift(vendored_project, acquisition, field):
+    """Only a forced vendored selection under the snapshotted policy is accepted."""
+    selected = acquisition.return_value
+    if field == 'manifest':
+        selected = replace(selected, wheel=replace(selected.wheel, manifest=replace(
+            selected.wheel.manifest, official_hash_verified=True)))
+    else:
+        value = sdk_wheel.Source.OFFICIAL if field == 'source' else sdk_wheel.Reason.NETWORK
+        selected = replace(selected, **{field: value})
+    acquisition.return_value = selected
+    with pytest.raises(ValueError, match='SDK selection policy drift'):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    assert not (vendored_project / 'build').exists()
+
+
+def test_vendored_reserve_symlink_rejected(vendored_project, acquisition, tmp_path):
+    """A symlinked reserve directory cannot escape the project before packing."""
+    source = vendored_project / 'vendor/t-tech-investments'
+    destination = tmp_path / 'outside-vendor'
+    source.rename(destination)
+    source.symlink_to(destination, target_is_directory=True)
+    with pytest.raises(ValueError):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    acquisition.assert_not_called()
+    assert not (vendored_project / 'build').exists()
+
+
+def test_vendored_content_validation(vendored_project, acquisition, monkeypatch):
+    """Even a structurally valid ZIP must contain exactly the prepared bytes."""
+    original_read = ZipFile.read
+
+    def changed_read(archive, name, *args, **kwargs):
+        data = original_read(archive, name, *args, **kwargs)
+        return b'changed' if name == 'requirements.txt' else data
+
+    monkeypatch.setattr(ZipFile, 'read', changed_read)
+    with pytest.raises(ValueError, match='cloud archive content drift'):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    acquisition.assert_called_once()
+    assert not list((vendored_project / 'build').iterdir())
+
+
+@pytest.mark.parametrize('stage', ['write', 'crc', 'members', 'replace', 'interrupt'])
+def test_atomic_vendored_publication(vendored_project, acquisition, monkeypatch, stage):
+    """Writing, validation, replacement and cancellation preserve the old artifact."""
+    output = builder.build_archive(vendored_project)
+    original = output.read_bytes()
+    if stage == 'write':
+        monkeypatch.setattr(ZipFile, 'write', create_autospec(
+            ZipFile.write, spec_set=True, side_effect=PermissionError('write failed')))
+    elif stage == 'interrupt':
+        monkeypatch.setattr(ZipFile, 'write', create_autospec(
+            ZipFile.write, spec_set=True, side_effect=KeyboardInterrupt))
+    elif stage == 'crc':
+        monkeypatch.setattr(ZipFile, 'testzip', create_autospec(
+            ZipFile.testzip, spec_set=True, return_value='handler.py'))
+    elif stage == 'members':
+        monkeypatch.setattr(ZipFile, 'namelist', create_autospec(
+            ZipFile.namelist, spec_set=True, return_value=['handler.py']))
+    else:
+        monkeypatch.setattr(Path, 'replace', create_autospec(
+            Path.replace, spec_set=True, side_effect=PermissionError('replace failed')))
+    with pytest.raises((OSError, ValueError, KeyboardInterrupt)):
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+    assert output.read_bytes() == original
+    assert list(output.parent.iterdir()) == [output]
+    acquisition.assert_called_once()
+
+
+def test_default_builder_never_acquires_sdk(project, monkeypatch):
+    """The ordinary bundle remains independent of vendor and network helpers."""
+    acquire = create_autospec(sdk_wheel.acquire_sdk, spec_set=True,
+                              side_effect=AssertionError('network forbidden'))
+    monkeypatch.setattr(sdk_wheel, 'acquire_sdk', acquire)
+    builder.build_archive(project)
+    acquire.assert_not_called()
+
+
+@pytest.mark.parametrize('arguments', [['--use-vendored-sdk', '0'],
+                                       ['--use-vendored-sdk=1'],
+                                       ['--offline-archive=1'], ['--offline-archive', '0']])
+def test_archive_cli_rejects_invalid_or_unimplemented_flags(arguments):
+    """Boolean flags accept no values; malformed input is never a silent default."""
+    with pytest.raises(SystemExit) as error:
+        builder.main(arguments)
+    assert error.value.code == 2
+
+
+def test_vendored_cli(vendored_project, acquisition, tmp_path):
+    """The explicit CLI flag selects the same local SDK acquisition policy."""
+    output = tmp_path / 'chosen.zip'
+    builder.main(['--project-root', str(vendored_project), '--output', str(output),
+                  '--use-vendored-sdk'])
+    acquisition.assert_called_once_with(vendored_project, 'vendored')
+    assert output.is_file()
+
+
+@pytest.mark.parametrize('vendored', [False, True])
+def test_offline_root_archive_and_cli(project, monkeypatch, tmp_path, vendored):
+    """Offline root contains installed dependencies and never cloud installer inputs."""
+    from scripts import cloud_dependencies  # pylint: disable=import-outside-toplevel
+    expected = {'grpc/__init__.py': b'native import',
+                'grpcio-1.84.0.dist-info/LICENSE': b'original licence',
+                cloud_dependencies.MANIFEST: b'{}'}
+    port = create_autospec(
+        cloud_dependencies.prepare_payload, spec_set=True, return_value=expected)
+    monkeypatch.setattr(cloud_dependencies, 'prepare_payload', port)
+    output = tmp_path / 'offline.zip'
+    arguments = ['--project-root', str(project), '--output', str(output), '--offline-archive']
+    if vendored:
+        arguments.append('--use-vendored-sdk')
+    builder.main(arguments)
+    application = port.call_args.args[1]
+    assert application['main.py'] == (project / 'main.py').read_bytes()
+    assert application['handler.py'] == (project / 'handler.py').read_bytes()
+    assert not any(n.startswith('requirements') for n in application)
+    port.assert_called_once_with(project, application, use_vendored_sdk=vendored)
+    with ZipFile(output) as archive:
+        assert set(archive.namelist()) == set(application) | set(expected)
+        assert archive.testzip() is None
+        assert all(archive.read(n) == data for n, data in expected.items())
+
+
+@pytest.mark.parametrize('stage', ['payload', 'write', 'check', 'replace'])
+def test_atomic_offline_failure_preserves_previous_zip(project, monkeypatch, stage):
+    """Only a fully verified staged ZIP replaces the previous result."""
+    from scripts import cloud_dependencies  # pylint: disable=import-outside-toplevel
+    output = builder.build_archive(project)
+    original = output.read_bytes()
+    port = create_autospec(cloud_dependencies.prepare_payload, spec_set=True, return_value={})
+    monkeypatch.setattr(cloud_dependencies, 'prepare_payload', port)
+    if stage == 'payload':
+        port.side_effect = cloud_dependencies.PayloadError('failed imports')
+    elif stage in ('write', 'check'):
+        name = '_write_archive' if stage == 'write' else '_check_archive'
+        monkeypatch.setattr(builder, name, create_autospec(
+            getattr(builder, name), spec_set=True, side_effect=ValueError('invalid ZIP')))
+    else:
+        monkeypatch.setattr(Path, 'replace', create_autospec(
+            Path.replace, spec_set=True, side_effect=OSError('replace failed')))
+    with pytest.raises((ValueError, OSError)):
+        builder.build_archive(project, offline_archive=True)
+    assert output.read_bytes() == original
+    assert not list(output.parent.glob('.yandex-archive-*'))
+
+
+def test_offline_application_symlink_precedes_payload(project, monkeypatch, tmp_path):
+    """External application files cannot enter the isolated import root."""
+    from scripts import cloud_dependencies  # pylint: disable=import-outside-toplevel
+    original = tmp_path / 'real-main.py'
+    (project / 'main.py').replace(original)
+    (project / 'main.py').symlink_to(original)
+    port = create_autospec(cloud_dependencies.prepare_payload, spec_set=True)
+    monkeypatch.setattr(cloud_dependencies, 'prepare_payload', port)
+    with pytest.raises(ValueError, match='unsafe application'):
+        builder.build_archive(project, offline_archive=True)
+    port.assert_not_called()
+
+
+@pytest.mark.parametrize('entrypoint', ['script', 'runpy'])
+def test_offline_stdlib_entrypoint_and_other_cwd(project, tmp_path, entrypoint):
+    """Mode helpers are lazy and resolve from the builder tree, without PYTHONPATH."""
+    repository = Path(__file__).resolve().parents[1]
+    shutil.copyfile(repository / 'scripts/build_yandex_archive.py',
+                    project / 'scripts/build_yandex_archive.py')
+    (project / 'scripts/cloud_dependencies.py').write_text(
+        'def prepare_payload(root, application, *, use_vendored_sdk=False):\n'
+        '    assert "main.py" in application\n'
+        '    assert use_vendored_sdk\n'
+        '    return {"dependency-manifest.json": b"{}"}\n')
+    output = tmp_path / 'isolated-offline.zip'
+    script = str(project / 'scripts/build_yandex_archive.py')
+    args = ['--project-root', str(project), '--output', str(output),
+            '--offline-archive', '--use-vendored-sdk']
+    if entrypoint == 'script':
+        command = [sys.executable, '-I', '-S', script, *args]
+    else:
+        command = [sys.executable, '-I', '-S', '-c',
+                   'import runpy,sys; script=sys.argv.pop(1); '
+                   'runpy.run_path(script,run_name="__main__")', script, *args]
+    result = subprocess.run(command, cwd=tmp_path, env={'PATH': '/usr/bin:/bin'},
+                            capture_output=True, text=True, check=False, timeout=10)
+    assert result.returncode == 0, result.stderr
+    with ZipFile(output) as archive:
+        assert 'dependency-manifest.json' in archive.namelist()
+        assert 'requirements.txt' not in archive.namelist()
+
+
+@pytest.mark.parametrize('probe', ['available', 'unavailable', 'mismatch', 'tls'])
+def test_vendored_builder_probe_policy(vendored_project, monkeypatch, caplog, probe):
+    """A real forced selection probes only the index; fatal checks prevent publication."""
+    port = create_autospec(sdk_wheel.Transport, instance=True, spec_set=True)
+    digest = '1' * 64 if probe == 'mismatch' else sdk_wheel.SDK_HASH
+    index = (f'<!DOCTYPE html><html><head><title>Links for t-tech-investments</title>'
+             f'</head><body><h1>Links for t-tech-investments</h1><a href="'
+             f'{sdk_wheel.SIMPLE_URL}{sdk_wheel.FILENAME}#sha256={digest}">'
+             f'{sdk_wheel.FILENAME}</a></body></html>').encode()
+    port.fetch.return_value = sdk_wheel.Response(sdk_wheel.SIMPLE_URL, 200, 'text/html', index)
+    if probe == 'unavailable':
+        port.fetch.side_effect = sdk_wheel.AvailabilityError(sdk_wheel.Reason.DNS)
+    elif probe == 'tls':
+        port.fetch.side_effect = sdk_wheel.WheelError('TLS certificate')
+
+    def worker(stage, root, mode, *, timeout):
+        assert stage == 'select' and mode == 'vendored' and timeout == 40
+        return sdk_wheel.encode_selection(sdk_wheel.select_source(root, mode, port))
+
+    monkeypatch.setattr(sdk_wheel.sdk_worker, 'run_worker', create_autospec(
+        sdk_wheel.sdk_worker.run_worker, spec_set=True, side_effect=worker))
+    output = builder.build_archive(vendored_project)
+    original = output.read_bytes()
+    if probe in ('tls', 'mismatch'):
+        with pytest.raises(sdk_wheel.WheelError, match='TLS|approval_required'):
+            builder.build_archive(vendored_project, use_vendored_sdk=True)
+        assert output.read_bytes() == original
+    else:
+        builder.build_archive(vendored_project, use_vendored_sdk=True)
+        assert 'WARNING' in caplog.text and 'explicit_vendored_mode' in caplog.text
+    port.fetch.assert_called_once_with(sdk_wheel.SIMPLE_URL)
+
+
+@pytest.mark.parametrize('entrypoint', ['script', 'runpy', 'make'])
+def test_vendored_stdlib_entrypoints(vendored_project, tmp_path, entrypoint):
+    """All helpers resolve from the isolated script tree without site-packages/cwd."""
+    repository = Path(__file__).resolve().parents[1]
+    for relative in ('Makefile', 'scripts/build_yandex_archive.py', 'scripts/sdk_wheel.py',
+                     'scripts/runtime_lock.py', 'scripts/vendor_inventory.py'):
+        shutil.copyfile(repository / relative, vendored_project / relative)
+    # This offline worker double exercises the actual acquisition decode/validation.
+    (vendored_project / 'scripts/sdk_worker.py').write_text(
+        'class WorkerTimeout(Exception):\n    pass\n'
+        'def run_worker(stage, root, mode, *, timeout):\n'
+        '    from scripts import sdk_wheel as sdk\n'
+        '    assert stage == "select" and mode == "vendored" and timeout == 40\n'
+        '    return sdk.encode_selection(sdk.Selection(sdk.Source.VENDORED,\n'
+        '        sdk.Reason.EXPLICIT_VENDORED, sdk.load_vendored_wheel(root), sdk.SDK_HASH))\n',
+        encoding='utf-8')
+    output = tmp_path / 'isolated.zip'
+    script = str(vendored_project / 'scripts/build_yandex_archive.py')
+    args = ['--project-root', str(vendored_project), '--output', str(output),
+            '--use-vendored-sdk']
+    guard = ('import builtins, socket\n'
+             'original_import = builtins.__import__\n'
+             'def guarded(name, *args, **kwargs):\n'
+             '    assert not name.startswith(("t_tech", "packaging", "pytest")), name\n'
+             '    return original_import(name, *args, **kwargs)\n'
+             'builtins.__import__ = guarded\n'
+             'def blocked(*args, **kwargs):\n    raise AssertionError("network forbidden")\n'
+             'socket.create_connection = blocked\n')
+    if entrypoint == 'script':
+        command = [sys.executable, '-I', '-S', script, *args]
+    elif entrypoint == 'runpy':
+        command = [sys.executable, '-I', '-S', '-c', guard +
+                   'import runpy, sys\nscript = sys.argv.pop(1)\n'
+                   'runpy.run_path(script, run_name="__main__")\n', script, *args]
+    else:
+        command = ['make', '-C', str(vendored_project), 'claude-yandex-archive',
+                   f'PYTHON={sys.executable}', 'USE_VENDORED_SDK=1']
+        output = vendored_project / 'build/yandex-function.zip'
+    result = subprocess.run(command, cwd=tmp_path, env={'PATH': '/usr/bin:/bin'},
+                            capture_output=True, text=True, check=False, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'WARNING' in result.stderr and 'explicit_vendored_mode' in result.stderr
+    with ZipFile(output) as archive:
+        assert archive.read('vendor/t-tech-investments/' + sdk_wheel.FILENAME) == (
+            repository / 'vendor/t-tech-investments' / sdk_wheel.FILENAME).read_bytes()
+
+
 @pytest.fixture(name='application_bundle')
 def fixture_application_bundle(tmp_path):
     """Package the real entrypoints and modules, with an independent source tree."""
     repository = Path(__file__).resolve().parents[1]
     project_root = tmp_path / 'application'
-    sources = [repository / name for name in ('main.py', 'handler.py', 'requirements.txt')]
+    sources = [repository / name for name in (
+        'main.py', 'handler.py', 'requirements.txt', 'requirements-runtime.txt')]
     sources.extend((repository / 'autorepeater').glob('*.py'))
     sources.extend((repository / 'autorepeater/configs').rglob('*.json'))
     for source in sources:

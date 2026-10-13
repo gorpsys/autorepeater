@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "t-tech-investments",
+  "version": "1.51.0",
+  "filename": "t_tech_investments-1.51.0-py3-none-any.whl",
+  "size": 316190,
+  "sha256": "f0fe22cbed727cecd9971200032d893c19702838b971c08abc2831fe25fa2856",
+  "tag": "py3-none-any",
+  "license": "Apache-2.0",
+  "project_url": "https://opensource.tbank.ru/invest/invest-python",
+  "index_url": "https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple",
+  "recovery_source": {
+    "kind": "recovered-installed-distribution",
+    "source_url": "https://github.com/Invest-SDK/invest-python",
+    "source_commit": "0110e451cb0316e975ac5fc5ee027b95246f6396",
+    "matched_code_files": 125,
+    "caveat": "Code matches source; official wheel hash not independently verified."
+  },
+  "official_hash_verified": false,
+  "approvals": []
+}

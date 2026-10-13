@@ -1,6 +1,7 @@
 """Fail before tools or credential access when the selected Python lacks dependencies."""
 import argparse
 import importlib.util
+from pathlib import Path
 import shlex
 import sys
 
@@ -22,11 +23,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     missing = [module for module in MODULES[args.target]
                if importlib.util.find_spec(module) is None]
+    failure = f'lacks modules: {", ".join(missing)}'
     if not missing:
-        return 0
-    print(f'{args.target}: Python {sys.executable} lacks modules: {", ".join(missing)}.\n'
-          'Run make setup to prepare .venv, or install into your selected Python:\n'
-          f'  {shlex.quote(sys.executable)} -m pip install -r requirements-dev.txt',
+        # Direct script entrypoints do not include the checkout root in sys.path.
+        root = Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(root))
+        from scripts.install_dependencies import check_environment  # pylint: disable=import-outside-toplevel
+        try:
+            check_environment(root)
+            return 0
+        except (ValueError, OSError):
+            failure = 'requires a current runtime receipt and locked dependency graph'
+    print(f'{args.target}: Python {sys.executable} {failure}.\n'
+          'Run make setup to prepare .venv, or run from the project root:\n'
+          f'  {shlex.quote(sys.executable)} -m scripts.install_dependencies --development',
           file=sys.stderr)
     return 2
 

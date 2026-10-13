@@ -99,7 +99,7 @@ jobs:
         timeout-minutes: 2
         with:
           python-version: "3.12"
-      - name: Install test dependencies
+      - name: Install verified test dependencies with SDK fallback
         timeout-minutes: 6
         run: make setup
       - name: Run all real sandbox scenarios

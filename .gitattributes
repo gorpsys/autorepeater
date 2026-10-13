@@ -1,0 +1,2 @@
+# Preserve the hash-bound upstream licence's original trailing whitespace.
+third_party/grpcio-tools-1.81.1/LICENSE whitespace=-blank-at-eol

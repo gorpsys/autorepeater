@@ -1,4 +1,5 @@
+# Generated from runtime-lock.json; use make update-runtime-lock.
+--index-url https://pypi.org/simple
 --extra-index-url https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple
---trusted-host opensource.tbank.ru
-t-tech-investments==1.51.0
-python-json-logger==3.3.0
+t-tech-investments==1.51.0 --hash=sha256:f0fe22cbed727cecd9971200032d893c19702838b971c08abc2831fe25fa2856
+-r requirements-runtime.txt
