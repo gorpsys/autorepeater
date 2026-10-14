@@ -190,3 +190,27 @@ def test_probe_uses_currency_funding_and_repeated_usd_purchase():
     assert [call.args[3] for call in capture.call_args_list] == ['usd_first', 'mixed', 'usd_second']
     assert report['status'] == 'observed'
     lifecycle.verify_name.assert_called_once_with('disposable')
+
+
+def test_unsupported_usd_funding_is_recorded_without_retry(capsys):
+    """Only the definite provider rejection permits a RUB-only experiment."""
+    sandbox = create_autospec(inspect.unwrap(SandboxService), instance=True, spec_set=True)
+    sandbox.sandbox_pay_in.side_effect = SandboxFailure('rejected', api_facts=[{
+        'type': 'RequestError', 'grpc_status': 'INVALID_ARGUMENT', 'api_code': '30258'}])
+    report = {}
+    session = SimpleNamespace(client=SimpleNamespace(sandbox=sandbox))
+    probe.fund_account(session, 'disposable', 'usd', 100000, report)
+    assert report['funding'][0]['outcome'] == 'rejected_currency_unavailable'
+    assert 'WARNING' in capsys.readouterr().out
+    assert sandbox.sandbox_pay_in.call_count == 1
+
+
+def test_uncertain_funding_is_not_retried_or_ignored():
+    """A timeout may have mutated the account and cannot permit blind retries."""
+    sandbox = create_autospec(inspect.unwrap(SandboxService), instance=True, spec_set=True)
+    sandbox.sandbox_pay_in.side_effect = SandboxFailure('timeout', api_facts=[{
+        'type': 'RequestError', 'grpc_status': 'DEADLINE_EXCEEDED'}])
+    with pytest.raises(SandboxFailure):
+        probe.fund_account(SimpleNamespace(client=SimpleNamespace(sandbox=sandbox)),
+                           'disposable', 'usd', 100000, {})
+    assert sandbox.sandbox_pay_in.call_count == 1

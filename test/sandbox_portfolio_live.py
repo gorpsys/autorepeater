@@ -168,6 +168,26 @@ def capture_phase(session, account_id, expected, phase, report):
     print(f'Portfolio probe: {report["ticker"]} {phase}; currencies recorded', flush=True)
 
 
+def fund_account(session, account_id, currency, units, report):
+    """Only an explicit unsupported-USD rejection permits proceeding with RUB funding."""
+    funding = {'currency': currency, 'units': units, 'outcome': 'pending'}
+    report.setdefault('funding', []).append(funding)
+    try:
+        safe_call(session.client.sandbox.sandbox_pay_in, account_id=account_id,
+                  amount=MoneyValue(currency=currency, units=units, nano=0))
+    except SandboxFailure as error:
+        unsupported = currency == 'usd' and any(
+            fact.get('grpc_status') == 'INVALID_ARGUMENT' and fact.get('api_code') == '30258'
+            for fact in error.api_facts)
+        if not unsupported:
+            raise
+        funding['outcome'] = 'rejected_currency_unavailable'
+        print('WARNING: sandbox rejected USD funding (30258); '
+              'continuing with RUB funding only, not assuming USD availability', flush=True)
+    else:
+        funding['outcome'] = 'credited'
+
+
 def run_probe(session, ticker, report):
     """One disposable account: USD, then mixed holdings, then a repeated USD purchase."""
     if session.lifecycle.created:
@@ -180,8 +200,7 @@ def run_probe(session, ticker, report):
     account_id = session.lifecycle.create('currency' + ticker.lower(), 'dst')
     session.lifecycle.verify_name(account_id)
     for currency, units in (('usd', 100000), ('rub', 1000000)):
-        safe_call(session.client.sandbox.sandbox_pay_in, account_id=account_id,
-                  amount=MoneyValue(currency=currency, units=units, nano=0))
+        fund_account(session, account_id, currency, units, report)
     holdings = {}
     for phase, instrument in (('usd_first', dollar), ('mixed', ruble), ('usd_second', dollar)):
         buy_one_lot(session, account_id, instrument, report)
