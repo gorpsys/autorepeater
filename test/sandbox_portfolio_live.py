@@ -94,6 +94,7 @@ def resolve_instrument(data, ticker, currency, report):
         instrument = safe_call(data.get_instrument, uid=match.uid)
         report['candidates'].append({
             'ticker': ticker, 'uid': instrument.uid, 'currency': instrument.currency,
+            'class_code': instrument.class_code,
             'lot': instrument.lot, 'api_trade_available': instrument.api_trade_available})
         if (instrument.currency == currency and instrument.api_trade_available is True
                 and isinstance(instrument.lot, int) and not isinstance(instrument.lot, bool)
@@ -120,6 +121,22 @@ def read_portfolio(client, account_id, requested):
                                metadata=None) from None
 
     return safe_call(get_portfolio_currency)
+
+
+def trading_facts(client, instrument):
+    """Static API eligibility is distinct from the current session's order availability."""
+    status = safe_call(client.market_data.get_trading_status, instrument_id=instrument.uid)
+    name = getattr(status.trading_status, 'name', None)
+    if not isinstance(name, str) or re.fullmatch('[A-Z_]+', name) is None:
+        raise SandboxFailure('invalid trading status')
+    result = {'uid': instrument.uid, 'status': name}
+    for field in ('api_trade_available_flag', 'market_order_available_flag',
+                  'bestprice_order_available_flag'):
+        value = getattr(status, field)
+        if not isinstance(value, bool):
+            raise SandboxFailure('invalid trading permission')
+        result[field] = value
+    return result
 
 
 def buy_one_lot(session, account_id, instrument, report):
@@ -197,6 +214,8 @@ def run_probe(session, ticker, report):
     ruble = resolve_instrument(session.data, 'SBER', 'rub', report)
     native = {dollar.uid: 'usd', ruble.uid: 'rub'}
     report['instrument_currencies'] = native
+    report['trading_statuses'] = [trading_facts(session.client, instrument)
+                                  for instrument in (dollar, ruble)]
     account_id = session.lifecycle.create('currency' + ticker.lower(), 'dst')
     session.lifecycle.verify_name(account_id)
     for currency, units in (('usd', 100000), ('rub', 1000000)):

@@ -181,6 +181,7 @@ def test_probe_uses_currency_funding_and_repeated_usd_purchase():
     ruble = InstrumentInfo('rub', 'SBER', '', InstrumentType.SHARE, '', 10, 'rub', True)
     report = {'ticker': 'AAPL', 'observations': []}
     with patch.object(probe, 'resolve_instrument', side_effect=[dollar, ruble]), patch.object(
+            probe, 'trading_facts', return_value={}), patch.object(
             probe, 'buy_one_lot') as buy, patch.object(probe, 'capture_phase') as capture:
         probe.run_probe(session, 'AAPL', report)
     assert sandbox.sandbox_pay_in.call_count == 2
