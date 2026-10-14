@@ -15,12 +15,12 @@ import pytest
 from t_tech.invest import MoneyValue, OrderDirection, OrderType, RequestError
 from t_tech.invest.grpc import operations_pb2
 
-from autorepeater.strategy_data import InstrumentType
+from autorepeater.strategy_data import InstrumentInfo, InstrumentType
 from scripts.sandbox_e2e import namespace, run_bounded
 from scripts.sandbox_lifecycle import SandboxFailure, list_exception_facts, safe_call
 from scripts.sandbox_support import FILL, PENDING, SandboxSession
 
-USD_TICKERS = ('AAPL', 'MSFT')
+USD_TICKERS = ('BOND1', 'BOND2')
 REQUEST_CURRENCIES = ('DEFAULT', 'RUB', 'USD', 'EUR')
 
 
@@ -57,7 +57,8 @@ def snapshot_facts(response, phase, requested):
         quantities[uid] = quantities.get(uid, Decimal(0)) + amount
     counts = Counter(item['uid'] for item in positions)
     totals = {}
-    for field in ('total_amount_portfolio', 'total_amount_shares', 'total_amount_currencies'):
+    for field in ('total_amount_portfolio', 'total_amount_shares', 'total_amount_currencies',
+                  'total_amount_bonds'):
         value = getattr(response, field, None)
         if value is not None and isinstance(value.currency, str) and value.currency:
             if re.fullmatch('[a-z]{3}', value.currency) is None:
@@ -121,6 +122,41 @@ def read_portfolio(client, account_id, requested):
                                metadata=None) from None
 
     return safe_call(get_portfolio_currency)
+
+
+def resolve_bond(client, slot, report):
+    """Discover USD nominal bonds without confusing denomination and settlement."""
+    catalog = safe_call(client.instruments.bonds).instruments
+    candidates = sorted((bond for bond in catalog if bond.nominal.currency == 'usd'),
+                        key=lambda bond: (not bond.api_trade_available_flag,
+                                          not bond.buy_available_flag, bond.ticker, bond.uid))
+    available = []
+    for bond in candidates:
+        facts = {'ticker': bond.ticker, 'uid': bond.uid, 'name': bond.name,
+                 'class_code': bond.class_code, 'currency': bond.currency, 'lot': bond.lot,
+                 'nominal_currency': bond.nominal.currency,
+                 'nominal': format(quantity(bond.nominal), 'f'),
+                 'api_trade_available': bond.api_trade_available_flag,
+                 'buy_available': bond.buy_available_flag}
+        report['candidates'].append(facts)
+        if (not bond.api_trade_available_flag or not bond.buy_available_flag
+                or bond.lot <= 0 or len(report.get('bond_trading_statuses', [])) >= 20):
+            continue
+        instrument = InstrumentInfo(bond.uid, bond.ticker, bond.name, InstrumentType.OTHER,
+                                    bond.class_code, bond.lot, bond.currency, True)
+        status = trading_facts(client, instrument)
+        report.setdefault('bond_trading_statuses', []).append(status)
+        if status['api_trade_available_flag'] and status['bestprice_order_available_flag']:
+            available.append(instrument)
+    report['usd_nominal_bond_count'] = len(candidates)
+    selected = 0 if slot == 'BOND1' else 1
+    if len(available) <= selected:
+        raise SandboxFailure('no currently available USD-nominal bond for probe slot')
+    result = available[selected]
+    report['selected_bond_ticker'] = result.ticker
+    print(f'Portfolio probe: selected {result.ticker}; settlement={result.currency}; '
+          'nominal=usd', flush=True)
+    return result
 
 
 def trading_facts(client, instrument):
@@ -210,9 +246,9 @@ def run_probe(session, ticker, report):
     if session.lifecycle.created:
         raise SandboxFailure('previous probe cleanup incomplete')
     session.data.begin_snapshot()
-    dollar = resolve_instrument(session.data, ticker, 'usd', report)
+    dollar = resolve_bond(session.client, ticker, report)
     ruble = resolve_instrument(session.data, 'SBER', 'rub', report)
-    native = {dollar.uid: 'usd', ruble.uid: 'rub'}
+    native = {dollar.uid: dollar.currency, ruble.uid: 'rub'}
     report['instrument_currencies'] = native
     report['trading_statuses'] = [trading_facts(session.client, instrument)
                                   for instrument in (dollar, ruble)]

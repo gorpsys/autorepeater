@@ -180,7 +180,8 @@ def test_probe_uses_currency_funding_and_repeated_usd_purchase():
     dollar = InstrumentInfo('usd', 'AAPL', '', InstrumentType.SHARE, '', 1, 'usd', True)
     ruble = InstrumentInfo('rub', 'SBER', '', InstrumentType.SHARE, '', 10, 'rub', True)
     report = {'ticker': 'AAPL', 'observations': []}
-    with patch.object(probe, 'resolve_instrument', side_effect=[dollar, ruble]), patch.object(
+    with patch.object(probe, 'resolve_bond', return_value=dollar), patch.object(
+            probe, 'resolve_instrument', return_value=ruble), patch.object(
             probe, 'trading_facts', return_value={}), patch.object(
             probe, 'buy_one_lot') as buy, patch.object(probe, 'capture_phase') as capture:
         probe.run_probe(session, 'AAPL', report)
@@ -204,6 +205,39 @@ def test_unsupported_usd_funding_is_recorded_without_retry(capsys):
     assert report['funding'][0]['outcome'] == 'rejected_currency_unavailable'
     assert 'WARNING' in capsys.readouterr().out
     assert sandbox.sandbox_pay_in.call_count == 1
+
+
+def test_bond_discovery_distinguishes_nominal_from_settlement():
+    """A USD nominal does not make a RUB-settled bond a USD-priced instrument."""
+    from t_tech.invest import Bond  # pylint: disable=import-outside-toplevel
+    from t_tech.invest.services import InstrumentsService  # pylint: disable=import-outside-toplevel
+    service = create_autospec(inspect.unwrap(InstrumentsService), instance=True, spec_set=True)
+    service.bonds.return_value = SimpleNamespace(instruments=[
+        Bond(uid='bond', ticker='RU000BOND', name='Replacement bond', class_code='TQCB',
+             nominal=MoneyValue(currency='usd', units=1000, nano=0), currency='rub', lot=1,
+             api_trade_available_flag=True, buy_available_flag=True),
+        Bond(uid='rub', nominal=MoneyValue(currency='rub', units=1000, nano=0))])
+    report = {'candidates': []}
+    status = {'api_trade_available_flag': True, 'bestprice_order_available_flag': True}
+    with patch.object(probe, 'trading_facts', return_value=status):
+        result = probe.resolve_bond(SimpleNamespace(instruments=service), 'BOND1', report)
+    assert result.uid == 'bond' and result.currency == 'rub'
+    assert report['candidates'][0]['nominal_currency'] == 'usd'
+    assert report['candidates'][0]['currency'] == 'rub'
+    service.bonds.assert_called_once_with()
+
+
+def test_bond_discovery_refuses_closed_candidates():
+    """Read-only discovery fails before opening or funding accounts."""
+    from t_tech.invest import Bond  # pylint: disable=import-outside-toplevel
+    client = SimpleNamespace(instruments=SimpleNamespace(bonds=lambda: SimpleNamespace(
+        instruments=[Bond(uid='bond', ticker='BOND', name='Bond', class_code='TQCB',
+                          nominal=MoneyValue(currency='usd', units=1000, nano=0),
+                          api_trade_available_flag=True, buy_available_flag=True, lot=1)])))
+    with patch.object(probe, 'trading_facts', return_value={
+            'api_trade_available_flag': True, 'bestprice_order_available_flag': False}):
+        with pytest.raises(SandboxFailure, match='no currently available USD-nominal bond'):
+            probe.resolve_bond(client, 'BOND1', {'candidates': []})
 
 
 def test_uncertain_funding_is_not_retried_or_ignored():
