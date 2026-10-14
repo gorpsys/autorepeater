@@ -27,6 +27,16 @@ jobs:
       uses: actions/setup-python@v3
       with:
         python-version: "3.12"
+    - name: Check release version
+      env:
+        VERSION_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        VERSION_EVENT: ${{ github.event_name }}
+      run: |
+        if [ "$VERSION_EVENT" = "pull_request" ]; then
+          python -m scripts.release_version check --base "$VERSION_BASE_SHA"
+        else
+          python -m scripts.release_version check --allow-existing
+        fi
     - name: Install verified dependencies with SDK fallback
       run: |
         python -m pip install --upgrade pip

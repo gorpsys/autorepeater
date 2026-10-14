@@ -3,6 +3,7 @@
 import os
 import argparse
 
+from autorepeater import __version__
 from autorepeater.runner import RunnerParams
 from autorepeater.runner import Runner
 from autorepeater.strategies import prepare_strategy
@@ -12,6 +13,7 @@ def main() -> None:
     """main function"""
     parser = argparse.ArgumentParser(description="autorepeater")
 
+    parser.add_argument('--version', '-v', action='version', version=f'autorepeater {__version__}')
     parser.add_argument("--debug", action='store_true', help="режим отладки")
     parser.add_argument("--algoritm", required=True, help="имя алгоритма")
     parser.add_argument("-s", "--src", type=str, required=True,
