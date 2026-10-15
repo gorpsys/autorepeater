@@ -338,3 +338,23 @@ def test_mixed_selection_requires_foreign_settlement_not_foreign_nominal():
         result = probe.resolve_bond(SimpleNamespace(instruments=service), 'MIXED', report)
     assert result.currency == 'cny'
     assert [item['currency'] for item in report['candidates']] == ['cny']
+
+
+def test_cny_exchange_uses_exact_instrument_and_explicit_lots():
+    """A rejected pay-in can be replaced by a separate sandbox FX purchase."""
+    from t_tech.invest import Currency  # pylint: disable=import-outside-toplevel
+    from t_tech.invest.services import InstrumentsService  # pylint: disable=import-outside-toplevel
+    service = create_autospec(inspect.unwrap(InstrumentsService), instance=True, spec_set=True)
+    service.currencies.return_value = SimpleNamespace(instruments=[Currency(
+        uid='cny-cash', ticker='CNYRUB_TOM', iso_currency_name='cny', name='CNY',
+        currency='rub', class_code='CETS', lot=1000,
+        api_trade_available_flag=True, buy_available_flag=True)])
+    report = {}
+    session = SimpleNamespace(client=SimpleNamespace(instruments=service))
+    with patch.object(probe, 'trading_facts', return_value={
+            'api_trade_available_flag': True, 'bestprice_order_available_flag': True,
+            'market_order_available_flag': True}), patch.object(probe, 'buy_one_lot') as buy:
+        probe.acquire_currency(session, 'disposable', 'cny', report)
+    assert buy.call_args.kwargs == {'lots': 10}
+    assert buy.call_args.args[2].uid == 'cny-cash'
+    assert report['currency_exchange']['units_requested'] == 10000

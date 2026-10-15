@@ -189,7 +189,7 @@ def trading_facts(client, instrument):
     return result
 
 
-def buy_one_lot(session, account_id, instrument, report):
+def buy_one_lot(session, account_id, instrument, report, lots=1):
     """A mutation is sent once; only reads are polled after NEW/PARTIALLYFILL."""
     request_id = str(session.order_id_factory())
     order_type = report.get('bond_order_types', {}).get(instrument.uid, 'BESTPRICE')
@@ -206,17 +206,18 @@ def buy_one_lot(session, account_id, instrument, report):
             'book_prices': {name: format(quantity(getattr(book, name)), 'f')
                             for name in ('limit_up', 'limit_down', 'last_price', 'close_price')
                             if getattr(book, name, None) is not None}})
-    report['orders'].append({'request_id': request_id, 'uid': instrument.uid, 'lots': 1,
+    report['orders'].append({'request_id': request_id, 'uid': instrument.uid, 'lots': lots,
                              'order_type': order_type})
     response = safe_call(
         session.client.orders.post_order, account_id=account_id,
-        instrument_id=instrument.uid, quantity=1, direction=OrderDirection.ORDER_DIRECTION_BUY,
-        order_type=(OrderType.ORDER_TYPE_LIMIT if order_type == 'LIMIT'
-                    else OrderType.ORDER_TYPE_BESTPRICE), order_id=request_id, **options)
+        instrument_id=instrument.uid, quantity=lots, direction=OrderDirection.ORDER_DIRECTION_BUY,
+        order_type={'LIMIT': OrderType.ORDER_TYPE_LIMIT, 'MARKET': OrderType.ORDER_TYPE_MARKET,
+                    'BESTPRICE': OrderType.ORDER_TYPE_BESTPRICE}[order_type],
+        order_id=request_id, **options)
     broker_id = response.order_id
     deadline = session.monotonic() + 30
     while True:
-        session.check_order(response, instrument.uid, 1, OrderDirection.ORDER_DIRECTION_BUY,
+        session.check_order(response, instrument.uid, lots, OrderDirection.ORDER_DIRECTION_BUY,
                             broker_id)
         if response.execution_report_status == FILL:
             report['orders'][-1].update({'broker_order_id': broker_id, 'status': 'FILL'})
@@ -274,6 +275,38 @@ def fund_account(session, account_id, currency, units, report):
         funding['outcome'] = 'credited'
 
 
+def acquire_currency(session, account_id, currency, report):
+    """Buy sandbox CNY for RUB if direct currency pay-in is explicitly unavailable."""
+    if currency != 'cny':
+        raise SandboxFailure('sandbox foreign funding unavailable; FX route not configured')
+    catalog = safe_call(session.client.instruments.currencies).instruments
+    report['currency_candidates'] = []
+    for item in catalog:
+        if item.iso_currency_name.lower() != currency:
+            continue
+        report['currency_candidates'].append({
+            'uid': item.uid, 'ticker': item.ticker, 'lot': item.lot,
+            'currency': item.currency, 'api_trade_available': item.api_trade_available_flag,
+            'buy_available': item.buy_available_flag})
+        if (item.ticker != 'CNYRUB_TOM' or not item.api_trade_available_flag
+                or not item.buy_available_flag or item.lot <= 0):
+            continue
+        instrument = InstrumentInfo(item.uid, item.ticker, item.name, InstrumentType.CURRENCY,
+                                    item.class_code, item.lot, item.currency, True)
+        status = trading_facts(session.client, instrument)
+        report['currency_trading_status'] = status
+        if not status['api_trade_available_flag'] or not (
+                status['bestprice_order_available_flag'] or status['market_order_available_flag']):
+            continue
+        report.setdefault('bond_order_types', {})[item.uid] = (
+            'BESTPRICE' if status['bestprice_order_available_flag'] else 'MARKET')
+        lots = max(1, (10000 + item.lot - 1) // item.lot)
+        report['currency_exchange'] = {'ticker': item.ticker, 'units_requested': lots * item.lot}
+        buy_one_lot(session, account_id, instrument, report, lots=lots)
+        return
+    raise SandboxFailure('no API-available sandbox CNYRUB_TOM instrument')
+
+
 def run_probe(session, ticker, report):
     """One disposable account: USD, then mixed holdings, then a repeated USD purchase."""
     if session.lifecycle.created:
@@ -290,6 +323,8 @@ def run_probe(session, ticker, report):
     foreign_currency = dollar.currency if dollar.currency != 'rub' else 'usd'
     for currency, units in ((foreign_currency, 100000), ('rub', 1000000)):
         fund_account(session, account_id, currency, units, report)
+    if ticker == 'MIXED' and report['funding'][0]['outcome'] == 'rejected_currency_unavailable':
+        acquire_currency(session, account_id, foreign_currency, report)
     holdings = {}
     for phase, instrument in (('usd_first', dollar), ('mixed', ruble), ('usd_second', dollar)):
         buy_one_lot(session, account_id, instrument, report)
