@@ -11,8 +11,9 @@ from uuid import uuid4
 
 from t_tech.invest import (
     GetOperationsByCursorRequest, GetOrderPriceRequest, MoneyValue,
-    OrderDirection, OrderType,
+    InstrumentIdType, OrderDirection, OrderType,
 )
+from t_tech.invest.utils import decimal_to_quotation
 
 from scripts.sandbox_e2e import namespace, run_bounded
 from scripts.sandbox_lifecycle import SandboxFailure, list_exception_facts, safe_call
@@ -109,6 +110,7 @@ def order_facts(response):
     """PostOrder and GetOrderState are independently retained as broker facts."""
     stages = getattr(response, 'stages', None)
     result = {'order_id': identity(response.order_id),
+              'order_request_id': identity(getattr(response, 'order_request_id', None)),
               'instrument_uid': identity(response.instrument_uid),
               'direction': enum_name(response.direction),
               'status': enum_name(response.execution_report_status),
@@ -169,6 +171,24 @@ def observe(reader, report, label, **kwargs):
         return None
 
 
+def estimate_price(quote, nominal):
+    """Bond exchange points and currency prices are separate experimental inputs."""
+    if nominal is None:
+        return quote
+    return decimal_to_quotation(number(quote) * Decimal(nominal['amount']) / Decimal(100))
+
+
+def estimate_facts(estimate):
+    """Estimates are never promoted to confirmed settlement facts."""
+    if estimate is None:
+        return None
+    result = {name: money(getattr(estimate, name, None)) for name in (
+        'total_order_amount', 'initial_order_amount', 'executed_commission',
+        'executed_commission_rub', 'service_commission', 'deal_commission')}
+    result['aci_value'] = money(getattr(getattr(estimate, 'extra_bond', None), 'aci_value', None))
+    return result
+
+
 def capture(session, account_id, start, phase, report):
     """Cash deltas are controls only; they are not assigned to a strategy or order."""
     positions = safe_call(session.client.operations.get_positions, account_id=account_id)
@@ -206,16 +226,18 @@ def submit(session, account_id, instrument, side, report, *, lots):
     if not levels or number(levels[0].price) <= 0:
         raise SandboxFailure('no positive quote for monetary probe')
     stage['estimate_input_quote'] = format(number(levels[0].price), 'f')
-    estimate = observe(
+    stage['estimate'] = estimate_facts(observe(
         safe_call, report, 'GetOrderPrice', method=session.client.orders.get_order_price,
         request=GetOrderPriceRequest(account_id=account_id, instrument_id=instrument.uid,
-                                     quantity=lots, direction=direction, price=levels[0].price))
-    if estimate is not None:
-        stage['estimate'] = {name: money(getattr(estimate, name, None)) for name in (
-            'total_order_amount', 'initial_order_amount', 'executed_commission',
-            'executed_commission_rub', 'service_commission', 'deal_commission')}
-        stage['estimate']['aci_value'] = money(
-            getattr(getattr(estimate, 'extra_bond', None), 'aci_value', None))
+                                     quantity=lots, direction=direction, price=levels[0].price)))
+    if instrument.uid == INSTRUMENTS['RUSAL']:
+        quote = estimate_price(levels[0].price, report['bond_nominal'])
+        stage['estimate_currency_input'] = format(number(quote), 'f')
+        stage['estimate_currency'] = estimate_facts(observe(
+            safe_call, report, 'GetOrderPriceCurrencyInput',
+            method=session.client.orders.get_order_price,
+            request=GetOrderPriceRequest(account_id=account_id, instrument_id=instrument.uid,
+                                         quantity=lots, direction=direction, price=quote)))
     response = safe_call(session.client.orders.post_order, account_id=account_id,
                          instrument_id=instrument.uid, direction=direction, quantity=lots,
                          order_type=OrderType.ORDER_TYPE_BESTPRICE, order_id=stage['request_id'])
@@ -238,6 +260,25 @@ def submit(session, account_id, instrument, side, report, *, lots):
         raise SandboxFailure('cash probe state no longer confirms fill')
     stage['state'] = order_facts(state)
     print(f'Cash facts: {instrument.ticker} {side} lots={lots}; FILL confirmed', flush=True)
+
+
+def reverse_operation_links(session, account_id, report):
+    """Test the official reverse-lookup advice; never infer an association by time."""
+    known = {item['state']['order_id'] for item in report['orders'] if item.get('state')}
+    seen = set()
+    report['reverse_operation_lookups'] = []
+    for operation in report['observations'][-1].get('legacy') or []:
+        if operation['type'] not in ('OPERATION_TYPE_BUY', 'OPERATION_TYPE_SELL'):
+            continue
+        if not operation['id'] or operation['id'] in seen:
+            continue
+        seen.add(operation['id'])
+        state = observe(safe_call, report, 'GetOrderStateByOperationId',
+                        method=session.client.orders.get_order_state,
+                        account_id=account_id, order_id=operation['id'])
+        report['reverse_operation_lookups'].append({
+            'operation_id': operation['id'], 'order': None if state is None else order_facts(state),
+            'matches_known_broker_order': state is not None and state.order_id in known})
 
 
 def run_probe(session, report):
@@ -263,6 +304,9 @@ def run_probe(session, report):
                 or status.bestprice_order_available_flag is not True):
             raise SandboxFailure('cash probe trading unavailable')
         instruments[name] = info
+    report['bond_nominal'] = money(safe_call(
+        session.client.instruments.bond_by, id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
+        id=INSTRUMENTS['RUSAL']).instrument.nominal)
     start = datetime.now(timezone.utc) - timedelta(minutes=1)
     account_id = session.lifecycle.create('cashfacts', 'dst')
     session.lifecycle.verify_name(account_id)
@@ -278,6 +322,7 @@ def run_probe(session, report):
             capture(session, account_id, start, f'{index}_{name}_{side}_plus{delay}', report)
     session.sleep(30)
     capture(session, account_id, start, 'final_after_30s', report)
+    reverse_operation_links(session, account_id, report)
     report['status'] = 'observed'
 
 

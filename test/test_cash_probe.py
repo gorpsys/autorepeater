@@ -135,3 +135,27 @@ def test_submit_never_repeats_mutation_and_reads_broker_id(uncertain):
     orders.post_order.assert_called_once_with(
         account_id='owned', instrument_id='currency', direction=direction,
         quantity=10, order_type=OrderType.ORDER_TYPE_BESTPRICE, order_id='request')
+
+
+def test_bond_estimate_uses_currency_price_not_percentage():
+    """GetOrderPrice has no price_type field; distinguish the two input units."""
+    price = probe.estimate_price(Quotation(units=100, nano=499900000), {'amount': '1000'})
+    assert probe.number(price) == Decimal('1004.999')
+    original = Quotation(units=12, nano=0)
+    assert probe.estimate_price(original, None) is original
+
+
+def test_reverse_lookup_reads_operation_id_without_submitting_orders():
+    """The documented reverse route is checked separately from broker-ID matching."""
+    orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
+    orders.get_order_state.side_effect = SandboxFailure('not found')
+    report = {'orders': [{'state': {'order_id': 'broker'}}],
+              'observations': [{'legacy': [
+                  {'id': 'operation', 'type': 'OPERATION_TYPE_SELL'},
+                  {'id': 'fee', 'type': 'OPERATION_TYPE_BROKER_FEE'}]}]}
+    probe.reverse_operation_links(SimpleNamespace(client=SimpleNamespace(orders=orders)),
+                                  'owned', report)
+    orders.get_order_state.assert_called_once_with(account_id='owned', order_id='operation')
+    orders.post_order.assert_not_called()
+    assert report['reverse_operation_lookups'] == [{
+        'operation_id': 'operation', 'order': None, 'matches_known_broker_order': False}]
