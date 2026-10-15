@@ -20,7 +20,7 @@ from scripts.sandbox_e2e import namespace, run_bounded
 from scripts.sandbox_lifecycle import SandboxFailure, list_exception_facts, safe_call
 from scripts.sandbox_support import FILL, PENDING, SandboxSession
 
-USD_TICKERS = ('BOND1', 'BOND2')
+USD_TICKERS = ('BOND1', 'BOND2', 'MIXED')
 PREFERRED_BONDS = ('RU000A1056U0', 'RU000A1059P4')
 REQUEST_CURRENCIES = ('DEFAULT', 'RUB', 'USD', 'EUR')
 
@@ -128,9 +128,12 @@ def read_portfolio(client, account_id, requested):
 def resolve_bond(client, slot, report):
     """Discover USD nominal bonds without confusing denomination and settlement."""
     catalog = safe_call(client.instruments.bonds).instruments
-    candidates = sorted((bond for bond in catalog if bond.nominal.currency == 'usd'),
+    candidates = sorted((bond for bond in catalog if (
+        bond.currency in ('usd', 'eur', 'cny') if slot == 'MIXED'
+        else bond.nominal.currency == 'usd')),
                         key=lambda bond: (not bond.api_trade_available_flag,
                                           not bond.buy_available_flag,
+                                          bond.currency != 'cny' if slot == 'MIXED' else False,
                                           bond.ticker not in PREFERRED_BONDS,
                                           bond.ticker, bond.uid))
     available = []
@@ -155,17 +158,18 @@ def resolve_bond(client, slot, report):
             available.append(instrument)
             report.setdefault('bond_order_types', {})[bond.uid] = (
                 'BESTPRICE' if status['bestprice_order_available_flag'] else 'LIMIT')
-    report['usd_nominal_bond_count'] = len(candidates)
-    selected = 0 if slot == 'BOND1' else 1
+    report['candidate_count'] = len(candidates)
+    selected = 1 if slot == 'BOND2' else 0
     if len(available) <= selected:
         report['status'] = 'no_available_candidate'
-        print(f'Portfolio probe: {len(candidates)} USD-nominal bonds; '
+        print(f'Portfolio probe: {len(candidates)} bond candidates; '
               f'{len(available)} checked candidates allow this order probe', flush=True)
-        raise SandboxFailure('no currently available USD-nominal bond for probe slot')
+        reason = 'foreign-settled' if slot == 'MIXED' else 'USD-nominal'
+        raise SandboxFailure(f'no currently available {reason} bond for probe slot')
     result = available[selected]
     report['selected_bond_ticker'] = result.ticker
     print(f'Portfolio probe: selected {result.ticker}; settlement={result.currency}; '
-          'nominal=usd', flush=True)
+          f'slot={slot}', flush=True)
     return result
 
 
@@ -258,13 +262,13 @@ def fund_account(session, account_id, currency, units, report):
         safe_call(session.client.sandbox.sandbox_pay_in, account_id=account_id,
                   amount=MoneyValue(currency=currency, units=units, nano=0))
     except SandboxFailure as error:
-        unsupported = currency == 'usd' and any(
+        unsupported = currency in ('usd', 'eur', 'cny') and any(
             fact.get('grpc_status') == 'INVALID_ARGUMENT' and fact.get('api_code') == '30258'
             for fact in error.api_facts)
         if not unsupported:
             raise
         funding['outcome'] = 'rejected_currency_unavailable'
-        print('WARNING: sandbox rejected USD funding (30258); '
+        print(f'WARNING: sandbox rejected {currency.upper()} funding (30258); '
               'continuing with RUB funding only, not assuming USD availability', flush=True)
     else:
         funding['outcome'] = 'credited'
@@ -283,7 +287,8 @@ def run_probe(session, ticker, report):
                                   for instrument in (dollar, ruble)]
     account_id = session.lifecycle.create('currency' + ticker.lower(), 'dst')
     session.lifecycle.verify_name(account_id)
-    for currency, units in (('usd', 100000), ('rub', 1000000)):
+    foreign_currency = dollar.currency if dollar.currency != 'rub' else 'usd'
+    for currency, units in ((foreign_currency, 100000), ('rub', 1000000)):
         fund_account(session, account_id, currency, units, report)
     holdings = {}
     for phase, instrument in (('usd_first', dollar), ('mixed', ruble), ('usd_second', dollar)):
@@ -291,6 +296,16 @@ def run_probe(session, ticker, report):
         holdings[instrument.uid] = holdings.get(instrument.uid, Decimal(0)) + instrument.lot
         capture_phase(session, account_id, holdings, phase, report)
     report['price_behavior'] = price_behavior(report['observations'], native)
+    mixed_records = [record for record in report['observations']
+                     if record['phase'] in ('mixed', 'usd_second')]
+    report['mixed_price_currencies_observed'] = any(
+        len(record['price_currencies']) > 1 for record in mixed_records)
+    report['mixed_portfolio_constructed'] = any(
+        len({native[item['uid']] for item in record['positions']
+             if item['uid'] in native}) > 1 for record in mixed_records)
+    if ticker == 'MIXED' and not report['mixed_portfolio_constructed']:
+        report['status'] = 'no_mixed_portfolio_constructed'
+        raise SandboxFailure('no confirmed holdings with different settlement currencies')
     report['status'] = 'observed'
 
 

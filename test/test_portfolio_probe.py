@@ -319,3 +319,22 @@ def test_uncertain_funding_is_not_retried_or_ignored():
         probe.fund_account(SimpleNamespace(client=SimpleNamespace(sandbox=sandbox)),
                            'disposable', 'usd', 100000, {})
     assert sandbox.sandbox_pay_in.call_count == 1
+
+
+def test_mixed_selection_requires_foreign_settlement_not_foreign_nominal():
+    """RUB-settled replacement bonds cannot satisfy the mixed-price experiment."""
+    from t_tech.invest import Bond  # pylint: disable=import-outside-toplevel
+    from t_tech.invest.services import InstrumentsService  # pylint: disable=import-outside-toplevel
+    service = create_autospec(inspect.unwrap(InstrumentsService), instance=True, spec_set=True)
+    service.bonds.return_value = SimpleNamespace(instruments=[
+        Bond(uid=currency, ticker=currency, name='Bond', class_code='TQCB', lot=1,
+             nominal=MoneyValue(currency=nominal, units=1000, nano=0), currency=currency,
+             api_trade_available_flag=True, buy_available_flag=True)
+        for currency, nominal in [('rub', 'usd'), ('cny', 'cny')]])
+    report = {'candidates': []}
+    with patch.object(probe, 'trading_facts', return_value={
+            'status': 'SECURITY_TRADING_STATUS_NORMAL_TRADING',
+            'api_trade_available_flag': True, 'bestprice_order_available_flag': False}):
+        result = probe.resolve_bond(SimpleNamespace(instruments=service), 'MIXED', report)
+    assert result.currency == 'cny'
+    assert [item['currency'] for item in report['candidates']] == ['cny']
