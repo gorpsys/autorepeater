@@ -137,6 +137,83 @@ These are local DTO, adapter and lifecycle checks. They do not establish that
 every live response populates the schema, or constitute sandbox/production or
 cloud deployment acceptance; those checks require separate authorization.
 
+## Multicurrency Monetary Contracts (Preparatory)
+
+`cash_facts.py` and the minimal `FxLotQuote` in `fx_data.py` establish pure
+contracts for the multicurrency implementation. They are not wired into the
+working planner or executor. Existing RUB execution, reserve subtraction and
+SDK `ExecutionReceipt.cash={}` remain unchanged at this preparatory stage.
+Pair discovery, timestamp freshness, reserve allocation, FX submission and
+dependent purchase orchestration belong to later implementation steps.
+
+`MoneyAmount` carries explicit native currency and exact Decimal units. Its
+units/nano constructor rejects bools, nonintegers, out-of-range nanos and
+opposite component signs; it preserves nanos even for large unit values.
+Currency case normalization does not infer identity or introduce aliases.
+
+`SecurityQuote` distinguishes money per piece from percent of nominal. For
+percent quotes, native midpoint per piece is `(bid + ask) / 2 / 100 * nominal
++ accrued_interest`. Nominal must be positive, with explicit nonnegative ACI
+in the settlement currency, including an explicit zero. A money-per-piece
+quote already includes any ACI; supplying nominal or ACI again is rejected.
+Neither midpoint is an execution price or BESTPRICE price parameter. The
+security midpoint and the direct FX midpoint are independent observations.
+
+`FxLotQuote` stores RUB bid/ask per nominal base currency units and the number
+of base units in one lot. Midpoint RUB per base unit divides by nominal;
+BUY cost uses ask, SELL proceeds use bid, and base movement uses lots times
+lot size. These are estimates before fees. `can_trade` intersects caller-scoped
+fresh native cash, readiness, API/BESTPRICE flags and own side-specific lot
+caps, plus own monetary limits for BUY. It supplies neither ownership rights
+nor a fee allowance. The caller must check total purchase funding separately.
+A TOM instrument name imposes no calendar delay when actual readiness and
+own limits permit the trade; an earlier FILL alone supplies no such permission.
+
+`OrderAmounts` keeps total and executed commission separate from execution
+identity. `order_cash_bound` requires matching nonempty broker ID, UID, side,
+positive integer lots and complete FILL. Missing, malformed, negative or
+cross-currency monetary fields produce no bound; an explicit zero commission
+is valid. No balance delta or operation history supplies missing fields.
+For uncertain commission inclusion, BUY uses total plus commission as an
+upper debit bound; SELL uses max(0, total minus commission) as a lower credit
+bound. Bond total already includes ACI, so ACI is not added again.
+`FeeInclusion.INCLUDED` may be selected only with separate evidence for the
+specific field/RPC, and leaves the total unchanged; `SEPARATE` adjusts once.
+An included fee greater than its total is inconsistent. No inclusion mode
+turns `CashBound` into an exact cash receipt or authorizes isolated proceeds.
+Late commissions and readiness must still be checked through fresh broker
+facts; zeros and estimates do not prove final settlement.
+
+Sandbox evidence from 2026-10-15 (SHAs
+`3b377a7b870b740c07ed4da8c6a0766b4abc57af` and
+`3ead6898cbf7a35e954e14c8cd210b9cd82ac443`) showed total plus fee for BUY
+and total minus fee for SELL. This conflicts with the documented inclusion
+description for PostOrder/OrderState and establishes bounds rather than an
+exact production rule. GetOrderPrice had different observed total semantics
+and requires native money per security, not percent of bond nominal. It is
+not required for BESTPRICE. The same history fee can appear in a BUY/SELL
+operation and a BROKER_FEE operation; summing both would duplicate it. History
+operation IDs did not identify the orders in GetOrderState. The working path
+continues to use only broker order IDs, without history or GetOrderPrice RPCs.
+
+`PurchaseCashNeed` is a pure purchase-funding predicate: purchase cost plus
+one fee upper bound is checked against available money. The existing leaf
+reserve may fund that fee, without an extra percentage or a second reserve
+charge. Money sufficient for the purchase and fee needs no exchange even if
+the remaining reserve falls below its target. With no security purchase,
+reserve shortage alone never calls for FX. This predicate grants no route,
+scope, lot or budget permission. Later integration must distribute reserve
+only within leaves by target RUB values per settlement currency, exclude
+COMPOSITE unallocated money, and subtract existing permitted currency before
+rounding the necessary FX deficit. Reverse FX remains limited to financing
+RUB security purchases, without foreign-currency bridges.
+
+Offline tests in `test/test_fx_broker_contract.py` exercise these contracts
+and the real SDK order boundary with autospecced unwrapped services. Existing
+broker receipt and execution tests retain isolated/common-pool attribution
+and fresh readiness checks. No live, TOM-cycle or production acceptance is
+claimed by these tests.
+
 INFO diagnostics list loading, portfolio/currency/security/exchange blockers,
 active order IDs/UIDs/statuses/lot counts, expected versus actual quantities,
 submission and verified FILL results, refresh stages and pass result counts.
