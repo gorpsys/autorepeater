@@ -43,11 +43,11 @@ def test_absolute_priority_not_largest_relative_error():
     assert [(item.uid, item.lots) for item in result.buys] == [('A', 1)]
 
 
-def test_floor_only_once_and_cash_own_bound_intersection():
-    """floor only once and cash own bound intersection."""
+def test_target_budget_reserve_and_cash_own_bound_intersection():
+    """Reserve limits the target budget, not documented available/own money again."""
     result = build_order_plan(leaf(floor='10'), destination(cash='30'), {(): {}},
                               {'X': D(1)}, {'X': replace(rules('X')['X'], buy_money_amount=D(15))})
-    assert result.buys[0].lots == 5
+    assert result.buys[0].lots == 10
 
 
 @pytest.mark.parametrize('change', [{'api_trade_available': False},
@@ -156,7 +156,7 @@ def test_batched_plan_matches_independent_one_lot_oracle():  # pylint: disable=t
                                   {(): quantities}, prices,
                                   {uid: rules(uid, lot=lots[uid], buy=cap)[uid] for uid in uids})
         expected = {}
-        remaining = max(D(0), cash - floor)
+        remaining = cash
         current = dict(quantities)
         while True:
             candidates = [uid for uid in uids

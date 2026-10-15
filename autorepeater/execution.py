@@ -6,6 +6,7 @@ import logging
 from time import monotonic, sleep
 from typing import Protocol
 
+from autorepeater.cash_pools import sale_paths as _sale_paths
 from autorepeater.execution_data import (
     ExecutionData, ExecutionDataError, ExecutionSnapshot, TradeRules,
 )
@@ -17,7 +18,7 @@ from autorepeater.order_plan import (
 from autorepeater.purchase_plan import purchase_intents
 from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import (
-    StrategyPlan, exact_product, exact_sum, validate_map, validate_plan,
+    exact_product, exact_sum, validate_map, validate_plan,
 )
 
 LOGGER = logging.getLogger('tinkoffBot')
@@ -146,24 +147,6 @@ def _fresh(account_id: str, data: ExecutionData, uids: Sequence[str]
     validate_map(snapshot.quantities, 'fresh quantities')
     validate_map(snapshot.available_cash, 'fresh cash')
     return snapshot, rules
-
-
-def _sale_paths(origin: tuple[int, ...], by_path: dict[tuple[int, ...], StrategyPlan],
-                limits: dict[tuple[int, ...], Decimal]) -> set[tuple[int, ...]]:
-    domain = origin
-    while domain and by_path[domain[:-1]].decision.redistribution_allowed:
-        domain = domain[:-1]
-    result = set()
-    for path in limits:
-        if path[:len(domain)] != domain:
-            continue
-        crossing = [path[:depth] for depth in range(len(domain), len(path))]
-        if path == origin or all(
-                by_path[prefix].decision.redistribution_allowed
-                or prefix == origin and bool(by_path[origin].unassigned)
-                for prefix in crossing):
-            result.add(path)
-    return result
 
 
 def _fresh_money(plan: OrderPlan, ownership: dict[tuple[int, ...], dict[str, Decimal]],

@@ -140,12 +140,12 @@ cloud deployment acceptance; those checks require separate authorization.
 ## Multicurrency Monetary Contracts (Preparatory)
 
 `cash_facts.py` and the minimal `FxLotQuote` in `fx_data.py` establish pure
-contracts for the multicurrency implementation. They are not wired into the
-working planner or executor. Existing RUB execution, reserve subtraction and
-SDK `ExecutionReceipt.cash={}` remain unchanged at this preparatory stage.
+contracts for the multicurrency implementation. SDK `ExecutionReceipt.cash={}`
+remains unchanged. The pure funding planner now consumes these contracts via
+an explicit input; automatic FX execution remains disconnected.
 Direct-pair discovery and timestamp freshness are now provided by the separate
-read-only FX layer below. Reserve allocation, FX submission and dependent
-purchase orchestration belong to later implementation steps.
+read-only FX layer below. Reserve allocation belongs to the pure funding layer;
+FX submission and dependent purchase orchestration remain later steps.
 
 `MoneyAmount` carries explicit native currency and exact Decimal units. Its
 units/nano constructor rejects bools, nonintegers, out-of-range nanos and
@@ -203,9 +203,9 @@ reserve may fund that fee, without an extra percentage or a second reserve
 charge. Money sufficient for the purchase and fee needs no exchange even if
 the remaining reserve falls below its target. With no security purchase,
 reserve shortage alone never calls for FX. This predicate grants no route,
-scope, lot or budget permission. Later integration must distribute reserve
-only within leaves by target RUB values per settlement currency, exclude
-COMPOSITE unallocated money, and subtract existing permitted currency before
+scope, lot or budget permission. The pure funding layer distributes reserve
+only within leaves by target RUB values per settlement currency, excludes
+COMPOSITE unallocated money, and subtracts existing permitted currency before
 rounding the necessary FX deficit. Reverse FX remains limited to financing
 RUB security purchases, without foreign-currency bridges.
 
@@ -250,7 +250,7 @@ calendar delay, reserve subtraction, price parameter or GetOrderPrice is added.
 Transport errors preserve their cause with a fixed safe public reason.
 `test/test_fx.py` and `test/test_tinvest_fx_data.py` verify these pure/read
 boundaries offline with autospecced ports and unwrapped SDK services.
-The layer has no automatic runtime wiring, funding or submission yet. An explicit
+The layer has no automatic runtime wiring or submission yet. An explicit
 valuation pass can consume its immutable snapshot as described below.
 
 ### Explicit RUB Valuation Pass
@@ -281,8 +281,8 @@ ISO identity, portfolio quantity supplies native units. For 100 CNY reported
 as 1000 RUB but valued at midpoint 12, capital is 1200 RUB exactly once.
 GetPositions money is a native availability bound, never another capital term.
 Unknown identity/quantity or missing/stale FX cannot use broker RUB price as a
-substitute. Cash is excluded from target securities. Reserve/floor subtraction,
-money ownership and trading pools remain unchanged in this implementation step.
+substitute. Cash is excluded from target securities. The valuation layer does not
+grant money ownership; native funding and reserve rules are described below.
 
 INDEX stores historical reference units separately in `IndexReferenceUnits`.
 Missing JSON currencies mean RUB even for a security trading in CNY. An explicit
@@ -292,6 +292,48 @@ currencies require 1. Only RUB/RUB can omit that rate. Current RUB capitalizatio
 divide by reference price times historical rate, retaining the original RUB
 Decimal operation order and avoiding duplicate free-float/weight coefficients.
 Bundled JSON adds explicit RUB units without numerical changes.
+
+### Pure Native Funding Plan
+
+`build_order_plan(..., funding=FundingInputs(...))` integrates a pure funding
+calculation into `OrderPlan.funding`. It requires the explicit shared FX snapshot
+and native security midpoints; a broker RUB mark cannot supply a missing native
+price. Readiness, targets, physical lots, aggregate UID underweight, fixed owners
+and leaf security spending ceilings are preserved. The existing absolute monetary
+priority queue supplies both RUB and foreign-currency demands. Current zero
+GetMaxLots caused by missing currency retains a conditional demand; it supplies
+no invented future cap. Only refreshed broker facts may authorize it after FX.
+The legacy `OrderPlan.buys` and the stage3 runtime guard remain in place;
+no SDK FX mutation, new BESTPRICE parameter or automatic runtime wiring is added.
+
+`CashPools` stores immutable native balances by owner/path and protected funds.
+RUB security spending ceilings exclude reserve once; actual/own money bounds
+never subtract floor again, including after a commission. The full leaf money
+allowance includes its reserve, while internal COMPOSITE unallocated money stays
+protected. Matching existing currency is assigned before another currency takes
+its allowance. Exact proceeds follow the same `sale_paths` helper as RUB runtime;
+unknown scoped proceeds remain deferred (#9), and fresh global money never
+attributes them. No persistent ledger or receipt cash fabrication is introduced.
+
+Reserve shares use each leaf's target RUB values by settlement currency;
+conversion of an allowance rounds down at Decimal precision28 so recurring
+division cannot increase the reserve. Only a principal/fee funding shortage
+initiates forward FX. Its amount includes the existing share once per owner and
+currency, subtracts permitted native money first, then rounds to FX lots. Enough
+money for principal plus commission needs no reserve restock. Ask finances BUY;
+bid net of estimated fees finances SELL. Combined lots retain exact contributions,
+estimated debits/credits, fee estimates, dependent UIDs and shared owner
+`debit_limits`; these ceilings are not additive budgets for successive exchanges.
+Projected money is labelled separately from observed cash and exact receipts.
+
+Reverse FX requires an actual RUB security principal deficit. Known native
+security needs are retained before selling surplus currency; reserve shortages
+and fees alone do not justify a reverse exchange. Reverse RUB credits and lot
+surplus cannot fund another foreign exchange in the same pass. Fees debit the
+original owner; security midpoint already includes ACI once. Runtime readiness,
+preflight for all planned currencies and GetMaxLots refresh after confirmed FX
+remain the execution integration step, without operation-history/GetOrderPrice
+dependencies or live acceptance claims.
 
 INFO diagnostics list loading, portfolio/currency/security/exchange blockers,
 active order IDs/UIDs/statuses/lot counts, expected versus actual quantities,

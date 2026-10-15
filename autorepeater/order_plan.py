@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 import logging
 
 from autorepeater.execution_data import ExecutionSnapshot, TradeRules
+from autorepeater.fx_funding import FundingInputs, FundingPlan, build_funding_plan
 from autorepeater.money import format_decimal_map
 from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import (
@@ -30,6 +31,7 @@ class OrderPlan:  # pylint: disable=too-many-instance-attributes
     money: dict[tuple[int, ...], Decimal]
     sells: tuple[OrderIntent, ...]
     buys: tuple[OrderIntent, ...]
+    funding: FundingPlan | None = None
 
 
 def ready(snapshot: ExecutionSnapshot, stage: str = 'planning') -> bool:
@@ -197,7 +199,9 @@ def sale_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
 
 def build_order_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                      ownership: dict[tuple[int, ...], dict[str, Decimal]],
-                     marks: dict[str, Decimal], rules: dict[str, TradeRules]) -> OrderPlan:
+                     marks: dict[str, Decimal], rules: dict[str, TradeRules], *,
+                     funding: FundingInputs | None = None) -> OrderPlan:
+    # pylint: disable=too-many-arguments
     """Validate every target first; no conditional proceeds enter the BUY pool."""
     ownership = {path: dict(quantities) for path, quantities in ownership.items()}
     for node in nodes(strategy):
@@ -212,4 +216,10 @@ def build_order_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
     if ready(snapshot):
         sells = sale_intents(strategy, snapshot, ownership, rules)
         buys = purchase_intents(strategy, snapshot, ownership, marks, rules, money)
-    return OrderPlan(strategy, snapshot, ownership, dict(marks), dict(rules), money, sells, buys)
+    funding_plan = None
+    if funding is not None:
+        validate_rules(dict(funding.fx_rules))
+        funding_plan = build_funding_plan(strategy, snapshot, ownership, marks, rules,
+                                          spending_limits(strategy, ownership, marks), funding)
+    return OrderPlan(strategy, snapshot, ownership, dict(marks), dict(rules), money,
+                     sells, buys, funding_plan)

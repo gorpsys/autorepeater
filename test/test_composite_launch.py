@@ -89,14 +89,15 @@ def fixture_execution(launch, monkeypatch):
     return client, data, prepare, create, sdk, adapter
 
 
-def expected_orders(include_buys=True):
-    """Isolated unknown proceeds defer BUY until the next independent pass."""
+def expected_orders(include_buys=True, shared_sale=True):
+    """Initial10 RUB fund5 pieces; unknown scoped proceeds cannot fund extra BUY."""
     return [call(instrument_id=uid, quantity=quantity, direction=direction,
                  account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE, order_id=ANY)
             for uid, quantity, direction in [
                 ('old', 5, invest.OrderDirection.ORDER_DIRECTION_SELL),
-                ('uid', 5, invest.OrderDirection.ORDER_DIRECTION_SELL),
-                *([('other', 12, invest.OrderDirection.ORDER_DIRECTION_BUY)]
+                *([('uid', 5, invest.OrderDirection.ORDER_DIRECTION_SELL)] if shared_sale else []),
+                ('other', 5, invest.OrderDirection.ORDER_DIRECTION_BUY),
+                *([('other', 7, invest.OrderDirection.ORDER_DIRECTION_BUY)]
                   if include_buys else [])]]
 
 
@@ -180,7 +181,8 @@ def test_nontrading_shared_uid_keeps_goal_but_has_no_order(execution):
     client.market_data.get_trading_status.side_effect = unavailable
     runner_module.Runner('test-token', strategies.prepare_strategy('COMPOSITE', 'ROOT'),
                          'dst').run_sync()
-    assert client.orders.post_order.call_args_list == expected_orders()[:1]
+    assert client.orders.post_order.call_args_list == expected_orders(
+        include_buys=False, shared_sale=False)
 
 
 @pytest.mark.parametrize('bad', ['source', 'algorithm', 'config', 'direct', 'indirect'])
