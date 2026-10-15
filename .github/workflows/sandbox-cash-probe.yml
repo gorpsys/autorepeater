@@ -1,0 +1,68 @@
+name: Sandbox monetary facts probe
+run-name: Cash facts probe - ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autorepeater-sandbox
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  cash-probe:
+    if: >-
+      github.repository == 'gorpsys/autorepeater' &&
+      github.actor == 'gorpsys' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == 'gorpsys/autorepeater' &&
+        github.event.pull_request.head.ref == 'test/sandbox-fx-cash-facts') ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/test/sandbox-fx-cash-facts'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SANDBOX_CI_SERIALIZED: "1"
+      PYTEST_ADDOPTS: ""
+      PROBE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      E2E_ARTIFACT_DIR: ${{ github.workspace }}/cash-probe-results
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install verified dependencies
+        timeout-minutes: 8
+        run: make setup
+      - name: Observe sandbox order and monetary facts
+        id: probe
+        timeout-minutes: 17
+        env:
+          SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+        run: .venv/bin/python -m test.sandbox_cash_live
+      - name: Final bounded sandbox orphan cleanup
+        if: ${{ always() && steps.probe.outcome != 'skipped' }}
+        timeout-minutes: 2
+        env:
+          SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+        run: timeout 90s .venv/bin/python -m scripts.sandbox_lifecycle cleanup --namespace ci
+      - name: Upload only sanitized monetary facts
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: cash-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            cash-probe-results/*.json
+            cash-probe-results/*.xml
+          if-no-files-found: warn
+          retention-days: 14
