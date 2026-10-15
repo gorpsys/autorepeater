@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import grpc
 import pytest
-from t_tech.invest import MoneyValue, OrderDirection, OrderType, RequestError
+from t_tech.invest import MoneyValue, OrderDirection, OrderType, PriceType, RequestError
 from t_tech.invest.grpc import operations_pb2
 
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType
@@ -196,6 +196,12 @@ def buy_one_lot(session, account_id, instrument, report):
         if not book.asks or quantity(book.asks[0].price) <= 0 or book.asks[0].quantity < 1:
             raise SandboxFailure('bond order book has no positive ask')
         options['price'] = book.asks[0].price
+        options['price_type'] = PriceType.PRICE_TYPE_POINT
+        report.setdefault('limit_prices', []).append({
+            'uid': instrument.uid, 'ask_points': format(quantity(book.asks[0].price), 'f'),
+            'book_prices': {name: format(quantity(getattr(book, name)), 'f')
+                            for name in ('limit_up', 'limit_down', 'last_price', 'close_price')
+                            if getattr(book, name, None) is not None}})
     report['orders'].append({'request_id': request_id, 'uid': instrument.uid, 'lots': 1,
                              'order_type': order_type})
     response = safe_call(

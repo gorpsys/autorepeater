@@ -280,7 +280,7 @@ def test_normal_trading_bond_can_use_limit_instead_of_bestprice():
 @pytest.mark.parametrize('has_ask', [True, False])
 def test_limit_purchase_uses_ask_and_never_submits_without_one(has_ask):
     """Use the broker's price directly, with at most one submission."""
-    from t_tech.invest import OrderDirection, OrderType, PostOrderResponse, Order  # pylint: disable=import-outside-toplevel
+    from t_tech.invest import OrderDirection, OrderType, PostOrderResponse, Order, PriceType  # pylint: disable=import-outside-toplevel
     from t_tech.invest.services import MarketDataService, OrdersService  # pylint: disable=import-outside-toplevel
     market = create_autospec(inspect.unwrap(MarketDataService), instance=True, spec_set=True)
     orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
@@ -306,7 +306,7 @@ def test_limit_purchase_uses_ask_and_never_submits_without_one(has_ask):
     orders.post_order.assert_called_once_with(
         account_id='disposable', instrument_id='bond', quantity=1,
         direction=OrderDirection.ORDER_DIRECTION_BUY, order_type=OrderType.ORDER_TYPE_LIMIT,
-        order_id='request', price=price)
+        order_id='request', price=price, price_type=PriceType.PRICE_TYPE_POINT)
 
 
 def test_uncertain_funding_is_not_retried_or_ignored():
