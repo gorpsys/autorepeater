@@ -280,7 +280,8 @@ def test_normal_trading_bond_can_use_limit_instead_of_bestprice():
 @pytest.mark.parametrize('has_ask', [True, False])
 def test_limit_purchase_uses_ask_and_never_submits_without_one(has_ask):
     """Use the broker's price directly, with at most one submission."""
-    from t_tech.invest import OrderDirection, OrderType, PostOrderResponse, Order, PriceType  # pylint: disable=import-outside-toplevel
+    from t_tech.invest import (  # pylint: disable=import-outside-toplevel
+        OrderDirection, OrderType, PostOrderResponse, Order, PriceType)
     from t_tech.invest.services import MarketDataService, OrdersService  # pylint: disable=import-outside-toplevel
     market = create_autospec(inspect.unwrap(MarketDataService), instance=True, spec_set=True)
     orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
