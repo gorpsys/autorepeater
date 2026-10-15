@@ -21,6 +21,7 @@ from scripts.sandbox_lifecycle import SandboxFailure, list_exception_facts, safe
 from scripts.sandbox_support import FILL, PENDING, SandboxSession
 
 USD_TICKERS = ('BOND1', 'BOND2')
+PREFERRED_BONDS = ('RU000A1056U0', 'RU000A1059P4')
 REQUEST_CURRENCIES = ('DEFAULT', 'RUB', 'USD', 'EUR')
 
 
@@ -129,7 +130,9 @@ def resolve_bond(client, slot, report):
     catalog = safe_call(client.instruments.bonds).instruments
     candidates = sorted((bond for bond in catalog if bond.nominal.currency == 'usd'),
                         key=lambda bond: (not bond.api_trade_available_flag,
-                                          not bond.buy_available_flag, bond.ticker, bond.uid))
+                                          not bond.buy_available_flag,
+                                          bond.ticker not in PREFERRED_BONDS,
+                                          bond.ticker, bond.uid))
     available = []
     for bond in candidates:
         facts = {'ticker': bond.ticker, 'uid': bond.uid, 'name': bond.name,
@@ -151,6 +154,9 @@ def resolve_bond(client, slot, report):
     report['usd_nominal_bond_count'] = len(candidates)
     selected = 0 if slot == 'BOND1' else 1
     if len(available) <= selected:
+        report['status'] = 'no_available_candidate'
+        print(f'Portfolio probe: {len(candidates)} USD-nominal bonds; '
+              f'{len(available)} checked candidates currently allow API BESTPRICE', flush=True)
         raise SandboxFailure('no currently available USD-nominal bond for probe slot')
     result = available[selected]
     report['selected_bond_ticker'] = result.ticker
@@ -270,6 +276,7 @@ def test_sandbox_portfolio_currency(ticker, sandbox: SandboxSession):
     """A different observed currency is data, not an assumed-contract assertion failure."""
     report = {'ticker': ticker, 'status': 'incomplete', 'candidates': [], 'orders': [],
               'observations': [], 'cleanup_confirmed': False,
+              'started_at': datetime.now(timezone.utc).isoformat(),
               'tested_sha': os.environ.get('PROBE_SHA', 'local'),
               'scope': 'sandbox observations; not a production API guarantee'}
     try:

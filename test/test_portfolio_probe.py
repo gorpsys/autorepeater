@@ -240,6 +240,26 @@ def test_bond_discovery_refuses_closed_candidates():
             probe.resolve_bond(client, 'BOND1', {'candidates': []})
 
 
+@pytest.mark.parametrize('slot,expected', [('BOND1', 'RU000A1056U0'),
+                                         ('BOND2', 'RU000A1059P4')])
+def test_replacement_bonds_take_precedence_over_other_usd_nominal_bonds(slot, expected):
+    """Both replacement issues are checked before the bounded generic catalog scan."""
+    from t_tech.invest import Bond  # pylint: disable=import-outside-toplevel
+    from t_tech.invest.services import InstrumentsService  # pylint: disable=import-outside-toplevel
+    service = create_autospec(inspect.unwrap(InstrumentsService), instance=True, spec_set=True)
+    service.bonds.return_value = SimpleNamespace(instruments=[
+        Bond(uid=ticker, ticker=ticker, name='Bond', class_code='TQCB',
+             nominal=MoneyValue(currency='usd', units=1000, nano=0), currency='rub', lot=1,
+             api_trade_available_flag=True, buy_available_flag=True)
+        for ticker in ('AAA', 'RU000A1059P4', 'RU000A1056U0')])
+    with patch.object(probe, 'trading_facts', return_value={
+            'api_trade_available_flag': True, 'bestprice_order_available_flag': True}):
+        report = {'candidates': []}
+        result = probe.resolve_bond(SimpleNamespace(instruments=service), slot, report)
+    assert result.ticker == expected
+    assert [item['ticker'] for item in report['candidates'][:2]] == list(probe.PREFERRED_BONDS)
+
+
 def test_uncertain_funding_is_not_retried_or_ignored():
     """A timeout may have mutated the account and cannot permit blind retries."""
     sandbox = create_autospec(inspect.unwrap(SandboxService), instance=True, spec_set=True)
