@@ -17,6 +17,7 @@ from autorepeater.order_plan import (
     spending_limits, validate_intent, validate_rules,
 )
 from autorepeater.purchase_plan import purchase_intents
+from autorepeater.reporting import print_order_money
 from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import (
     exact_product, exact_sum, validate_map, validate_plan,
@@ -129,6 +130,7 @@ def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor, *,
     LOGGER.info('Confirmed order: uid=%s side=%s order_id=%s status=%s requested=%d executed=%d',
                 receipt.uid, receipt.side, receipt.order_id, receipt.status,
                 receipt.lots_requested, receipt.lots_executed)
+    print_order_money(receipt)
     return receipt
 
 

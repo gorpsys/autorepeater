@@ -7,6 +7,7 @@ from decimal import Decimal, localcontext
 import json
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
+from autorepeater.cash_facts import order_cash_bound
 from autorepeater.constants import IMPORTANT
 from autorepeater.logging_config import logger
 from autorepeater.money import currency_to_decimal
@@ -16,8 +17,11 @@ from autorepeater.money import get_quantity_position
 from autorepeater.money import no_money_to_string
 from autorepeater.portfolio import DisplayPosition, PortfolioClient, TargetPortfolio, get_portfolio
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType, PortfolioEntry, PositionEvent
+from autorepeater.strategy_plan import exact_product
 
 if TYPE_CHECKING:
+    from autorepeater.execution import ExecutionReceipt
+    from autorepeater.fx import FxSnapshot
     from autorepeater.order_plan import OrderPlan
 
 KeyT = TypeVar('KeyT')
@@ -143,6 +147,14 @@ def _strategy_currency_to_string(position: PortfolioEntry) -> str:
 
 def strategy_position_to_string(position: PortfolioEntry) -> str:
     """Format a strategy-side position without relying on an SDK DTO."""
+    if (position.native_price is not None and position.rub_price is not None
+            and position.settlement_currency is not None):
+        return (f'{position.uid} quantity={format_decimal(position.quantity)} '
+                f'native_price={format_decimal(position.native_price)} '
+                f'currency={position.settlement_currency} '
+                f'rub_price={format_decimal(position.rub_price)} '
+                f'broker_price={format_decimal(position.current_price)} '
+                f'broker_currency={position.currency}')
     if position.instrument_type == InstrumentType.CURRENCY:
         return _strategy_currency_to_string(position)
     if position.instrument_type in (InstrumentType.SHARE, InstrumentType.ETF):
@@ -237,6 +249,94 @@ def _decimal_map(values: Mapping[KeyT, Decimal]) -> str:
                            for key, value in values.items()) + '}'
 
 
+def print_order_money(receipt: ExecutionReceipt) -> None:
+    """Called only after receipt validation; incomplete money never becomes exact cash."""
+    bound = (order_cash_bound(receipt, receipt.amounts)
+             if receipt.amounts is not None else None)
+    if bound is None:
+        logger.info('Order money: uid=%s order_id=%s cash_bound=unavailable confirmed_cash=%s',
+                    receipt.uid, receipt.order_id, _decimal_map(receipt.cash))
+        return
+    logger.info('Order money: uid=%s order_id=%s cash_bound=%s currency=%s amount=%s '
+                'executed_commission=%s commission_currency=%s confirmed_cash=%s',
+                receipt.uid, receipt.order_id,
+                'debit_upper' if receipt.side == 'BUY' else 'credit_lower',
+                bound.amount.currency, format_decimal(bound.amount.amount),
+                format_decimal(receipt.amounts.executed_commission.amount),
+                receipt.amounts.executed_commission.currency, _decimal_map(receipt.cash))
+
+
+def print_fx_snapshot(fx: FxSnapshot, *, stage: str = 'planning') -> None:
+    """Report observed quote units and time without performing any market reads."""
+    for currency, quote in sorted(fx.quotes.items()):
+        logger.info('FX valuation pair=%s currency=%s rub_per_unit=%s '
+                    'bid=%s ask=%s nominal=%s lot=%d market_time=%s received_time=%s stage=%s',
+                    quote.pair.uid, currency, format_decimal(fx.rate(currency)),
+                    format_decimal(quote.bid), format_decimal(quote.ask),
+                    format_decimal(quote.pair.nominal), quote.pair.lot_size,
+                    quote.market_time.isoformat(), quote.received_time.isoformat(), stage)
+
+
+def _print_funding(plan: OrderPlan) -> None:
+    funding = plan.funding
+    for uid, price in sorted(funding.native_prices.items()):
+        logger.info('Valuation uid=%s native_price=%s currency=%s rub_price=%s',
+                    uid, format_decimal(price.amount), price.currency,
+                    format_decimal(plan.marks[uid]))
+    print_fx_snapshot(plan.snapshot.fx_snapshot)
+    for path in sorted(funding.spending_limits):
+        logger.info('Funding path=%s available_native=%s reserve_native=%s '
+                    'security_debit_estimate=%s estimated_security_fees=%s '
+                    'debit_includes_estimated_fees=True '
+                    'projected_residual_including_lot_surplus=%s security_limit_rub=%s',
+                    path, _decimal_map(funding.cash.balances.get(path, {})),
+                    _decimal_map(funding.reserve_shares.get(path, {})),
+                    _decimal_map(funding.security_debits.balances.get(path, {})),
+                    _decimal_map(funding.estimated_security_fees.balances.get(path, {})),
+                    _decimal_map(funding.projected_cash.balances.get(path, {})),
+                    format_decimal(funding.spending_limits[path]))
+    logger.info('Funding protected_native=%s', _decimal_map(funding.cash.protected))
+    _print_funding_orders(plan)
+
+
+def _owner_money(values: Mapping[object, Mapping[str, Decimal]]) -> str:
+    return '{' + ', '.join(f'{path}: {_decimal_map(money)}'
+                           for path, money in values.items()) + '}'
+
+
+def _print_funding_orders(plan: OrderPlan) -> None:
+    funding = plan.funding
+    for intent in funding.exchanges:
+        currency = next(code for code, quote in plan.snapshot.fx_snapshot.quotes.items()
+                        if quote.pair.uid == intent.uid)
+        route = f'rub->{currency}' if intent.side == 'BUY' else f'{currency}->rub'
+        logger.info('FX route=%s pair=%s side=%s lots=%d lot=%d dependent_uids=%s '
+                    'estimated_debits=%s estimated_credits=%s estimated_fees=%s owners=%s',
+                    route, intent.uid, intent.side, intent.lots, intent.lot_size,
+                    intent.dependent_uids, _owner_money(intent.debits),
+                    _owner_money(intent.credits), _owner_money(intent.estimated_fees),
+                    _decimal_map(intent.base_contributions))
+    selected = {}
+    for purchase in funding.purchases:
+        intent = purchase.intent
+        selected[intent.uid] = intent.lots
+        logger.info('Funding BUY uid=%s lots=%d executable_now=%s native_estimate=%s '
+                    'currency=%s fx_dependencies=%s owners=%s',
+                    intent.uid, intent.lots, purchase.executable_now,
+                    format_decimal(purchase.native_amount.amount), purchase.native_amount.currency,
+                    purchase.fx_dependencies, _decimal_map(intent.pieces))
+    for demand in funding.demands:
+        remaining = demand.lots - selected.get(demand.uid, 0)
+        price = funding.native_prices[demand.uid]
+        logger.info('Funding demand uid=%s lots=%d native_estimate=%s currency=%s owners=%s',
+                    demand.uid, demand.lots, format_decimal(exact_product(
+                        price.amount, Decimal(demand.lots * demand.lot_size))),
+                    price.currency, _decimal_map(demand.pieces))
+        if remaining:
+            logger.info('Defer funding uid=%s unfilled_lots=%d '
+                        'reason=native cash/FX lot/own caps/budget', demand.uid, remaining)
+
+
 def print_rebalance_plan(plan: OrderPlan, debug: bool) -> None:
     """Report loaded targets, occurrence permissions and actual monetary bounds."""
     from autorepeater.purchase_plan import nodes  # pylint: disable=import-outside-toplevel
@@ -262,6 +362,10 @@ def print_rebalance_plan(plan: OrderPlan, debug: bool) -> None:
     for intent in (*plan.sells, *plan.buys):
         logger.info('Intent UID %s side=%s lots=%s pieces=%s',
                     intent.uid, intent.side, intent.lots, _decimal_map(intent.pieces))
+    if plan.funding is not None:
+        _print_funding(plan)
+        logger.info('Execution funding: funded_buys=%d exchanges=%d',
+                    len(plan.funding.purchases), len(plan.funding.exchanges))
     logger.info('Execution: debug=%s sells=%d buys=%d', debug, len(plan.sells), len(plan.buys))
-    if not plan.sells and not plan.buys:
+    if not plan.sells and not plan.buys and (plan.funding is None or not plan.funding.purchases):
         logger.info('SKIP: no executable orders')

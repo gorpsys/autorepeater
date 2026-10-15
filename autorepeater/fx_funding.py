@@ -89,10 +89,12 @@ class FundingPlan:  # pylint: disable=too-many-instance-attributes
     projected_cash: CashPools
     security_debits: CashPools
     estimated_security_fees: CashPools
+    native_prices: Mapping[str, MoneyAmount]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'spending_limits', MappingProxyType(dict(self.spending_limits)))
         object.__setattr__(self, 'reserve_shares', CashPools(self.reserve_shares).balances)
+        object.__setattr__(self, 'native_prices', MappingProxyType(dict(self.native_prices)))
 
 
 def reserve_shares(strategy: StrategyPlan, marks: Mapping[str, Decimal],
@@ -464,7 +466,7 @@ def build_funding_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot, owne
     exchanges, projected, debits, fees = evaluation
     purchases = tuple(_funded_purchase(context, intent, exchanges) for intent in chosen)
     return FundingPlan(context.cash, limits, context.reserves.balances, demands, purchases,
-                       exchanges, projected, debits, fees)
+                       exchanges, projected, debits, fees, context.prices)
 
 
 def _funded_purchase(context, intent, exchanges):

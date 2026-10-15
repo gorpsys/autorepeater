@@ -21,6 +21,7 @@ from autorepeater.order_plan import (
     OrderIntent, OrderPlan, ready, sale_intents, spending_limits, validate_rules,
 )
 from autorepeater.purchase_plan import ZERO, difference, funding_candidates, validate_intent
+from autorepeater.reporting import print_fx_snapshot
 from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import exact_sum, validate_plan
 from autorepeater.valuation import SecurityData, Valuation
@@ -115,6 +116,7 @@ class ExecutionMarket:
         own = {quote.pair.uid: self.fx.get_trade_rules(account_id, quote.pair)
                for quote in quotes.values()} if trading else {}
         validate_rules(own)
+        print_fx_snapshot(fx, stage='execution')
         return fx, FundingInputs(native_prices=prices, fx_rules=own)
 
     @staticmethod
@@ -211,6 +213,10 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
             if ready(self.snapshot) and _positions_match(
                     self.snapshot, self.ledger.ownership) and money_ready:
                 return True
+            if not _positions_match(self.snapshot, self.ledger.ownership):
+                logger.info('Waiting for settlement: positions differ from fixed ownership')
+            if not money_ready:
+                logger.info('Waiting for settlement: owned cash exceeds fresh availability')
             remaining = deadline - monotonic()
             if remaining <= 0:
                 logger.warning('Execution settlement timeout; remaining purchases deferred')
@@ -226,6 +232,8 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
         while self._can_continue():
             funding = self._funding()
             if not funding.purchases:
+                if funding.demands:
+                    logger.info('Defer remaining purchases: native cash/FX lot/own caps/budget')
                 break
             continued = (self._exchange(funding.exchanges[0]) if funding.exchanges
                          else self._buy(funding))
@@ -276,7 +284,7 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
         self.exchanged.add(intent.uid)
         self.reverse = self.reverse or intent.side == 'SELL'
         if not _exchange_cash(self.ledger, exchange, receipt, self.fx):
-            logger.info('Defer FX dependencies: monetary bound unavailable')
+            logger.info('Defer FX dependencies: cash attribution unavailable')
             self._settled()
             return False
         currency = next(code for code, quote in self.fx.quotes.items()
@@ -321,6 +329,7 @@ def _exchange_cash(ledger, intent, receipt, fx):
                     for path, amount in base.items()}
     if any(amount > intent.debit_limits.get(path, {}).get(code, ZERO)
            for path, money in debits.items() for code, amount in money.items()):
+        logger.info('Defer FX dependencies: FX debit exceeds owner limit')
         return False
     return ledger.change(debits, cash_credits)
 
