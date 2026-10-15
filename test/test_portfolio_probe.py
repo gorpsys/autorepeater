@@ -240,8 +240,8 @@ def test_bond_discovery_refuses_closed_candidates():
             probe.resolve_bond(client, 'BOND1', {'candidates': []})
 
 
-@pytest.mark.parametrize('slot,expected', [('BOND1', 'RU000A1056U0'),
-                                         ('BOND2', 'RU000A1059P4')])
+@pytest.mark.parametrize('slot,expected', [
+    ('BOND1', 'RU000A1056U0'), ('BOND2', 'RU000A1059P4')])
 def test_replacement_bonds_take_precedence_over_other_usd_nominal_bonds(slot, expected):
     """Both replacement issues are checked before the bounded generic catalog scan."""
     from t_tech.invest import Bond  # pylint: disable=import-outside-toplevel
@@ -258,6 +258,55 @@ def test_replacement_bonds_take_precedence_over_other_usd_nominal_bonds(slot, ex
         result = probe.resolve_bond(SimpleNamespace(instruments=service), slot, report)
     assert result.ticker == expected
     assert [item['ticker'] for item in report['candidates'][:2]] == list(probe.PREFERRED_BONDS)
+
+
+def test_normal_trading_bond_can_use_limit_instead_of_bestprice():
+    """Replacement bonds need not support BESTPRICE to support a limit-order probe."""
+    from t_tech.invest import Bond  # pylint: disable=import-outside-toplevel
+    from t_tech.invest.services import InstrumentsService  # pylint: disable=import-outside-toplevel
+    service = create_autospec(inspect.unwrap(InstrumentsService), instance=True, spec_set=True)
+    service.bonds.return_value = SimpleNamespace(instruments=[
+        Bond(uid='bond', ticker='RU000A1056U0', name='Bond', class_code='TQCB', lot=1,
+             nominal=MoneyValue(currency='usd', units=1000, nano=0), currency='rub',
+             api_trade_available_flag=True, buy_available_flag=True)])
+    report = {'candidates': []}
+    with patch.object(probe, 'trading_facts', return_value={
+            'status': 'SECURITY_TRADING_STATUS_NORMAL_TRADING',
+            'api_trade_available_flag': True, 'bestprice_order_available_flag': False}):
+        probe.resolve_bond(SimpleNamespace(instruments=service), 'BOND1', report)
+    assert report['bond_order_types'] == {'bond': 'LIMIT'}
+
+
+@pytest.mark.parametrize('has_ask', [True, False])
+def test_limit_purchase_uses_ask_and_never_submits_without_one(has_ask):
+    """Use the broker's price directly, with at most one submission."""
+    from t_tech.invest import OrderDirection, OrderType, PostOrderResponse, Order  # pylint: disable=import-outside-toplevel
+    from t_tech.invest.services import MarketDataService, OrdersService  # pylint: disable=import-outside-toplevel
+    market = create_autospec(inspect.unwrap(MarketDataService), instance=True, spec_set=True)
+    orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
+    price = Quotation(units=99, nano=500000000)
+    market.get_order_book.return_value = SimpleNamespace(
+        asks=[Order(price=price, quantity=1)] if has_ask else [])
+    orders.post_order.return_value = PostOrderResponse(
+        order_id='broker', execution_report_status=probe.FILL)
+    session = create_autospec(SandboxSession(
+        SimpleNamespace(market_data=market, orders=orders), SimpleNamespace()),
+        instance=True, spec_set=True)
+    session.client = SimpleNamespace(market_data=market, orders=orders)
+    session.order_id_factory = lambda: 'request'
+    session.monotonic = lambda: 0
+    instrument = InstrumentInfo('bond', 'BOND', '', InstrumentType.OTHER, 'TQCB', 1, 'rub', True)
+    report = {'bond_order_types': {'bond': 'LIMIT'}, 'orders': []}
+    if not has_ask:
+        with pytest.raises(SandboxFailure, match='bond order book has no positive ask'):
+            probe.buy_one_lot(session, 'disposable', instrument, report)
+        orders.post_order.assert_not_called()
+        return
+    probe.buy_one_lot(session, 'disposable', instrument, report)
+    orders.post_order.assert_called_once_with(
+        account_id='disposable', instrument_id='bond', quantity=1,
+        direction=OrderDirection.ORDER_DIRECTION_BUY, order_type=OrderType.ORDER_TYPE_LIMIT,
+        order_id='request', price=price)
 
 
 def test_uncertain_funding_is_not_retried_or_ignored():

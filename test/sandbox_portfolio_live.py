@@ -149,14 +149,18 @@ def resolve_bond(client, slot, report):
                                     bond.class_code, bond.lot, bond.currency, True)
         status = trading_facts(client, instrument)
         report.setdefault('bond_trading_statuses', []).append(status)
-        if status['api_trade_available_flag'] and status['bestprice_order_available_flag']:
+        eligible = (status['bestprice_order_available_flag']
+                    or status.get('status') == 'SECURITY_TRADING_STATUS_NORMAL_TRADING')
+        if status['api_trade_available_flag'] and eligible and quantity(bond.nominal) <= 1000:
             available.append(instrument)
+            report.setdefault('bond_order_types', {})[bond.uid] = (
+                'BESTPRICE' if status['bestprice_order_available_flag'] else 'LIMIT')
     report['usd_nominal_bond_count'] = len(candidates)
     selected = 0 if slot == 'BOND1' else 1
     if len(available) <= selected:
         report['status'] = 'no_available_candidate'
         print(f'Portfolio probe: {len(candidates)} USD-nominal bonds; '
-              f'{len(available)} checked candidates currently allow API BESTPRICE', flush=True)
+              f'{len(available)} checked candidates allow this order probe', flush=True)
         raise SandboxFailure('no currently available USD-nominal bond for probe slot')
     result = available[selected]
     report['selected_bond_ticker'] = result.ticker
@@ -184,11 +188,21 @@ def trading_facts(client, instrument):
 def buy_one_lot(session, account_id, instrument, report):
     """A mutation is sent once; only reads are polled after NEW/PARTIALLYFILL."""
     request_id = str(session.order_id_factory())
-    report['orders'].append({'request_id': request_id, 'uid': instrument.uid, 'lots': 1})
+    order_type = report.get('bond_order_types', {}).get(instrument.uid, 'BESTPRICE')
+    options = {}
+    if order_type == 'LIMIT':
+        book = safe_call(session.client.market_data.get_order_book,
+                         instrument_id=instrument.uid, depth=1)
+        if not book.asks or quantity(book.asks[0].price) <= 0 or book.asks[0].quantity < 1:
+            raise SandboxFailure('bond order book has no positive ask')
+        options['price'] = book.asks[0].price
+    report['orders'].append({'request_id': request_id, 'uid': instrument.uid, 'lots': 1,
+                             'order_type': order_type})
     response = safe_call(
         session.client.orders.post_order, account_id=account_id,
         instrument_id=instrument.uid, quantity=1, direction=OrderDirection.ORDER_DIRECTION_BUY,
-        order_type=OrderType.ORDER_TYPE_BESTPRICE, order_id=request_id)
+        order_type=(OrderType.ORDER_TYPE_LIMIT if order_type == 'LIMIT'
+                    else OrderType.ORDER_TYPE_BESTPRICE), order_id=request_id, **options)
     broker_id = response.order_id
     deadline = session.monotonic() + 30
     while True:
@@ -198,6 +212,9 @@ def buy_one_lot(session, account_id, instrument, report):
             report['orders'][-1].update({'broker_order_id': broker_id, 'status': 'FILL'})
             return
         if response.execution_report_status not in PENDING or session.monotonic() >= deadline:
+            if response.execution_report_status in PENDING:
+                safe_call(session.client.orders.cancel_order,
+                          account_id=account_id, order_id=broker_id)
             raise SandboxFailure('USD probe setup order not fully filled')
         session.sleep(2)
         response = safe_call(session.client.orders.get_order_state,
