@@ -1,10 +1,14 @@
 """SDK-independent models and read-side contract used by strategies."""
+from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from autorepeater.cash_facts import MoneyAmount
 
 
 class InstrumentType(StrEnum):
@@ -28,6 +32,15 @@ class PortfolioEntry:  # pylint: disable=too-many-instance-attributes
     diagnostic_text: str
     blocked: bool | None = None
     blocked_lots: Decimal | None = None
+    rub_price: Decimal | None = None
+    native_price: Decimal | None = None
+    settlement_currency: str | None = None
+    native_cash: MoneyAmount | None = None
+
+    @property
+    def mark(self) -> Decimal:
+        """An explicit RUB valuation takes precedence over the original broker price."""
+        return self.current_price if self.rub_price is None else self.rub_price
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +82,8 @@ class PriceQuote:
     uid: str
     price: Decimal
     time: datetime | None
+    native_price: Decimal | None = None
+    currency: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

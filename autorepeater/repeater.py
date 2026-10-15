@@ -13,6 +13,7 @@ from autorepeater.strategy_allocation import build_marks, recovered_capital
 from autorepeater.strategy_contract import Strategy, validate_event_accounts, validate_strategy
 from autorepeater.strategy_data import DataAccessError, InstrumentType, PortfolioEntry, StrategyData
 from autorepeater.strategy_plan import StrategyContext, StrategyPlan, exact_sum, validate_plan
+from autorepeater.valuation import Valuation
 from autorepeater import reporting
 
 
@@ -64,37 +65,52 @@ class AutoRepeater:
             raise TypeError("Debug flag must be boolean")
         self.debug = debug
 
-    def sync_accounts(self, dst_account_id: str) -> tuple[ExecutionReceipt, ...]:
+    def _build_strategy_plan(self, snapshot, destination):
+        profile = self.strategy.allocation_profile(snapshot)
+        positions = destination_positions(destination)
+        marks = build_marks(positions, (profile,))
+        recognized = tuple(entry for entry in positions
+                           if profile.exposures.get(entry.uid, Decimal(0)) > 0)
+        unassigned = {entry.uid: entry.quantity for entry in positions
+                      if profile.exposures.get(entry.uid, Decimal(0)) == 0}
+        context = StrategyContext(
+            (), destination.budget, recovered_capital(recognized, profile, marks),
+            False, recognized, marks)
+        plan = self.strategy.build_plan(snapshot, context)
+        validate_plan(plan, context)
+        return replace(plan, unassigned={**plan.unassigned, **unassigned}), marks
+
+    def sync_accounts(self, dst_account_id: str, *,
+                      valuation: Valuation | None = None) -> tuple[ExecutionReceipt, ...]:
         """Validate every main target before reading rules or sending any order."""
         try:
             self.data.begin_snapshot()
-            snapshot = self.strategy.load_snapshot(self.data)
-            destination = self.execution_data.get_destination(dst_account_id)
-            profile = self.strategy.allocation_profile(snapshot)
-            positions = destination_positions(destination)
-            marks = build_marks(positions, (profile,))
-            recognized = tuple(entry for entry in positions
-                               if profile.exposures.get(entry.uid, Decimal(0)) > 0)
-            unassigned = {entry.uid: entry.quantity for entry in positions
-                          if profile.exposures.get(entry.uid, Decimal(0)) == 0}
-            context = StrategyContext(
-                (), destination.budget, recovered_capital(recognized, profile, marks),
-                False, recognized, marks)
-            plan = self.strategy.build_plan(snapshot, context)
-            validate_plan(plan, context)
-            plan = replace(plan, unassigned={**plan.unassigned, **unassigned})
+            if valuation is not None:
+                valuation.begin_pass()
+            data = self.data if valuation is None else valuation.strategy_data(self.data)
+            snapshot = self.strategy.load_snapshot(data)
+            destination = (self.execution_data.get_destination(dst_account_id)
+                           if valuation is None else self.execution_data.get_destination(
+                               dst_account_id, valuation=valuation))
+            if valuation is not None and destination.fx_snapshot is not valuation.fx:
+                raise ValueError('destination must share the pass FX snapshot')
+            plan, marks = self._build_strategy_plan(snapshot, destination)
             uids = sorted(set(destination.quantities) | {
                 uid for node in nodes(plan) for uid in node.target.quantities})
             ownership = plan_ownership(plan)
+            rules = self.execution_data.get_trade_rules(dst_account_id, uids)
             orders = build_order_plan(
-                plan, destination, ownership, marks,
-                self.execution_data.get_trade_rules(dst_account_id, uids))
+                plan, destination, ownership, marks, rules)
         except ValueError as error:
             logger.error('Rebalance rejected for destination %s: %s', dst_account_id, error)
             raise
         reporting.print_rebalance_plan(orders, self.debug)
         if self.debug:
             return ()
+        if valuation is not None:
+            valuation.validate_fresh()
+            if any(rule.currency.lower() != 'rub' for rule in rules.values()):
+                raise ValueError('FX financing is not supported until FX execution is integrated')
         return execute_plan(dst_account_id, orders, self.execution_data, self.executor)
 
     def _local_pass(self, dst: str) -> None:

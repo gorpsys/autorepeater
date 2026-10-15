@@ -4,7 +4,10 @@ from datetime import datetime
 from decimal import Decimal, ROUND_FLOOR
 from typing import cast
 
-from autorepeater.index_config import IndexConfig, select_index_config
+from autorepeater.index_config import (
+    IndexConfig, IndexReferenceUnits, reference_price_in_capitalization_currency,
+    select_index_config,
+)
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.rebalance_policy import leaf_decision
 from autorepeater.strategy_budget import available_budget
@@ -36,6 +39,7 @@ class IndexQuote:
     lot: int
     currency: str = ''
     time: datetime | None = None
+    native_price: Decimal | None = None
 
 
 def _load_index_candidate(data: StrategyData, match: InstrumentMatch,
@@ -113,7 +117,7 @@ class IndexStrategy:
             quote = prices[uid]
             snapshot[ticker] = IndexQuote(
                 uid, _index_price(quote.price, ticker), instrument.lot,
-                currency=instrument.currency, time=quote.time)
+                currency=instrument.currency, time=quote.time, native_price=quote.native_price)
         return snapshot
 
     def build_target(self, snapshot: dict[str, IndexQuote], budget: Decimal) -> TargetPortfolio:
@@ -189,6 +193,7 @@ class IndexCalculation:
 def _capitalizations(config: IndexConfig, snapshot: dict[str, IndexQuote]) -> dict[str, Decimal]:
     result = {}
     uids = set()
+    units = getattr(config, 'reference_units', IndexReferenceUnits())
     for instrument in sorted(config.instruments, key=lambda item: item.ticker):
         ticker = instrument.ticker
         quote = snapshot.get(ticker)
@@ -201,8 +206,10 @@ def _capitalizations(config: IndexConfig, snapshot: dict[str, IndexQuote]) -> di
         if not isinstance(quote.uid, str) or not quote.uid or quote.uid in uids:
             raise ValueError(f'invalid or duplicate index UID: {ticker}')
         uids.add(quote.uid)
-        result[ticker] = (instrument.reference_index_capitalization * quote.price
-                          / instrument.reference_price)
+        denominator = reference_price_in_capitalization_currency(
+            instrument, units.capitalization_currency,
+            units.price_currencies.get(ticker, 'rub'), units.fx_rates.get(ticker))
+        result[ticker] = instrument.reference_index_capitalization * quote.price / denominator
     return result
 
 

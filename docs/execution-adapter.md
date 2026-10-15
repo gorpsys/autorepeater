@@ -15,7 +15,7 @@ public repository; no account, token or live Invest API request was used.
   additional budget term. No lot multiplication is applied to marks.
   `PortfolioEntry.currency` preserves the valuation unit from
   `PortfolioPosition.current_price.currency`, independently of the instrument's
-  native trading currency. The RUB-budget adapter rejects any non-RUB valuation
+  native trading currency. Without an explicit `Valuation`, the RUB-budget adapter rejects any non-RUB valuation
   before returning a destination snapshot; it never sums incompatible monetary
   units or drops an unsupported holding. RUB-valued holdings retain the original
   per-position nano arithmetic, without an additional instrument-currency filter.
@@ -250,7 +250,48 @@ calendar delay, reserve subtraction, price parameter or GetOrderPrice is added.
 Transport errors preserve their cause with a fixed safe public reason.
 `test/test_fx.py` and `test/test_tinvest_fx_data.py` verify these pure/read
 boundaries offline with autospecced ports and unwrapped SDK services.
-The layer is not wired into working valuation, funding or submission yet.
+The layer has no automatic runtime wiring, funding or submission yet. An explicit
+valuation pass can consume its immutable snapshot as described below.
+
+### Explicit RUB Valuation Pass
+
+`sync_accounts(dst, valuation=...)` supplies the same `Valuation` and immutable
+`FxSnapshot` to all ACCOUNT/INDEX leaves, including nested COMPOSITE children,
+and to the destination adapter. The destination must return that exact snapshot.
+The pass clears cached security books/currency identities and rejects stale FX
+before account reads. The legacy call without a valuation remains compatible;
+automatic runtime wiring and FX financing are deferred to later implementation
+steps. An explicit pass with foreign security trade rules rejects execution
+before any order; debug can inspect its RUB plan without submission.
+
+`TInvestSecurityData` reads matching metadata and depth-one security books,
+checks positive two-sided levels and timezone-aware market time up to 60 seconds
+old, and returns native `SecurityQuote` units. Security and direct FX books are
+independent reads. Share/ETF midpoints are money per piece; bond clean percent
+quotes require matching positive native nominal and explicit native ACI, added
+once. Missing units or mismatched currencies fail without guessed conversion.
+Neither GetOrderPrice, operation history nor an order-price parameter is used.
+
+The strategy decorator and destination adapter preserve broker
+`current_price/currency` alongside `native_price/settlement_currency` and
+`rub_price`. Shared UID observations use one native book per pass. Capital,
+profiles and targets consume RUB `mark`; existing RUB per-position nano rounding
+is preserved. Currency positions carry `native_cash`: metadata supplies actual
+ISO identity, portfolio quantity supplies native units. For 100 CNY reported
+as 1000 RUB but valued at midpoint 12, capital is 1200 RUB exactly once.
+GetPositions money is a native availability bound, never another capital term.
+Unknown identity/quantity or missing/stale FX cannot use broker RUB price as a
+substitute. Cash is excluded from target securities. Reserve/floor subtraction,
+money ownership and trading pools remain unchanged in this implementation step.
+
+INDEX stores historical reference units separately in `IndexReferenceUnits`.
+Missing JSON currencies mean RUB even for a security trading in CNY. An explicit
+foreign reference price or capitalization currency requires a positive historical
+`reference_fx_rate` in capitalization units per price-currency unit; equal
+currencies require 1. Only RUB/RUB can omit that rate. Current RUB capitalizations
+divide by reference price times historical rate, retaining the original RUB
+Decimal operation order and avoiding duplicate free-float/weight coefficients.
+Bundled JSON adds explicit RUB units without numerical changes.
 
 INFO diagnostics list loading, portfolio/currency/security/exchange blockers,
 active order IDs/UIDs/statuses/lot counts, expected versus actual quantities,

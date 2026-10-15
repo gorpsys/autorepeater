@@ -44,7 +44,18 @@ allocation_drift_limits; min_position_value default "0".
 INDEX reference_price/reference_index_capitalization положительны;
 effective_quantity >=0, free_float/weight_limit (0,1], reference_weight [0,100]
 в процентах. Уникальные непустые ticker. Рабочая капитализация =
-reference_index_capitalization * current_price / reference_price;
+reference_index_capitalization * current_price_rub /
+(reference_price * reference_fx_rate);
+reference_price_currency у бумаги и общая reference_capitalization_currency
+при отсутствии означают RUB независимо от валюты торгов инструмента.
+Для RUB/RUB отсутствующий исторический reference_fx_rate равен 1;
+при явно нерублёвых справочных единицах он обязателен и положителен,
+при совпадающих валютах равен 1. Пустые/NULL/неизвестные валюты ошибочны.
+Курс задаёт единицы валюты капитализации за единицу валюты цены на дату
+справочного снимка; текущий рыночный курс его не заменяет.
+Внутренний IndexReferenceUnits хранит справочные валюты и курсы отдельно
+от числового состава. RUB/RUB=1 имеет единое пустое представление;
+прежний порядок Decimal-операций и точность RUB-знаменателя сохраняются.
 справочные поля используются только для описания исходного состава. Минимум полного состава применяется
 один раз до перенормализации; непрерывный префикс, лоты к ближайшему целому
 с половинами к чётному, бюджетные отмены по минимальной цене ошибки.
@@ -106,10 +117,20 @@ COMPOSITE создаёт непрозрачных детей через strategy
 Reporting использует загруженные DTO/UID без дополнительных запросов
 ради расчётных логов. Явный просмотр счетов допустим в Runner.run().
 AutoRepeater(strategy, data, execution_data, executor), sync_accounts/mainflow
-получают только dst. RunnerParams содержит только debug.
+получают dst. sync_accounts дополнительно принимает явный keyword-only
+Valuation для read-only валютной оценки; прежний вызов без него совместим.
+RunnerParams содержит только debug. Автоматическое подключение валютного
+прохода и торгового FX остаётся последующим этапам интеграции.
 StrategyData read-only: begin_snapshot/get_portfolio/find_instruments/get_instrument/
 get_last_prices/position_events; свои DTO/enum, units+nano без округления,
 порядок/дубликаты сохраняются, никаких raw_response.
+PortfolioEntry сохраняет брокерские current_price/currency отдельно от
+native_price/settlement_currency и rub_price; mark выбирает rub_price,
+если он явно вычислен. Valuation передаёт один FxSnapshot всему дереву
+и назначению, читает один native midpoint на UID за проход. Начало прохода
+очищает локальные книги и проверяет свежесть FX. Получение native-книг
+отделено от SDK-порта стратегий через SecurityData; TInvestSecurityData
+проверяет UID, единицы и возраст рыночного стакана до 60 секунд.
 Движок вызывает begin_snapshot перед каждым пересчётом. SDK-адаптер лениво
 читает полные Shares/Etfs с INSTRUMENT_STATUS_ALL один раз за проход,
 использует порядок FindInstrument и полный api_trade_available_flag,
@@ -123,6 +144,12 @@ SDK-преобразования подтверждены в [docs/execution-ada
 ## Финансовые правила
 
 Бюджет корня включает бумаги/деньги назначения, per-position nano до суммы.
+В явно переданном Valuation капитал и профили используют RUB marks,
+а native_cash хранит фактические единицы и валюту денег по метаданным UID.
+100 CNY при midpoint 12 дают 1200 RUB независимо от брокерской RUB-цены;
+GetPositions.money остаётся native-доступностью и не добавляется к капиталу.
+До интеграции FX такой проход отклоняет исполнение нерублёвых бумаг
+перед любыми заявками. Денежные пулы и проверки floor этим слоем не меняются.
 ACCOUNT валюты источника исключает и применяет reserve до ratio.
 Профиль листа содержит (1-reserve)*веса, COMPOSITE складывает weight*профили.
 C листа=V/(1-reserve), вложенного узла=V/sum(exposures).
