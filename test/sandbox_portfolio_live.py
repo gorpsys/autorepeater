@@ -1,0 +1,409 @@
+"""Explicit-only sandbox experiment; excluded from normal test_* collection."""
+from collections import Counter
+from datetime import datetime, timezone
+from decimal import Decimal
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import sys
+from uuid import uuid4
+
+import grpc
+import pytest
+from t_tech.invest import MoneyValue, OrderDirection, OrderType, PriceType, RequestError
+from t_tech.invest.grpc import operations_pb2
+
+from autorepeater.strategy_data import InstrumentInfo, InstrumentType
+from scripts.sandbox_e2e import namespace, run_bounded
+from scripts.sandbox_lifecycle import SandboxFailure, list_exception_facts, safe_call
+from scripts.sandbox_support import FILL, PENDING, SandboxSession
+
+USD_TICKERS = ('BOND1', 'BOND2', 'MIXED')
+PREFERRED_BONDS = ('RU000A1056U0', 'RU000A1059P4')
+REQUEST_CURRENCIES = ('DEFAULT', 'RUB', 'USD', 'EUR')
+
+
+def quantity(value):
+    """Read units/nano without exposing the surrounding SDK object."""
+    units, nano = value.units, value.nano
+    if any(isinstance(part, bool) or not isinstance(part, int) for part in (units, nano)):
+        raise SandboxFailure('invalid portfolio number')
+    if not -1000000000 < nano < 1000000000:
+        raise SandboxFailure('invalid portfolio nano')
+    return Decimal(units) + Decimal(nano) / Decimal(1000000000)
+
+
+def snapshot_facts(response, phase, requested):
+    """Allowlisted observations retain duplicate rows; never dump a raw response."""
+    positions = []
+    currency_positions = []
+    quantities = {}
+    for position in response.positions:
+        currency = position.current_price.currency
+        if not isinstance(currency, str) or re.fullmatch('[a-z]{3}', currency) is None:
+            raise SandboxFailure('invalid portfolio currency')
+        amount = quantity(position.quantity)
+        price = quantity(position.current_price)
+        if position.instrument_type == 'currency':
+            currency_positions.append({'quantity': format(amount, 'f'),
+                                       'price': format(price, 'f'), 'price_currency': currency})
+            continue
+        uid = position.instrument_uid
+        if not isinstance(uid, str) or re.fullmatch('[A-Za-z0-9_-]{1,80}', uid) is None:
+            raise SandboxFailure('invalid portfolio instrument UID')
+        positions.append({'uid': uid, 'quantity': format(amount, 'f'),
+                          'price': format(price, 'f'), 'price_currency': currency})
+        quantities[uid] = quantities.get(uid, Decimal(0)) + amount
+    counts = Counter(item['uid'] for item in positions)
+    totals = {}
+    for field in ('total_amount_portfolio', 'total_amount_shares', 'total_amount_currencies',
+                  'total_amount_bonds'):
+        value = getattr(response, field, None)
+        if value is not None and isinstance(value.currency, str) and value.currency:
+            if re.fullmatch('[a-z]{3}', value.currency) is None:
+                raise SandboxFailure('invalid portfolio total currency')
+            totals[field] = {'currency': value.currency, 'amount': format(quantity(value), 'f')}
+    return {'phase': phase, 'request_currency': requested, 'positions': positions,
+            'observed_at': datetime.now(timezone.utc).isoformat(),
+            'currency_positions': currency_positions, 'totals': totals,
+            'quantity_by_uid': {uid: format(value, 'f') for uid, value in quantities.items()},
+            'duplicate_uids': sorted(uid for uid, count in counts.items() if count > 1),
+            'price_currencies': sorted({item['price_currency'] for item in positions})}
+
+
+def price_behavior(records, native_currencies):
+    """Classify observed currencies, without presuming either API interpretation."""
+    facts = [(record['request_currency'], item['price_currency'], native_currencies[item['uid']])
+             for record in records for item in record['positions']
+             if item['uid'] in native_currencies and record['request_currency'] != 'DEFAULT']
+    if not facts or {mode for mode, _, _ in facts} != {'RUB', 'USD', 'EUR'}:
+        return 'inconclusive'
+    if all(currency == native for _, currency, native in facts):
+        return 'instrument_currency'
+    if all(currency == mode.lower() for mode, currency, _ in facts):
+        return 'request_currency'
+    return 'mixed_or_other'
+
+
+def resolve_instrument(data, ticker, currency, report):
+    """Exact share/ETF ticker, requested currency and real API permission only."""
+    for match in safe_call(data.find_instruments, query=ticker):
+        if match.ticker != ticker or match.instrument_type not in (
+                InstrumentType.SHARE, InstrumentType.ETF):
+            continue
+        instrument = safe_call(data.get_instrument, uid=match.uid)
+        report['candidates'].append({
+            'ticker': ticker, 'uid': instrument.uid, 'currency': instrument.currency,
+            'class_code': instrument.class_code,
+            'lot': instrument.lot, 'api_trade_available': instrument.api_trade_available})
+        if (instrument.currency == currency and instrument.api_trade_available is True
+                and isinstance(instrument.lot, int) and not isinstance(instrument.lot, bool)
+                and instrument.lot > 0):
+            return instrument
+    raise SandboxFailure(f'no API-available {currency} instrument for {ticker}')
+
+
+def read_portfolio(client, account_id, requested):
+    """SDK 1.51 wrapper omits currency; call the same sandbox-channel RPC explicitly."""
+    if requested == 'DEFAULT':
+        return safe_call(client.operations.get_portfolio, account_id=account_id)
+    request = operations_pb2.PortfolioRequest(account_id=account_id)
+    request.currency = operations_pb2.PortfolioRequest.CurrencyRequest.Value(requested)
+
+    def get_portfolio_currency():
+        try:
+            return client.operations.stub.GetPortfolio(
+                request, metadata=client.operations.metadata, timeout=10)
+        except grpc.RpcError as error:
+            if not isinstance(error, grpc.Call):
+                raise SandboxFailure('portfolio RPC failed') from None
+            raise RequestError(code=getattr(error, 'code')(), details=getattr(error, 'details')(),
+                               metadata=None) from None
+
+    return safe_call(get_portfolio_currency)
+
+
+def resolve_bond(client, slot, report):
+    """Discover USD nominal bonds without confusing denomination and settlement."""
+    catalog = safe_call(client.instruments.bonds).instruments
+    candidates = sorted((bond for bond in catalog if (
+        bond.currency in ('usd', 'eur', 'cny') if slot == 'MIXED'
+        else bond.nominal.currency == 'usd')),
+                        key=lambda bond: (not bond.api_trade_available_flag,
+                                          not bond.buy_available_flag,
+                                          bond.currency != 'cny' if slot == 'MIXED' else False,
+                                          bond.ticker not in PREFERRED_BONDS,
+                                          bond.ticker, bond.uid))
+    available = []
+    for bond in candidates:
+        facts = {'ticker': bond.ticker, 'uid': bond.uid, 'name': bond.name,
+                 'class_code': bond.class_code, 'currency': bond.currency, 'lot': bond.lot,
+                 'nominal_currency': bond.nominal.currency,
+                 'nominal': format(quantity(bond.nominal), 'f'),
+                 'api_trade_available': bond.api_trade_available_flag,
+                 'buy_available': bond.buy_available_flag}
+        report['candidates'].append(facts)
+        if (not bond.api_trade_available_flag or not bond.buy_available_flag
+                or bond.lot <= 0 or len(report.get('bond_trading_statuses', [])) >= 20):
+            continue
+        instrument = InstrumentInfo(bond.uid, bond.ticker, bond.name, InstrumentType.OTHER,
+                                    bond.class_code, bond.lot, bond.currency, True)
+        status = trading_facts(client, instrument)
+        report.setdefault('bond_trading_statuses', []).append(status)
+        eligible = (status['bestprice_order_available_flag']
+                    or status.get('status') == 'SECURITY_TRADING_STATUS_NORMAL_TRADING')
+        if status['api_trade_available_flag'] and eligible and quantity(bond.nominal) <= 1000:
+            available.append(instrument)
+            report.setdefault('bond_order_types', {})[bond.uid] = (
+                'BESTPRICE' if status['bestprice_order_available_flag'] else 'LIMIT')
+    report['candidate_count'] = len(candidates)
+    selected = 1 if slot == 'BOND2' else 0
+    if len(available) <= selected:
+        report['status'] = 'no_available_candidate'
+        print(f'Portfolio probe: {len(candidates)} bond candidates; '
+              f'{len(available)} checked candidates allow this order probe', flush=True)
+        reason = 'foreign-settled' if slot == 'MIXED' else 'USD-nominal'
+        raise SandboxFailure(f'no currently available {reason} bond for probe slot')
+    result = available[selected]
+    report['selected_bond_ticker'] = result.ticker
+    print(f'Portfolio probe: selected {result.ticker}; settlement={result.currency}; '
+          f'slot={slot}', flush=True)
+    return result
+
+
+def trading_facts(client, instrument):
+    """Static API eligibility is distinct from the current session's order availability."""
+    status = safe_call(client.market_data.get_trading_status, instrument_id=instrument.uid)
+    name = getattr(status.trading_status, 'name', None)
+    if not isinstance(name, str) or re.fullmatch('[A-Z_]+', name) is None:
+        raise SandboxFailure('invalid trading status')
+    result = {'uid': instrument.uid, 'status': name}
+    for field in ('api_trade_available_flag', 'market_order_available_flag',
+                  'bestprice_order_available_flag'):
+        value = getattr(status, field)
+        if not isinstance(value, bool):
+            raise SandboxFailure('invalid trading permission')
+        result[field] = value
+    return result
+
+
+def buy_one_lot(session, account_id, instrument, report, lots=1):
+    """A mutation is sent once; only reads are polled after NEW/PARTIALLYFILL."""
+    request_id = str(session.order_id_factory())
+    order_type = report.get('bond_order_types', {}).get(instrument.uid, 'BESTPRICE')
+    options = {}
+    if order_type == 'LIMIT':
+        book = safe_call(session.client.market_data.get_order_book,
+                         instrument_id=instrument.uid, depth=1)
+        if not book.asks or quantity(book.asks[0].price) <= 0 or book.asks[0].quantity < 1:
+            raise SandboxFailure('bond order book has no positive ask')
+        options['price'] = book.asks[0].price
+        options['price_type'] = PriceType.PRICE_TYPE_POINT
+        report.setdefault('limit_prices', []).append({
+            'uid': instrument.uid, 'ask_points': format(quantity(book.asks[0].price), 'f'),
+            'book_prices': {name: format(quantity(getattr(book, name)), 'f')
+                            for name in ('limit_up', 'limit_down', 'last_price', 'close_price')
+                            if getattr(book, name, None) is not None}})
+    report['orders'].append({'request_id': request_id, 'uid': instrument.uid, 'lots': lots,
+                             'order_type': order_type})
+    response = safe_call(
+        session.client.orders.post_order, account_id=account_id,
+        instrument_id=instrument.uid, quantity=lots, direction=OrderDirection.ORDER_DIRECTION_BUY,
+        order_type={'LIMIT': OrderType.ORDER_TYPE_LIMIT, 'MARKET': OrderType.ORDER_TYPE_MARKET,
+                    'BESTPRICE': OrderType.ORDER_TYPE_BESTPRICE}[order_type],
+        order_id=request_id, **options)
+    broker_id = response.order_id
+    deadline = session.monotonic() + 30
+    while True:
+        session.check_order(response, instrument.uid, lots, OrderDirection.ORDER_DIRECTION_BUY,
+                            broker_id)
+        if response.execution_report_status == FILL:
+            report['orders'][-1].update({'broker_order_id': broker_id, 'status': 'FILL'})
+            return
+        if response.execution_report_status not in PENDING or session.monotonic() >= deadline:
+            if response.execution_report_status in PENDING:
+                safe_call(session.client.orders.cancel_order,
+                          account_id=account_id, order_id=broker_id)
+            raise SandboxFailure('USD probe setup order not fully filled')
+        session.sleep(2)
+        response = safe_call(session.client.orders.get_order_state,
+                             account_id=account_id, order_id=broker_id)
+
+
+def capture_phase(session, account_id, expected, phase, report):
+    """Record even unsettled snapshots before checking the expected physical holdings."""
+    deadline = session.monotonic() + 30
+    while True:
+        facts = snapshot_facts(read_portfolio(session.client, account_id, 'DEFAULT'),
+                               phase, 'DEFAULT')
+        report['observations'].append(facts)
+        actual = facts['quantity_by_uid']
+        if all(Decimal(actual.get(uid, '0')) == amount for uid, amount in expected.items()):
+            break
+        if session.monotonic() >= deadline:
+            raise SandboxFailure('USD probe positions did not settle')
+        session.sleep(2)
+    for requested in REQUEST_CURRENCIES[1:]:
+        record = snapshot_facts(read_portfolio(session.client, account_id, requested),
+                                phase, requested)
+        report['observations'].append(record)
+        if any(Decimal(record['quantity_by_uid'].get(uid, '0')) != amount
+               for uid, amount in expected.items()):
+            raise SandboxFailure('portfolio currency request changed physical holdings')
+    print(f'Portfolio probe: {report["ticker"]} {phase}; currencies recorded', flush=True)
+
+
+def fund_account(session, account_id, currency, units, report):
+    """Only an explicit unsupported-USD rejection permits proceeding with RUB funding."""
+    funding = {'currency': currency, 'units': units, 'outcome': 'pending'}
+    report.setdefault('funding', []).append(funding)
+    try:
+        safe_call(session.client.sandbox.sandbox_pay_in, account_id=account_id,
+                  amount=MoneyValue(currency=currency, units=units, nano=0))
+    except SandboxFailure as error:
+        unsupported = currency in ('usd', 'eur', 'cny') and any(
+            fact.get('grpc_status') == 'INVALID_ARGUMENT' and fact.get('api_code') == '30258'
+            for fact in error.api_facts)
+        if not unsupported:
+            raise
+        funding['outcome'] = 'rejected_currency_unavailable'
+        print(f'WARNING: sandbox rejected {currency.upper()} funding (30258); '
+              'continuing with RUB funding only, not assuming USD availability', flush=True)
+    else:
+        funding['outcome'] = 'credited'
+
+
+def acquire_currency(session, account_id, currency, report):
+    """Buy sandbox CNY for RUB if direct currency pay-in is explicitly unavailable."""
+    if currency != 'cny':
+        raise SandboxFailure('sandbox foreign funding unavailable; FX route not configured')
+    catalog = safe_call(session.client.instruments.currencies).instruments
+    report['currency_candidates'] = []
+    for item in catalog:
+        if item.iso_currency_name.lower() != currency:
+            continue
+        report['currency_candidates'].append({
+            'uid': item.uid, 'ticker': item.ticker, 'lot': item.lot,
+            'currency': item.currency, 'api_trade_available': item.api_trade_available_flag,
+            'buy_available': item.buy_available_flag})
+        if (item.ticker != 'CNYRUB_TOM' or not item.api_trade_available_flag
+                or not item.buy_available_flag or item.lot <= 0):
+            continue
+        instrument = InstrumentInfo(item.uid, item.ticker, item.name, InstrumentType.CURRENCY,
+                                    item.class_code, item.lot, item.currency, True)
+        status = trading_facts(session.client, instrument)
+        report['currency_trading_status'] = status
+        if not status['api_trade_available_flag'] or not (
+                status['bestprice_order_available_flag'] or status['market_order_available_flag']):
+            continue
+        report.setdefault('bond_order_types', {})[item.uid] = (
+            'BESTPRICE' if status['bestprice_order_available_flag'] else 'MARKET')
+        lots = max(1, (10000 + item.lot - 1) // item.lot)
+        report['currency_exchange'] = {'ticker': item.ticker, 'units_requested': lots * item.lot}
+        buy_one_lot(session, account_id, instrument, report, lots=lots)
+        return
+    raise SandboxFailure('no API-available sandbox CNYRUB_TOM instrument')
+
+
+def run_probe(session, ticker, report):
+    """One disposable account: USD, then mixed holdings, then a repeated USD purchase."""
+    if session.lifecycle.created:
+        raise SandboxFailure('previous probe cleanup incomplete')
+    session.data.begin_snapshot()
+    dollar = resolve_bond(session.client, ticker, report)
+    ruble = resolve_instrument(session.data, 'SBER', 'rub', report)
+    native = {dollar.uid: dollar.currency, ruble.uid: 'rub'}
+    report['instrument_currencies'] = native
+    report['trading_statuses'] = [trading_facts(session.client, instrument)
+                                  for instrument in (dollar, ruble)]
+    account_id = session.lifecycle.create('currency' + ticker.lower(), 'dst')
+    session.lifecycle.verify_name(account_id)
+    foreign_currency = dollar.currency if dollar.currency != 'rub' else 'usd'
+    for currency, units in ((foreign_currency, 100000), ('rub', 1000000)):
+        fund_account(session, account_id, currency, units, report)
+    if ticker == 'MIXED' and report['funding'][0]['outcome'] == 'rejected_currency_unavailable':
+        acquire_currency(session, account_id, foreign_currency, report)
+    holdings = {}
+    for phase, instrument in (('usd_first', dollar), ('mixed', ruble), ('usd_second', dollar)):
+        buy_one_lot(session, account_id, instrument, report)
+        holdings[instrument.uid] = holdings.get(instrument.uid, Decimal(0)) + instrument.lot
+        capture_phase(session, account_id, holdings, phase, report)
+    report['price_behavior'] = price_behavior(report['observations'], native)
+    mixed_records = [record for record in report['observations']
+                     if record['phase'] in ('mixed', 'usd_second')]
+    report['mixed_price_currencies_observed'] = any(
+        len(record['price_currencies']) > 1 for record in mixed_records)
+    report['mixed_portfolio_constructed'] = any(
+        len({native[item['uid']] for item in record['positions']
+             if item['uid'] in native}) > 1 for record in mixed_records)
+    if ticker == 'MIXED' and not report['mixed_portfolio_constructed']:
+        report['status'] = 'no_mixed_portfolio_constructed'
+        raise SandboxFailure('no confirmed holdings with different settlement currencies')
+    report['status'] = 'observed'
+
+
+@pytest.mark.parametrize('ticker', USD_TICKERS)
+def test_sandbox_portfolio_currency(ticker, sandbox: SandboxSession):
+    """A different observed currency is data, not an assumed-contract assertion failure."""
+    report = {'ticker': ticker, 'status': 'incomplete', 'candidates': [], 'orders': [],
+              'observations': [], 'cleanup_confirmed': False,
+              'started_at': datetime.now(timezone.utc).isoformat(),
+              'tested_sha': os.environ.get('PROBE_SHA', 'local'),
+              'scope': 'sandbox observations; not a production API guarantee'}
+    try:
+        run_probe(sandbox, ticker, report)
+    except BaseException as error:
+        report['error'] = list_exception_facts(error)
+        raise
+    finally:
+        try:
+            sandbox.lifecycle.cleanup()
+            report['cleanup_confirmed'] = True
+        finally:
+            root = Path(os.environ.get('E2E_ARTIFACT_DIR', '/tmp/portfolio-probe'))
+            root.mkdir(parents=True, exist_ok=True)
+            (root / f'{ticker}.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+            print(f'Portfolio probe {ticker}: {report["status"]}; '
+                  f'cleanup={report["cleanup_confirmed"]}', flush=True)
+
+
+def main():
+    """Reuse the shared process lock, bounded supervisor and sandbox-only fixture."""
+    if not os.environ.get('SANDBOX_TOKEN'):
+        print('SANDBOX_TOKEN is required', file=sys.stderr)
+        return 2
+    keys = ('E2E_NAMESPACE', 'E2E_RUN_ID', 'E2E_ARTIFACT_DIR')
+    previous = {key: os.environ.get(key) for key in keys}
+    try:
+        selected = namespace()
+        run_id = uuid4().hex
+        with Path('/tmp/autorepeater-sandbox-e2e.lock').open('a', encoding='ascii') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise SandboxFailure('overlapping sandbox run forbidden') from None
+            os.environ['E2E_NAMESPACE'] = selected
+            os.environ['E2E_RUN_ID'] = run_id
+            root = Path(os.environ.get('E2E_ARTIFACT_DIR', '/tmp/portfolio-probe-' + run_id))
+            root.mkdir(parents=True, exist_ok=True)
+            os.environ['E2E_ARTIFACT_DIR'] = str(root)
+            return run_bounded([
+                sys.executable, '-m', 'pytest', 'test/sandbox_portfolio_live.py',
+                '-p', 'e2e.conftest', '--noconftest', '-p', 'no:cacheprovider',
+                '-q', '-s', '--tb=no', '--show-capture=no',
+                f'--junitxml={root / "junit.xml"}'], 600, selected, run_id)
+    except (ValueError, SandboxFailure) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+if __name__ == '__main__':
+    sys.exit(main())
