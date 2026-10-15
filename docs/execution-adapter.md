@@ -143,8 +143,9 @@ cloud deployment acceptance; those checks require separate authorization.
 contracts for the multicurrency implementation. They are not wired into the
 working planner or executor. Existing RUB execution, reserve subtraction and
 SDK `ExecutionReceipt.cash={}` remain unchanged at this preparatory stage.
-Pair discovery, timestamp freshness, reserve allocation, FX submission and
-dependent purchase orchestration belong to later implementation steps.
+Direct-pair discovery and timestamp freshness are now provided by the separate
+read-only FX layer below. Reserve allocation, FX submission and dependent
+purchase orchestration belong to later implementation steps.
 
 `MoneyAmount` carries explicit native currency and exact Decimal units. Its
 units/nano constructor rejects bools, nonintegers, out-of-range nanos and
@@ -213,6 +214,43 @@ and the real SDK order boundary with autospecced unwrapped services. Existing
 broker receipt and execution tests retain isolated/common-pool attribution
 and fresh readiness checks. No live, TOM-cycle or production acceptance is
 claimed by these tests.
+
+### Direct FX Read Layer (Preparatory)
+
+`FxData` exposes full pair metadata, two-sided book observations and fresh own
+trade rules. `TInvestFxData` uses SDK 1.51.0 Currencies with
+INSTRUMENT_STATUS_ALL, GetOrderBook(depth=1), GetTradingStatus and GetMaxLots.
+It performs no requests on construction and has no market/limits cache.
+Base identity comes from `iso_currency_name`, checked against
+`nominal.currency`; `currency` identifies the quote/settlement currency.
+Nominal units and lot size remain separate, with strict units/nano conversion.
+Ticker strings do not establish currency identity or settlement mode.
+
+The pure selector accepts only foreign-base/RUB-quote routes. It rejects
+inverse routes, bridges, duplicate UIDs and ambiguous catalogs. Multiple
+settlement instruments require an explicit UID; availability and catalog
+order cannot choose between them. Closed trading does not erase an otherwise
+valid route or prevent a fresh midpoint valuation.
+
+`FxSnapshot` defensively copies observations into an immutable mapping and
+freezes one computed RUB midpoint per native currency unit for the calculation.
+FX division uses precision 28 and HALF_EVEN independently of a caller's
+Decimal precision/rounding; later context changes cannot alter snapshot rates. RUB
+identity requires zero FX requests. Both market and receipt timestamps must
+be timezone-aware, with no future market data/receipts and market age at most
+60 seconds. Empty, crossed, nonpositive, malformed or stale books fail;
+last_price, its timestamp and an implicit rate of 1 are never fallbacks.
+The caller can recheck freshness before effects and must read new data on
+expiry. A snapshot grants no ownership, spending or trading permission.
+
+`FxQuote.can_trade` separately intersects full metadata side permissions,
+API/BESTPRICE flags, own side-specific lot caps, own BUY money and the caller's
+fresh `ExecutionSnapshot` readiness/cash. No margin limits, inferred TOM
+calendar delay, reserve subtraction, price parameter or GetOrderPrice is added.
+Transport errors preserve their cause with a fixed safe public reason.
+`test/test_fx.py` and `test/test_tinvest_fx_data.py` verify these pure/read
+boundaries offline with autospecced ports and unwrapped SDK services.
+The layer is not wired into working valuation, funding or submission yet.
 
 INFO diagnostics list loading, portfolio/currency/security/exchange blockers,
 active order IDs/UIDs/statuses/lot counts, expected versus actual quantities,
