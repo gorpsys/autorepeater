@@ -1,6 +1,7 @@
 """Explicit sandbox selection at the application boundary, without SDK connections."""
 import inspect
 from dataclasses import fields
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, call, create_autospec, patch
 
@@ -171,6 +172,12 @@ def test_sandbox_wiring_finite_public_sync(wiring, source_id):
         instrument=sdk.Instrument(uid='uid', ticker='TEST', name='Synthetic',
                                   instrument_type='share', class_code='ANY', lot=1,
                                   currency='rub', api_trade_available_flag=True))
+    services.instruments.currency_by.return_value = sdk.CurrencyResponse(instrument=sdk.Currency(
+        uid='cash', iso_currency_name='RUB'))
+    services.market_data.get_order_book.return_value = sdk.GetOrderBookResponse(
+        instrument_uid='uid', orderbook_ts=datetime.now(timezone.utc),
+        bids=[sdk.Order(price=sdk.Quotation(units=10, nano=0), quantity=100)],
+        asks=[sdk.Order(price=sdk.Quotation(units=10, nano=0), quantity=100)])
     services.market_data.get_trading_status.return_value = sdk.GetTradingStatusResponse(
         instrument_uid='uid', api_trade_available_flag=True, bestprice_order_available_flag=True)
     services.orders.get_max_lots.return_value = sdk.GetMaxLotsResponse(
@@ -189,8 +196,14 @@ def test_sandbox_wiring_finite_public_sync(wiring, source_id):
         call.get_portfolio(account_id=source_id), call.get_portfolio(account_id='dst'),
         call.get_positions(account_id='dst')]
     assert services.instruments.mock_calls == [
+        call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid'),
+        call.currency_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='cash'),
+        call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid'),
         call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid')]
-    assert services.market_data.mock_calls == [call.get_trading_status(instrument_id='uid')]
+    assert services.market_data.mock_calls == [
+        call.get_order_book(instrument_id='uid', depth=1),
+        call.get_trading_status(instrument_id='uid'),
+        call.get_order_book(instrument_id='uid', depth=1)]
     assert services.orders.mock_calls == [
         call.get_orders(account_id='dst'),
         call.get_max_lots(request=ANY),

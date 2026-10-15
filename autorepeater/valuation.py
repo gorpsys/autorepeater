@@ -1,5 +1,5 @@
 """Pass-local RUB marks, retaining original broker prices and native settlement units."""
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -7,6 +7,7 @@ from typing import Protocol
 
 from autorepeater.cash_facts import MoneyAmount, SecurityQuote, currency_code
 from autorepeater.fx import FxSnapshot
+from autorepeater.fx_data import FxData
 from autorepeater.strategy_data import (
     InstrumentType, PortfolioSnapshot, PriceQuote, StrategyData,
 )
@@ -20,6 +21,13 @@ class SecurityData(Protocol):
 
     def get_cash_currency(self, uid: str) -> str:
         """Return actual ISO currency from currency metadata, never current_price.currency."""
+
+
+@dataclass(frozen=True)
+class ValuationSources:
+    """Optional read-only capability of an adapter, independent of the StrategyData port."""
+    fx: FxData
+    securities: SecurityData
 
 
 class Valuation:
@@ -49,6 +57,14 @@ class Valuation:
             self._prices[uid] = self._data.get_security_quote(uid).estimate_per_piece()
         return self._prices[uid]
 
+    def to_rub(self, amount: MoneyAmount) -> MoneyAmount:
+        """One conversion boundary also lets runtime discover the required currencies."""
+        return self.fx.to_rub(amount)
+
+    def refresh_books(self) -> None:
+        """Read new native prices after effects without rebuilding targets or ownership."""
+        self._prices.clear()
+
     def portfolio(self, portfolio: PortfolioSnapshot) -> PortfolioSnapshot:
         """Enrich, never overwrite broker fields; cash enters capital exactly once."""
         positions = []
@@ -60,12 +76,13 @@ class Valuation:
                 currency = self._cash[entry.uid]
                 cash = MoneyAmount(currency, entry.quantity)
                 entry = replace(entry, native_cash=cash, native_price=Decimal(1),
-                                settlement_currency=currency, rub_price=self.fx.rate(currency))
+                                settlement_currency=currency,
+                                rub_price=self.to_rub(MoneyAmount(currency, Decimal(1))).amount)
             else:
                 native = self.security(entry.uid)
                 entry = replace(entry, native_price=native.amount,
                                 settlement_currency=native.currency,
-                                rub_price=self.fx.to_rub(native).amount)
+                                rub_price=self.to_rub(native).amount)
             positions.append(entry)
         return PortfolioSnapshot(tuple(positions))
 
@@ -102,7 +119,7 @@ class ValuedStrategyData:
         result = []
         for uid in uids:
             native = self._valuation.security(uid)
-            result.append(PriceQuote(uid, self._valuation.fx.to_rub(native).amount,
+            result.append(PriceQuote(uid, self._valuation.to_rub(native).amount,
                                      None, native.amount, native.currency))
         return result
 

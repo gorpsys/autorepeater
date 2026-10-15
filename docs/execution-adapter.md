@@ -141,11 +141,11 @@ cloud deployment acceptance; those checks require separate authorization.
 
 `cash_facts.py` and the minimal `FxLotQuote` in `fx_data.py` establish pure
 contracts for the multicurrency implementation. SDK `ExecutionReceipt.cash={}`
-remains unchanged. The pure funding planner now consumes these contracts via
-an explicit input; automatic FX execution remains disconnected.
+remains unchanged. The pure funding planner consumes these contracts through
+an explicit input; SDK runtime connects them through `ExecutionMarket`.
 Direct-pair discovery and timestamp freshness are now provided by the separate
 read-only FX layer below. Reserve allocation belongs to the pure funding layer;
-FX submission and dependent purchase orchestration remain later steps.
+FX submission and dependent purchase orchestration are described below.
 
 `MoneyAmount` carries explicit native currency and exact Decimal units. Its
 units/nano constructor rejects bools, nonintegers, out-of-range nanos and
@@ -250,8 +250,8 @@ calendar delay, reserve subtraction, price parameter or GetOrderPrice is added.
 Transport errors preserve their cause with a fixed safe public reason.
 `test/test_fx.py` and `test/test_tinvest_fx_data.py` verify these pure/read
 boundaries offline with autospecced ports and unwrapped SDK services.
-The layer has no automatic runtime wiring or submission yet. An explicit
-valuation pass can consume its immutable snapshot as described below.
+The SDK runtime exposes these sources explicitly; neither read adapter submits
+orders. Explicit and runtime valuation share their calculation rates below.
 
 ### Explicit RUB Valuation Pass
 
@@ -259,10 +259,13 @@ valuation pass can consume its immutable snapshot as described below.
 `FxSnapshot` to all ACCOUNT/INDEX leaves, including nested COMPOSITE children,
 and to the destination adapter. The destination must return that exact snapshot.
 The pass clears cached security books/currency identities and rejects stale FX
-before account reads. The legacy call without a valuation remains compatible;
-automatic runtime wiring and FX financing are deferred to later implementation
-steps. An explicit pass with foreign security trade rules rejects execution
-before any order; debug can inspect its RUB plan without submission.
+before account reads. The legacy call without a market remains compatible.
+Explicit valuation without FX execution still rejects foreign trading before
+effects. Runner obtains optional `ValuationSources` from the actual SDK strategy
+adapter and constructs `ExecutionMarket`; neutral adapters without that capability
+retain their original interface and RUB path. Runtime discovers currencies during
+read-only loading, fixing each midpoint once before the financial tree is built.
+Debug constructs the same native funding plan without submission.
 
 `TInvestSecurityData` reads matching metadata and depth-one security books,
 checks positive two-sided levels and timezone-aware market time up to 60 seconds
@@ -303,8 +306,8 @@ and leaf security spending ceilings are preserved. The existing absolute monetar
 priority queue supplies both RUB and foreign-currency demands. Current zero
 GetMaxLots caused by missing currency retains a conditional demand; it supplies
 no invented future cap. Only refreshed broker facts may authorize it after FX.
-The legacy `OrderPlan.buys` and the stage3 runtime guard remain in place;
-no SDK FX mutation, new BESTPRICE parameter or automatic runtime wiring is added.
+The legacy `OrderPlan.buys` remains available; SDK runtime consumes
+`OrderPlan.funding` through the separate executor below.
 
 `CashPools` stores immutable native balances by owner/path and protected funds.
 RUB security spending ceilings exclude reserve once; actual/own money bounds
@@ -331,9 +334,54 @@ security needs are retained before selling surplus currency; reserve shortages
 and fees alone do not justify a reverse exchange. Reverse RUB credits and lot
 surplus cannot fund another foreign exchange in the same pass. Fees debit the
 original owner; security midpoint already includes ACI once. Runtime readiness,
-preflight for all planned currencies and GetMaxLots refresh after confirmed FX
-remain the execution integration step, without operation-history/GetOrderPrice
-dependencies or live acceptance claims.
+preflight and fresh GetMaxLots use the executor below, without operation-history/
+GetOrderPrice dependencies or live acceptance claims.
+
+### Confirmed FX Runtime
+
+`ExecutionMarket` connects the pure plan, `FxData`, `SecurityData` and
+`OrderExecutor`; it imports no SDK. `TInvestStrategyData.valuation_sources` is
+an optional read-only capability initialized without RPCs. Actual Runner
+CLI/cloud launches obtain readers from their selected client; neutral adapters
+need not implement this SDK capability. Shared scalar SDK checks live in
+`tinvest_validation.py`, avoiding a cycle through the strategy converter.
+
+Before any order, validate the entire financial plan and union settlement
+currencies of sales and conditional purchase demands across all leaves, plus
+planned exchanges. This includes zero current native caps, existing native
+balances and foreign-paper sales without FX. Closed required currency trading
+defers the entire tree, including independent RUB orders. Settlement currency
+controls the check, not bond nominal currency. Pure no-op reads valuation books
+without currency status/caps. Execution refreshes books independently of frozen
+targets and original owner spending ceilings; expired FX is reread and market
+age is checked before effects.
+
+FX uses the same BESTPRICE SDK boundary with one request ID and no price.
+Its physical intent describes base-currency units, not an owned-security sale.
+NEW/PARTIALLYFILL for either FX direction polls the broker ID within30 seconds
+at two-second intervals. Full matching FILL is mandatory; malformed identity,
+rejection, timeout and transport uncertainty never permit a dependent order or
+automatic repeat/cancel/rollback.
+
+`ExecutionReceipt.amounts` optionally retains native total and executed commission
+from PostOrder/OrderState separately from identity equality and exact `cash`.
+Complete matching same-currency fields supply only the conservative V5 bound.
+Forward FX debits the upper RUB bound and credits confirmed base lots; reverse
+FX debits base lots and credits the lower RUB bound. Owner contributions and
+debit limits constrain both. Fresh available money, readiness, matching physical
+holdings and new own GetMaxLots must also permit each subsequent buy. Incomplete
+monetary facts still cause a fresh account/cap read after FX, then defer dependencies
+without fabricating exact `cash` or attributing a balance delta.
+
+After each buy, conservative owner debits include the observed fee bound;
+remaining security ceilings debit the total conservatively without adding ACI.
+Floor is never subtracted from actual/own money. Further buys wait for fresh
+readiness/positions and reread caps. Bought UIDs and FX routes are not resubmitted
+in this pass. Reverse RUB proceeds cannot finance another foreign route, and
+currency remainders are never automatically exchanged back. All security-sale
+receipts participate together in shared/scoped funding; a late common seller
+cannot unlock earlier unknown isolated proceeds (#9). Price/cap changes can
+leave confirmed FX as the final partial result.
 
 INFO diagnostics list loading, portfolio/currency/security/exchange blockers,
 active order IDs/UIDs/statuses/lot counts, expected versus actual quantities,

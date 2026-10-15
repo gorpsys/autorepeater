@@ -16,6 +16,7 @@ from autorepeater.strategy_contract import PreparedStrategy
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
 from autorepeater.tinvest_execution_data import TInvestExecutionData
 from autorepeater.order_execution import TInvestOrderExecutor
+from autorepeater.execution_market import ExecutionMarket
 
 
 @dataclasses.dataclass
@@ -71,7 +72,9 @@ class Runner:
     def _create_repeater(self, client: Services) -> AutoRepeater:
         """Apply the same risk parameters in both launch modes."""
         data = TInvestStrategyData(client)
+        sources = getattr(data, 'valuation_sources', None)
+        market = ExecutionMarket(sources.fx, sources.securities) if sources is not None else None
         autorepeater = AutoRepeater(self.strategy, data, TInvestExecutionData(client, data),
-                                    TInvestOrderExecutor(client))
+                                    TInvestOrderExecutor(client), market=market)
         autorepeater.set_debug(self.params.debug)
         return autorepeater

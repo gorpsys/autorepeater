@@ -11,26 +11,11 @@ from autorepeater.money import format_decimal, format_decimal_map
 from autorepeater.strategy_data import DataAccessError, InstrumentType
 from autorepeater.tinvest_requests import call_api
 from autorepeater.tinvest_strategy_data import _decimal_value
+from autorepeater.tinvest_validation import (
+    sdk_bool as _bool, sdk_count as _count, sdk_text as _text,
+)
 
 NANO = Decimal('0.000000001')
-
-
-def _text(value, field):
-    if not isinstance(value, str) or not value or any(char.isspace() for char in value):
-        raise ValueError(f'{field} must be a nonempty string without whitespace')
-    return value
-
-
-def _bool(value, field):
-    if not isinstance(value, bool):
-        raise ValueError(f'{field} must be bool')
-    return value
-
-
-def _count(value, field):
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f'{field} must be a nonnegative integer')
-    return value
 
 
 def _decimal(value, field, nonnegative=False):

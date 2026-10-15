@@ -20,6 +20,9 @@ from autorepeater.strategy_data import PositionEvent
 from autorepeater.strategy_data import PriceQuote
 from autorepeater.strategy_data import SecurityBlocking
 from autorepeater.tinvest_requests import call_api
+from autorepeater.tinvest_fx_data import TInvestFxData
+from autorepeater.tinvest_security_data import TInvestSecurityData
+from autorepeater.valuation import ValuationSources
 
 
 NANO_FACTOR = Decimal('1000000000')
@@ -79,6 +82,8 @@ class TInvestStrategyData:
 
     def __init__(self, client: Services) -> None:
         self._client = client
+        self.valuation_sources = ValuationSources(
+            TInvestFxData(client), TInvestSecurityData(client))
         self._instrument_cache = None
         self._catalogs = {}
         self._match_types = {}

@@ -159,13 +159,13 @@ def _sale_capacities(strategy: StrategyPlan,
 
 def sale_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                  ownership: dict[tuple[int, ...], dict[str, Decimal]],
-                 rules: dict[str, TradeRules]) -> tuple[OrderIntent, ...]:
+                 rules: dict[str, TradeRules], *, native: bool = False) -> tuple[OrderIntent, ...]:
     # pylint: disable=too-many-locals
     """Net physical excess, then round once within free and permitted ownership."""
     result = []
     for uid, current in sorted(snapshot.quantities.items()):
         rule = rules.get(uid)
-        if (rule is None or rule.currency != 'rub' or not rule.api_trade_available
+        if (rule is None or rule.currency != 'rub' and not native or not rule.api_trade_available
                 or not rule.bestprice_order_available):
             LOGGER.info('Defer SELL UID %s: currency or API/BESTPRICE unavailable', uid)
             continue
@@ -214,7 +214,7 @@ def build_order_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                            spending_limits(strategy, ownership, marks))
     sells, buys = (), ()
     if ready(snapshot):
-        sells = sale_intents(strategy, snapshot, ownership, rules)
+        sells = sale_intents(strategy, snapshot, ownership, rules, native=funding is not None)
         buys = purchase_intents(strategy, snapshot, ownership, marks, rules, money)
     funding_plan = None
     if funding is not None:

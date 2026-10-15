@@ -9,7 +9,9 @@ from t_tech.invest.services import Services
 from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_data import ExecutionDataError, TradeRules
 from autorepeater.fx_data import FxPair, FxQuote
-from autorepeater.tinvest_execution_data import _bool, _count, _text
+from autorepeater.tinvest_validation import (
+    sdk_bool as _bool, sdk_count as _count, sdk_text as _text,
+)
 from autorepeater.tinvest_requests import call_api
 
 

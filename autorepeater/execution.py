@@ -1,11 +1,12 @@
 """Neutral receipts and one-pass execution, without SDK dependencies."""
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 import logging
 from time import monotonic, sleep
 from typing import Protocol
 
+from autorepeater.cash_facts import OrderAmounts
 from autorepeater.cash_pools import sale_paths as _sale_paths
 from autorepeater.execution_data import (
     ExecutionData, ExecutionDataError, ExecutionSnapshot, TradeRules,
@@ -44,6 +45,7 @@ class ExecutionReceipt:  # pylint: disable=too-many-instance-attributes
     lots_requested: int
     lots_executed: int
     cash: dict[str, Decimal]
+    amounts: OrderAmounts | None = field(default=None, compare=False)
 
 
 class OrderExecutor(Protocol):  # pylint: disable=too-few-public-methods
@@ -100,7 +102,8 @@ def _wait_for_order(account_id: str, intent: OrderIntent, executor: OrderExecuto
     return receipt
 
 
-def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor) -> ExecutionReceipt:
+def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor, *,
+            wait: bool = False) -> ExecutionReceipt:
     LOGGER.info('Submitting order: account=%s uid=%s side=%s lots=%d',
                 account_id, intent.uid, intent.side, intent.lots)
     try:
@@ -108,7 +111,7 @@ def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor) -> Ex
     except OrderExecutionError:
         LOGGER.error('Stopping pass: unknown order result UID %s side %s', intent.uid, intent.side)
         raise
-    if intent.side == 'SELL' and _receipt_matches(receipt, intent):
+    if (wait or intent.side == 'SELL') and _receipt_matches(receipt, intent):
         receipt = _wait_for_order(account_id, intent, executor, receipt)
     valid = (_receipt_matches(receipt, intent) and receipt.status == 'FILL'
              and receipt.lots_executed == intent.lots)
@@ -129,10 +132,11 @@ def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor) -> Ex
     return receipt
 
 
-def _fresh(account_id: str, data: ExecutionData, uids: Sequence[str]
+def _fresh(account_id: str, data: ExecutionData, uids: Sequence[str], *, valuation=None
            ) -> tuple[ExecutionSnapshot, dict[str, TradeRules]]:
     try:
-        snapshot = data.get_destination(account_id)
+        snapshot = (data.get_destination(account_id) if valuation is None
+                    else data.get_destination(account_id, valuation=valuation))
         LOGGER.info('Execution refresh: account=%s budget=%s available_cash=%s '
                     'limits_ready=%s active_orders=%d', account_id, format_decimal(snapshot.budget),
                     format_decimal_map(snapshot.available_cash), snapshot.limits_ready,

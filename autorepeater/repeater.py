@@ -6,6 +6,7 @@ from autorepeater.execution import (
     ExecutionReceipt, OrderExecutionError, OrderExecutor, execute_plan,
 )
 from autorepeater.execution_data import ExecutionData, ExecutionDataError, ExecutionSnapshot
+from autorepeater.execution_market import ExecutionMarket
 from autorepeater.logging_config import logger
 from autorepeater.order_plan import build_order_plan
 from autorepeater.purchase_plan import nodes
@@ -52,11 +53,12 @@ class AutoRepeater:
     """Check strategy policy from neutral reads, then execute its bounded plan."""
 
     def __init__(self, strategy: Strategy, data: StrategyData, execution_data: ExecutionData,
-                 executor: OrderExecutor) -> None:
+                 executor: OrderExecutor, *, market: ExecutionMarket | None = None) -> None:
         self.strategy = validate_strategy(strategy)
         self.data = data
         self.execution_data = execution_data
         self.executor = executor
+        self.market = market
         self.debug = False
 
     def set_debug(self, debug: bool) -> None:
@@ -85,6 +87,8 @@ class AutoRepeater:
         """Validate every main target before reading rules or sending any order."""
         try:
             self.data.begin_snapshot()
+            if valuation is None and self.market is not None:
+                valuation = self.market.valuation()
             if valuation is not None:
                 valuation.begin_pass()
             data = self.data if valuation is None else valuation.strategy_data(self.data)
@@ -99,14 +103,21 @@ class AutoRepeater:
                 uid for node in nodes(plan) for uid in node.target.quantities})
             ownership = plan_ownership(plan)
             rules = self.execution_data.get_trade_rules(dst_account_id, uids)
+            funding = (self.market.funding_inputs(
+                dst_account_id, valuation, uids, trading=self.market.needs_trading(
+                    plan, destination, ownership, marks, rules))
+                       if self.market is not None and valuation is not None else None)
             orders = build_order_plan(
-                plan, destination, ownership, marks, rules)
+                plan, destination, ownership, marks, rules, funding=funding)
         except ValueError as error:
             logger.error('Rebalance rejected for destination %s: %s', dst_account_id, error)
             raise
         reporting.print_rebalance_plan(orders, self.debug)
         if self.debug:
             return ()
+        if self.market is not None and valuation is not None:
+            return self.market.execute(dst_account_id, orders, self.execution_data,
+                                       self.executor, valuation)
         if valuation is not None:
             valuation.validate_fresh()
             if any(rule.currency.lower() != 'rub' for rule in rules.values()):
