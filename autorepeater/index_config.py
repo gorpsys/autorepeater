@@ -43,7 +43,7 @@ class IndexReferenceUnits:
 
 
 @dataclass
-class IndexConfig:
+class IndexConfig:  # pylint: disable=too-many-instance-attributes
     """Composition, error limit for ideal lots < 1, and minimum target value."""
     name: str
     max_lot_weight_error: Decimal
@@ -52,6 +52,7 @@ class IndexConfig:
     allocation_drift_limits: tuple[AllocationDriftRange, ...]
     min_position_value: Decimal = Decimal(0)
     reference_units: IndexReferenceUnits = field(default_factory=IndexReferenceUnits)
+    preferred_currency: str = 'rub'
 
 
 _INSTRUMENT_RANGES = {
@@ -166,6 +167,10 @@ def validate_index_config(data: object) -> IndexConfig:
     """Validate an already parsed document without filesystem access."""
     if not isinstance(data, dict):
         raise ValueError('index config: expected an object')
+    try:
+        preferred_currency = _reference_currency(data.get('preferred_currency', 'rub'))
+    except ValueError as error:
+        raise ValueError('index config.preferred_currency: invalid or unknown currency') from error
     name = data.get('name')
     if not isinstance(name, str) or not name or any(char.isspace() for char in name):
         raise ValueError('name: expected a nonempty name without whitespace')
@@ -191,7 +196,7 @@ def validate_index_config(data: object) -> IndexConfig:
         instruments.append(instrument)
     return IndexConfig(
         data['name'], max_error, instruments, reserve, _load_drift_ranges(data), minimum,
-        units)
+        units, preferred_currency)
 
 
 def read_index_document(path: str | Path) -> object:

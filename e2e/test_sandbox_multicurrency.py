@@ -10,10 +10,11 @@ import pytest
 from t_tech.invest import InstrumentIdType, OrderDirection
 
 from autorepeater import reporting
-from autorepeater.cash_facts import MoneyAmount
+from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.fx_data import FxPair, FxQuote
 from autorepeater.market_diagnostics import instrument_facts, safe_symbol
+from autorepeater.instrument_selection import prefer_instrument_currency
 from autorepeater.order_plan import OrderIntent, OrderPlan
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.purchase_plan import leaves
@@ -27,6 +28,9 @@ from scripts.sandbox_multicurrency import (
 )
 from scripts.sandbox_support import FILL, SandboxSession
 from e2e.test_sandbox import LiveCase, _run_application, create_account
+
+
+PREFERRED_CURRENCY = 'CNY'
 
 
 @dataclass(frozen=True)
@@ -64,15 +68,31 @@ def _selection_failure(session, request, matches, facts, outcome):
     }), flush=True)
 
 
+def _preferred_candidates(session, request, matches, facts, candidates):
+    """Explain preference using the bounded facts and the full metadata already read."""
+    try:
+        candidates = prefer_instrument_currency(candidates, request['preferred_currency'])
+    except ValueError:
+        _selection_failure(session, request, matches, facts, ('invalid_currency', 'incomplete'))
+        raise
+    eligible_uids = {item.uid for item in candidates}
+    for fact in facts:
+        if fact['reason'] == 'eligible' and fact['uid'] not in eligible_uids:
+            fact['reason'] = 'nonpreferred_currency'
+    return candidates
+
+
 def _unique(session: SandboxSession, query: str, *, ticker: str | None = None,
-            expected: tuple[InstrumentType, str] | None = None) -> InstrumentInfo:
+            expected: tuple[InstrumentType, str] | None = None,
+            preferred_currency: str = 'rub') -> InstrumentInfo:
     request = {'query': safe_symbol(query),
                'requested_ticker': ('unspecified' if ticker is None
                                     else safe_symbol(ticker, limit=32)),
                'requested_kind': 'unspecified' if expected is None else safe_symbol(expected[0]),
                'requested_currency': ('unspecified' if expected is None
                                       else safe_symbol(expected[1])),
-               'requested_class': 'unspecified'}
+               'requested_class': 'unspecified',
+               'preferred_currency': currency_code(preferred_currency)}
     matches = session.data.find_instruments(query)
     candidates, facts = [], []
     for match in matches:
@@ -98,12 +118,14 @@ def _unique(session: SandboxSession, query: str, *, ticker: str | None = None,
                 ('kind', fact['kind'], expected[0]), ('currency', fact['currency'], expected[1]))
                 if actual != wanted]
         candidates.append(item)
-    candidates = [item for item in candidates if item.api_trade_available]
+    candidates = [item for item in candidates if item.api_trade_available is True]
+    candidates = _preferred_candidates(session, request, matches, facts, candidates)
     if len(candidates) != 1:
         reason = ('no_candidates' if not matches else 'no_eligible_candidates'
                   if not candidates else 'ambiguous')
         _selection_failure(session, request, matches, facts, (reason, len(candidates)))
-    elif any(fact.get('metadata_issues') for fact in facts):
+    elif expected is not None and (
+            candidates[0].instrument_type, candidates[0].currency.lower()) != expected:
         _selection_failure(session, request, matches, facts,
                            ('metadata_expectation_mismatch', len(candidates)))
     require(len(candidates) == 1, 'multicurrency setup requires unique available instrument')
@@ -114,8 +136,10 @@ def catalog(session: SandboxSession) -> CurrencyCatalog:
     """Complete metadata/books/permission preflight before setup sends any order."""
     sources = session.data.valuation_sources
     session.market = ExecutionMarket(sources.fx, sources.securities)
-    rub = _unique(session, 'SBER', ticker='SBER', expected=(InstrumentType.SHARE, 'rub'))
-    bond = _unique(session, 'RU000A105104', expected=(InstrumentType.BOND, 'cny'))
+    rub = _unique(session, 'SBER', ticker='SBER', expected=(InstrumentType.SHARE, 'rub'),
+                  preferred_currency=PREFERRED_CURRENCY)
+    bond = _unique(session, 'RU000A105104', expected=(InstrumentType.BOND, 'cny'),
+                   preferred_currency=PREFERRED_CURRENCY)
     currency = _unique(session, 'CNYRUB_TOM', ticker='CNYRUB_TOM',
                        expected=(InstrumentType.CURRENCY, 'rub'))
     full = safe_call(session.client.instruments.bond_by,
@@ -309,6 +333,7 @@ def configure(live: LiveCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     for name in ('IMOEX_CONFIG_PATH', 'ACCOUNT_CONFIG_PATH'):
         monkeypatch.delenv(name, raising=False)
     base = {'reserve': '0.15', 'max_lot_weight_error': '0.05', 'min_position_value': '0',
+            'preferred_currency': PREFERRED_CURRENCY,
             'reference_capitalization_currency': 'rub',
             'allocation_drift_limits': [{'budget_from': '0', 'budget_to': None,
                                         'upper_inclusive': False, 'limit': '0.10'}]}

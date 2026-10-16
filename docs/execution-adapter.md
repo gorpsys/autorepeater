@@ -300,6 +300,16 @@ substitute. Cash is excluded from target securities. The valuation layer does no
 grant money ownership; native funding and reserve rules are described below.
 
 INDEX stores historical reference units separately in `IndexReferenceUnits`.
+The optional root INDEX `preferred_currency` defaults to RUB and is fixed in
+`IndexConfig` during preparation. It reaches the pure selector over full SDK
+metadata: among API-available instruments matching the exact ticker and accepted
+type, prefer those with matching actual currency, ignoring case. If no currency
+matches, only a singleton available set is accepted. Several preferred matches
+or several fallback candidates fail as ambiguous. Missing or malformed live
+currency fails without an inferred RUB; actual UID/currency metadata is retained.
+The selector reuses loaded metadata and adds no RPCs. Currency sandbox scenarios
+explicitly configure CNY and use the same preference in their setup helper.
+This preference is independent of historical reference units below.
 Missing JSON currencies mean RUB even for a security trading in CNY. An explicit
 foreign reference price or capitalization currency requires a positive historical
 `reference_fx_rate` in capitalization units per price-currency unit; equal

@@ -9,6 +9,7 @@ from autorepeater.index_config import (
     select_index_config,
 )
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.instrument_selection import prefer_instrument_currency
 from autorepeater.rebalance_policy import leaf_decision
 from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_contract import PreparationContext
@@ -62,7 +63,8 @@ def _load_index_candidate(data: StrategyData, match: InstrumentMatch,
 
 
 def _resolve_index_instrument(data: StrategyData, ticker: str,
-                              resolved: dict[str, InstrumentInfo]) -> InstrumentInfo:
+                              resolved: dict[str, InstrumentInfo],
+                              preferred_currency: str = 'rub') -> InstrumentInfo:
     exact = [item for item in data.find_instruments(ticker) if item.ticker == ticker]
     matches = [item for item in exact if item.instrument_type in INDEX_TYPES]
     if not matches:
@@ -77,9 +79,11 @@ def _resolve_index_instrument(data: StrategyData, ticker: str,
     if not available:
         details = ', '.join(f'{item.uid}/{item.class_code}' for item in candidates) or 'none'
         raise ValueError(f'no index instrument: {ticker} available via API; candidates: {details}')
-    chosen = available[0]
+    available = prefer_instrument_currency(available, preferred_currency)
     if len(available) > 1:
-        reporting.print_index_selection_warning(ticker, chosen, available)
+        raise ValueError(f'ambiguous index instrument: {ticker}; '
+                         f'preferred currency: {preferred_currency}')
+    chosen = available[0]
     reporting.print_index_instrument_selected(chosen)
     return chosen
 
@@ -102,7 +106,8 @@ class IndexStrategy:
         """Resolve the entire base anew; unavailable data aborts the calculation."""
         instruments = {}
         for item in self.config.instruments:
-            instrument = _resolve_index_instrument(data, item.ticker, instruments)
+            instrument = _resolve_index_instrument(
+                data, item.ticker, instruments, self.config.preferred_currency)
             instruments[instrument.uid] = instrument
         response = data.get_last_prices(list(instruments))
         prices = {}

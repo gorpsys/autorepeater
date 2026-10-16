@@ -1,5 +1,6 @@
 """Run the new live harness offline against strict SDK services and native cash facts."""
 from datetime import datetime, timezone
+from dataclasses import replace
 from decimal import Decimal as D
 import inspect
 import logging
@@ -252,6 +253,17 @@ def test_preflight_failure_never_creates_accounts_or_orders(offline_live, fault)
     broker.client.orders.post_order.assert_not_called()
 
 
+def test_setup_uses_index_preference_for_all_security_queries(offline_live):
+    """A newly available CNY SBER must fail the RUB guard, not mismatch runtime selection."""
+    live, broker = offline_live
+    cny_share = replace(broker.metadata['R'], uid='SBER-CNY', currency='cny', class_code='CNY')
+    broker.metadata = {'SBER-CNY': cny_share, **broker.metadata}
+    with pytest.raises(SandboxFailure, match='invalid settlement currency'):
+        scenarios.catalog(live[0])
+    broker.client.sandbox.open_sandbox_account.assert_not_called()
+    broker.client.orders.post_order.assert_not_called()
+
+
 def test_currency_dump_keeps_native_money_and_commissions(offline_live, tmp_path, monkeypatch):
     """A successful monetary check must also survive the real finalizer's JSON boundary."""
     import json  # pylint: disable=import-outside-toplevel
@@ -265,3 +277,29 @@ def test_currency_dump_keeps_native_money_and_commissions(offline_live, tmp_path
     assert any(event['event'] == 'currency_app_pass' and 'cny' in event['fees']
                for event in result['events'])
     assert all('error' not in account for account in result['accounts'].values())
+
+
+@pytest.mark.parametrize('scenario,args', [
+    (scenarios.test_rub_cny_normal_application, ('INDEX', 'CROSS')),
+    (scenarios.test_rub_cny_normal_application, ('COMPOSITE', 'MIX')),
+    (scenarios.test_rub_cny_normal_application, ('ACCOUNT', 'MIXED')),
+    (scenarios.test_shared_cny_owners_and_unallocated_cash, ()),
+    (scenarios.test_existing_cny_before_lot_rounding, ('sufficient',)),
+    (scenarios.test_existing_cny_before_lot_rounding, ('partial',)),
+    (scenarios.test_reverse_exchange_only_for_rub_purchase, ()),
+    (scenarios.test_isolated_sale_does_not_fund_sibling, ()),
+])
+def test_all_currency_scenarios_with_competing_rub_bond(
+        offline_live, tmp_path, monkeypatch, scenario, args):
+    """The original eight scenarios must select CNY even when RUB is returned first."""
+    live, broker = offline_live
+    rub_bond = replace(broker.metadata['C'], uid='RUB-BOND', currency='rub', class_code='TQCB')
+    broker.metadata = {'RUB-BOND': rub_bond, **broker.metadata}
+    scenario(live, tmp_path, monkeypatch, *args)
+    configs = [value for value in live[0].configs.values() if 'instruments' in value]
+    assert len(configs) == 3
+    assert all(value['preferred_currency'] == 'CNY' for value in configs)
+    assert not any(call.kwargs.get('instrument_id') == 'RUB-BOND'
+                   for call in broker.client.orders.post_order.call_args_list)
+    broker.client.orders.get_order_price.assert_not_called()
+    broker.client.operations.get_operations.assert_not_called()
