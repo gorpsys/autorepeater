@@ -7,7 +7,10 @@ from t_tech.invest.services import Services
 
 from autorepeater.cash_facts import MoneyAmount, SecurityQuote, SecurityQuoteUnit, currency_code
 from autorepeater.fx_data import market_timestamp
-from autorepeater.market_diagnostics import warn_book_failure
+from autorepeater.fx_diagnostics import sdk_metadata_facts
+from autorepeater.market_diagnostics import (
+    BookTiming, diagnostic_operation, measure_stage, warn_book_failure,
+)
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.tinvest_requests import call_api
 
@@ -46,6 +49,7 @@ class TInvestSecurityData:
         self._client = client
         self._clock = clock if clock is not None else lambda: datetime.now(timezone.utc)
 
+    @measure_stage('security.metadata')
     def _instrument(self, method, uid):
         response = _read(method, id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
         if response.instrument is None or response.instrument.uid != uid:
@@ -71,9 +75,14 @@ class TInvestSecurityData:
             unit = SecurityQuoteUnit.PERCENT_NOMINAL
         elif item.instrument_type not in ('share', 'etf'):
             raise ValueError('unsupported security quotation units')
-        book = _read(self._client.market_data.get_order_book, instrument_id=uid, depth=1)
+        timing = BookTiming('security.book', sdk_metadata_facts(item))
+        with diagnostic_operation('security.book'):
+            book = _read(self._client.market_data.get_order_book, instrument_id=uid, depth=1)
+        timing.received()
         now = self._clock()
-        warn_book_failure(uid, book.instrument_uid, book.orderbook_ts, now)
+        timing.checked()
+        warn_book_failure(uid, book.instrument_uid, book.orderbook_ts, now,
+                          timing=timing)
         market_timestamp(now)
         market_timestamp(book.orderbook_ts)
         if book.instrument_uid != uid or not timedelta(0) <= now - book.orderbook_ts <= timedelta(

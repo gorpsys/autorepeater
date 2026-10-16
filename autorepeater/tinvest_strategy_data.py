@@ -9,7 +9,7 @@ from t_tech.invest import (
 from t_tech.invest.services import Services
 
 from autorepeater.logging_config import logger
-from autorepeater.market_diagnostics import warn_metadata_failure
+from autorepeater.market_diagnostics import measure_stage, warn_metadata_failure
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.strategy_data import InstrumentInfo
 from autorepeater.strategy_data import InstrumentMatch
@@ -107,10 +107,12 @@ class TInvestStrategyData:
         return PortfolioSnapshot(positions=tuple(
             self._portfolio_entry(position) for position in response.positions))
 
+    @measure_stage('metadata.find')
     def find_instruments(self, query: str) -> list[InstrumentMatch]:
         """Return ordered short metadata without loading full instruments."""
         try:
-            response = call_api(self._client.instruments.find_instrument, query=query)
+            with measure_stage('metadata.find.request'):
+                response = call_api(self._client.instruments.find_instrument, query=query)
         except RequestError as error:
             raise _transport_error(error) from error
 
@@ -127,6 +129,7 @@ class TInvestStrategyData:
         self._match_types.update((item.uid, item.instrument_type) for item in matches)
         return matches
 
+    @measure_stage('metadata.catalog_lookup')
     def _catalog_instrument(self, uid: str) -> InstrumentInfo | None:
         instrument_type = self._match_types.get(uid)
         methods = {InstrumentType.SHARE: self._client.instruments.shares,
@@ -135,8 +138,9 @@ class TInvestStrategyData:
             return None
         if instrument_type not in self._catalogs:
             try:
-                response = call_api(methods[instrument_type],
-                                    instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
+                with measure_stage('metadata.catalog.request'):
+                    response = call_api(methods[instrument_type],
+                                        instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
             except RequestError as error:
                 raise _transport_error(error) from error
             catalog = {}
@@ -149,6 +153,7 @@ class TInvestStrategyData:
                         instrument_type, len(catalog))
         return self._catalogs[instrument_type].get(uid)
 
+    @measure_stage('metadata.instrument')
     def get_instrument(self, uid: str) -> InstrumentInfo:
         """Use full catalogs for search candidates and direct reads for other UIDs."""
         if self._instrument_cache is not None and uid in self._instrument_cache:
@@ -156,8 +161,9 @@ class TInvestStrategyData:
         info = self._catalog_instrument(uid) if self._instrument_cache is not None else None
         if info is None:
             try:
-                response = call_api(self._client.instruments.get_instrument_by,
-                                    id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
+                with measure_stage('metadata.instrument.request'):
+                    response = call_api(self._client.instruments.get_instrument_by,
+                                        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
             except RequestError as error:
                 raise _transport_error(error) from error
             instrument = response.instrument

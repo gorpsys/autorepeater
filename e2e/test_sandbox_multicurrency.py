@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal as D, ROUND_FLOOR
 import json
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,7 +14,10 @@ from autorepeater import reporting
 from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.fx_data import FxPair, FxQuote
-from autorepeater.market_diagnostics import instrument_facts, safe_symbol
+from autorepeater.fx_diagnostics import requested_pair, scalar_fact, sdk_metadata_facts
+from autorepeater.market_diagnostics import (
+    emit_market_fact, instrument_facts, measure_stage, safe_symbol,
+)
 from autorepeater.instrument_selection import prefer_instrument_currency
 from autorepeater.order_plan import OrderIntent, OrderPlan
 from autorepeater.order_execution import TInvestOrderExecutor
@@ -82,6 +86,7 @@ def _preferred_candidates(session, request, matches, facts, candidates):
     return candidates
 
 
+@measure_stage('catalog.instrument_selection')
 def _unique(session: SandboxSession, query: str, *, ticker: str | None = None,
             expected: tuple[InstrumentType, str] | None = None,
             preferred_currency: str = 'rub') -> InstrumentInfo:
@@ -132,6 +137,7 @@ def _unique(session: SandboxSession, query: str, *, ticker: str | None = None,
     return candidates[0]
 
 
+@measure_stage('catalog.preflight')
 def catalog(session: SandboxSession) -> CurrencyCatalog:
     """Complete metadata/books/permission preflight before setup sends any order."""
     sources = session.data.valuation_sources
@@ -142,11 +148,17 @@ def catalog(session: SandboxSession) -> CurrencyCatalog:
                    preferred_currency=PREFERRED_CURRENCY)
     currency = _unique(session, 'CNYRUB_TOM', ticker='CNYRUB_TOM',
                        expected=(InstrumentType.CURRENCY, 'rub'))
-    full = safe_call(session.client.instruments.bond_by,
-                     id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=bond.uid).instrument
+    with measure_stage('catalog.bond_metadata.request'):
+        full = safe_call(session.client.instruments.bond_by,
+                         id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=bond.uid).instrument
+    emit_market_fact({'event': 'currency_setup_metadata',
+                      **{role: {**instrument_facts(item), 'lot': scalar_fact(item.lot)}
+                         for role, item in (('rub', rub), ('bond', bond), ('currency', currency))},
+                      'bond_full': sdk_metadata_facts(full)}, level=logging.INFO)
     require(full.uid == bond.uid and full.isin == 'RU000A105104'
             and full.currency.lower() == 'cny', 'wrong RUSAL bond identity')
-    pairs = [pair for pair in sources.fx.list_pairs() if pair.uid == currency.uid]
+    with requested_pair(currency.uid):
+        pairs = [pair for pair in sources.fx.list_pairs() if pair.uid == currency.uid]
     require(len(pairs) == 1, 'missing CNYRUB_TOM full currency metadata')
     pair = pairs[0]
     require(pair.base_currency == 'cny' and pair.quote_currency == 'rub'
@@ -160,7 +172,9 @@ def catalog(session: SandboxSession) -> CurrencyCatalog:
     for item in (rub, bond, currency):
         require(isinstance(item.lot, int) and not isinstance(item.lot, bool) and item.lot > 0,
                 'invalid multicurrency setup lot')
-        status = safe_call(session.client.market_data.get_trading_status, instrument_id=item.uid)
+        with measure_stage('catalog.status.request'):
+            status = safe_call(session.client.market_data.get_trading_status,
+                               instrument_id=item.uid)
         require(status.instrument_uid == item.uid and status.api_trade_available_flag is True
                 and status.bestprice_order_available_flag is True,
                 'multicurrency trading unavailable before setup')

@@ -1,5 +1,6 @@
 """Live fixtures are siblings of test/, so its zero-timeout fixture cannot apply."""
 import logging
+import json
 import os
 from pathlib import Path
 import signal
@@ -8,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from autorepeater.market_diagnostics import set_diagnostic_context
+from autorepeater.market_diagnostics import emit_timing_summary, set_diagnostic_context
 from scripts.sandbox_lifecycle import (
     SandboxFailure, SandboxLifecycle, list_exception_facts, sandbox_client,
 )
@@ -21,11 +22,18 @@ class SandboxInterrupted(BaseException):
 
 
 class MarketDiagnosticOutput(logging.Handler):
-    """Forward only the bounded emitter's warnings, outside captured report sections."""
+    """Forward explicit safe facts to stdout and the existing scenario dump events."""
+
+    def __init__(self, level: int = logging.INFO, *, records: list | None = None) -> None:
+        super().__init__(level)
+        self.records = records
 
     def emit(self, record: logging.LogRecord) -> None:
         if record.module == 'market_diagnostics' and record.msg == 'Market diagnostic: %s':
             print(record.getMessage(), flush=True)
+            if self.records is not None:
+                self.records.append({'event': 'market_diagnostic',
+                                     'fact': json.loads(record.args[0])})
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -148,8 +156,10 @@ def live(request: pytest.FixtureRequest, sandbox: SandboxSession
     sandbox.market = None
     sandbox.data.begin_snapshot()
     journal = OrderJournal()
-    diagnostics = MarketDiagnosticOutput(logging.WARNING)
+    diagnostics = MarketDiagnosticOutput(records=sandbox.records)
     logger = logging.getLogger('tinkoffBot')
+    previous_level = logger.level
+    logger.setLevel(logging.INFO)
     logger.addHandler(journal)
     logger.addHandler(diagnostics)
     recorder = attempt_recorder(request.session)
@@ -163,8 +173,10 @@ def live(request: pytest.FixtureRequest, sandbox: SandboxSession
         if report is not None and report.failed:
             sandbox.records.append({'event': 'failure', 'reason': str(report.longrepr),
                                     'error': report.sandbox_error})
+        emit_timing_summary()
         logger.removeHandler(journal)
         logger.removeHandler(diagnostics)
+        logger.setLevel(previous_level)
         artifact_root = Path(os.environ.get(
             'E2E_ARTIFACT_DIR', '/tmp/autorepeater-e2e-' + sandbox.lifecycle.run_id))
         try:

@@ -1250,8 +1250,9 @@ FxPair.__post_init__ -> finite_decimal с ValueError; проблемное по�
 около62s и119s при лимите60s. Отказов ambiguous selection не было.
 selected/entered/cleaned=25, session очищена, дополнительная CI-cleanup SUCCESS.
 Это не успешная приёмка и не подтверждение предполагаемого строгого отказа
-при нескольких инструментах одной валюты. Условие fullPASS для добавления
-нового live-кейса не наступило; новые live-сценарии в этой правке не добавляются.
+при нескольких инструментах одной валюты. По уточнению пользователя T уже
+покрыт существующим full BALANCED/IMOEX; отдельной открытой задачи или
+условного нового live-кейса для него нет.
 
 Пользователь согласовал отдельное возвращение исходного first-available
 после предпочтения фактической валюты: INDEX выбирает первый API-доступный
@@ -1288,6 +1289,36 @@ guard setup; runtime INDEX выбирает first+WARNING. FX metadata и stale 
 эксперимента не исправляются здесь, лимит60s и финансовые guards сохранены.
 Версия остаётся5.3.0; пункт7.8, этап8 кроме версии и issue41 остаются PENDING.
 Worker не выполняет новые live/брокерские вызовы, push/GH writes/merge/deploy.
+
+## FX и book diagnostics от 17.10.2026
+
+Одна диагностическая группа после5d5c413, без исправления причин live FAIL.
+Полный FX-каталог валидируется до CNY-фильтра: отказ называет фактический
+UID, поле/ограничение исходного guard, тип/значение/units/nano и Decimal,
+когда преобразование состоялось. Ожидаемый CNY UID сохраняется отдельно.
+Безопасная note дополняет тот же ValueError; finite_decimal и денежные
+guards не меняются. Выбранные setup metadata и increment/nominal выводятся
+из уже полученных ответов, без SDK repr/credentials/headers/env/внешних ошибок.
+
+Отказ стакана включает ticker/class/currency из уже загруженных metadata,
+market_time, monotonic/UTC начала запроса, получения и проверки, длительность
+запроса/локального интервала и возраст при получении/проверке. Отдельные
+наблюдательные часы не заменяют часы валидации или market_time. Count/duration
+именованных этапов и RPC attempts/quota waits агрегируются за сцену;
+вложенные интервалы inclusive, не измеренная общая latency приложения.
+Статические оценки количества RPC из performance-исследования не являются
+измерением времени; оптимизации этой группой не выполняются.
+
+Fixture включает INFO до catalog даже в свежей retry-попытке без Runner,
+затем восстанавливает уровень. Структурированные события сохраняются в stdout
+и существующих events dump до configs/accounts; strict report-v2, SHA,
+collection, cleanup, все17+8 E2E и финансовые assertions сохранены.
+TDD RED32 -> GREEN125; дополнительные RED проверили missing SDK labels и
+потерю INFO в реальной cold-WARNING fixture, включая повторное воспроизведение
+P2 из независимого статического Einstein review. После исправления cold-fixture
+и INFO SDK forwarding checks GREEN2; итоговые проверки записываются в progress.
+7.8, этап8 кроме версии и issue41 PENDING; live успех не заявляется.
+Worker не выполняет live/extra SDK/push/GH writes/merge/deploy.
 
 ## Приёмка вне реализации
 

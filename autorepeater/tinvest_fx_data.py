@@ -9,6 +9,12 @@ from t_tech.invest.services import Services
 from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_data import ExecutionDataError, TradeRules
 from autorepeater.fx_data import FxPair, FxQuote
+from autorepeater.fx_diagnostics import (
+    metadata_failure, pair_failure, selected_pair,
+)
+from autorepeater.market_diagnostics import (
+    BookTiming, diagnostic_operation, measure_stage, warn_book_failure,
+)
 from autorepeater.tinvest_validation import (
     sdk_bool as _bool, sdk_count as _count, sdk_text as _text,
 )
@@ -30,11 +36,43 @@ def _amount(value, currency: str) -> Decimal:
 
 
 def _pair(item) -> FxPair:
-    base = currency_code(item.iso_currency_name)
-    if item.nominal is None or currency_code(item.nominal.currency) != base:
-        raise ValueError('FX nominal currency does not match ISO base currency')
-    return FxPair(item.uid, base, item.currency, _amount(item.nominal, base), item.lot,
-                  item.api_trade_available_flag, item.buy_available_flag, item.sell_available_flag)
+    try:
+        base = currency_code(item.iso_currency_name)
+    except ValueError as error:
+        metadata_failure(item, error, 'iso_currency_name', 'three_ascii_letters')
+        raise
+    _check_nominal_currency(item, base)
+    try:
+        nominal = _amount(item.nominal, base)
+    except ValueError as error:
+        metadata_failure(item, error, 'nominal',
+                         'integer_units_nano_abs_nano_lt_1e9_same_sign')
+        raise
+    try:
+        pair = FxPair(item.uid, base, item.currency, nominal, item.lot,
+                      item.api_trade_available_flag, item.buy_available_flag,
+                      item.sell_available_flag)
+    except ValueError as error:
+        pair_failure(item, nominal, error)
+        raise
+    selected_pair(item, nominal)
+    return pair
+
+
+def _check_nominal_currency(item, base):
+    if item.nominal is None:
+        error = ValueError('FX nominal currency does not match ISO base currency')
+        metadata_failure(item, error, 'nominal', 'required_nominal')
+        raise error
+    try:
+        nominal_currency = currency_code(item.nominal.currency)
+    except ValueError as error:
+        metadata_failure(item, error, 'nominal.currency', 'three_ascii_letters')
+        raise
+    if nominal_currency != base:
+        error = ValueError('FX nominal currency does not match ISO base currency')
+        metadata_failure(item, error, 'nominal.currency', 'nominal_currency_matches_iso_base')
+        raise error
 
 
 def _book_price(levels, currency: str) -> Decimal:
@@ -50,16 +88,24 @@ class TInvestFxData:
         self._client = client
         self._clock = clock if clock is not None else lambda: datetime.now(timezone.utc)
 
+    @measure_stage('fx.catalog')
     def list_pairs(self) -> list[FxPair]:
         """Full ISO/nominal identity rather than parsing FindInstrument/ticker strings."""
-        response = _read(self._client.instruments.currencies,
-                         instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
+        with measure_stage('fx.catalog.request'):
+            response = _read(self._client.instruments.currencies,
+                             instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
         return [_pair(item) for item in response.instruments]
 
     def get_quote(self, pair: FxPair) -> FxQuote:
         """Depth one supplies bid/ask; last_price and its timestamp are never substitutes."""
-        book = _read(self._client.market_data.get_order_book, instrument_id=pair.uid, depth=1)
+        timing = BookTiming('fx.book', event='fx_book_rejected')
+        with diagnostic_operation('fx.book'):
+            book = _read(self._client.market_data.get_order_book, instrument_id=pair.uid, depth=1)
+        timing.received()
         received = self._clock()
+        timing.checked()
+        warn_book_failure(pair.uid, book.instrument_uid, book.orderbook_ts, received,
+                          timing=timing)
         if book.instrument_uid != pair.uid:
             raise ValueError('FX order book UID mismatch')
         quote = FxQuote(pair, _book_price(book.bids, pair.quote_currency),

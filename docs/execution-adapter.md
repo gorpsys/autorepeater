@@ -287,6 +287,26 @@ No raw response, instrument name, transport exception text or diagnostic RPC
 is added. Successful fresh books emit no snapshots. Sandbox framework context
 adds the current stage, scenario and phase without changing evidence schemas.
 
+Book rejection facts also retain ticker/class/currency from the already loaded
+instrument, or an explicit missing label. Observational monotonic and UTC clocks
+record request start, response and check, request duration and response-to-check
+delay. Receipt age uses observational UTC; check age retains the original
+validation clock. Neither clock replaces market time or changes the 60s guard.
+E2E aggregates named metadata/catalog/book operations and separates RPC attempts
+from quota waits; nested stage totals are inclusive. Successful payloads are not
+streamed and no extra lookups, retries or clock calls for validation are added.
+
+The FX catalog boundary supplements the same ValueError with a safe note and
+one field/constraint event. Exact internal FxPair guard messages identify their
+fields; no stack locals, SDK repr or arbitrary exception text is inspected.
+Raw nominal currency/units/nano, source scalar types and normalized Decimal
+remain visible, including when an unrelated pair fails before the CNY UID filter.
+Selected setup instruments and the explicitly requested pair expose their loaded
+lot/permissions/nominal/increment metadata without enumerating successful catalogs.
+The E2E fixture forwards only these explicit diagnostic records to stdout and
+existing scenario-dump events, including preflight failures before accounts/configs.
+Strict attempt reports, collection/SHA, cleanup and financial checks are unchanged.
+
 The strategy decorator and destination adapter preserve broker
 `current_price/currency` alongside `native_price/settlement_currency` and
 `rub_price`. Shared UID observations use one native book per pass. Capital,
