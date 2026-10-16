@@ -63,8 +63,10 @@ def _load_index_candidate(data: StrategyData, match: InstrumentMatch,
 
 def _resolve_index_instrument(data: StrategyData, ticker: str,
                               resolved: dict[str, InstrumentInfo]) -> InstrumentInfo:
-    matches = [item for item in data.find_instruments(ticker)
-               if item.ticker == ticker and item.instrument_type in INDEX_TYPES]
+    exact = [item for item in data.find_instruments(ticker) if item.ticker == ticker]
+    matches = [item for item in exact if item.instrument_type in INDEX_TYPES]
+    if not matches:
+        matches = [item for item in exact if item.instrument_type == InstrumentType.BOND]
     candidates = [_load_index_candidate(data, match, resolved) for match in matches]
     available = []
     for instrument in candidates:

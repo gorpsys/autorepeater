@@ -120,6 +120,7 @@ def live(request: pytest.FixtureRequest, sandbox: SandboxSession
     sandbox.records = []
     sandbox.configs = {}
     sandbox.quotes = {}
+    sandbox.market = None
     sandbox.data.begin_snapshot()
     journal = OrderJournal()
     logger = logging.getLogger('tinkoffBot')

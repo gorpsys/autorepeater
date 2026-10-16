@@ -16,6 +16,7 @@ class InstrumentType(StrEnum):
 
     SHARE = 'share'
     ETF = 'etf'
+    BOND = 'bond'
     CURRENCY = 'currency'
     OTHER = 'other'
 

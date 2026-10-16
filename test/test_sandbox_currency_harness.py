@@ -1,0 +1,267 @@
+"""Run the new live harness offline against strict SDK services and native cash facts."""
+from datetime import datetime, timezone
+from decimal import Decimal as D
+import inspect
+import logging
+from types import SimpleNamespace
+from unittest.mock import create_autospec, patch
+from test.test_fx_runtime import money, quotation
+
+import pytest
+from t_tech.invest import schemas as sdk
+from t_tech.invest import services
+
+from autorepeater.runner import Runner
+from scripts.sandbox_lifecycle import SandboxLifecycle
+from scripts.sandbox_support import OrderJournal, SandboxSession
+from scripts.sandbox_support import write_failure_dump
+from scripts.sandbox_lifecycle import SandboxFailure
+from e2e import test_sandbox_multicurrency as scenarios
+
+
+class OfflineBroker:
+    """Finite disposable accounts; effect methods are reached only through SDK autospec."""
+
+    def __init__(self):
+        self.client = SimpleNamespace(**{name: create_autospec(
+            inspect.unwrap(service), instance=True, spec_set=True) for name, service in (
+                ('instruments', services.InstrumentsService), ('orders', services.OrdersService),
+                ('operations', services.OperationsService),
+                ('market_data', services.MarketDataService),
+                ('sandbox', services.SandboxService), ('users', services.UsersService))})
+        self.accounts = {}
+        self.orders = {}
+        self.metadata = {
+            'R': sdk.Instrument(uid='R', ticker='SBER', name='Sber', instrument_type='share',
+                                class_code='T', currency='rub', lot=10,
+                                api_trade_available_flag=True),
+            'C': sdk.Instrument(uid='C', ticker='RU000A105104', name='Rusal',
+                                instrument_type='bond',
+                                class_code='T', currency='cny', lot=1,
+                                api_trade_available_flag=True),
+            'F': sdk.Instrument(uid='F', ticker='CNYRUB_TOM', name='CNY',
+                                instrument_type='currency',
+                                class_code='T', currency='rub', lot=1000,
+                                api_trade_available_flag=True)}
+        self._wire_reads()
+        self.client.sandbox.open_sandbox_account.side_effect = self.open_account
+        self.client.sandbox.sandbox_pay_in.side_effect = self.pay_in
+        self.client.orders.post_order.side_effect = self.submit
+        self.client.orders.get_order_state.side_effect = lambda **kw: self.orders[kw['order_id']]
+
+    def _wire_reads(self):
+        client = self.client
+        client.instruments.find_instrument.side_effect = lambda **kw: sdk.FindInstrumentResponse(
+            instruments=[sdk.InstrumentShort(uid=item.uid, ticker=item.ticker,
+                                             name=item.name, instrument_type=item.instrument_type,
+                                             class_code=item.class_code)
+                         for item in self.metadata.values() if item.ticker == kw['query']])
+        client.instruments.get_instrument_by.side_effect = lambda **kw: sdk.InstrumentResponse(
+            instrument=self.metadata[kw['id']])
+        client.instruments.shares.return_value = sdk.SharesResponse(instruments=[sdk.Share(
+            uid='R', ticker='SBER', name='Sber', class_code='T', currency='rub', lot=10,
+            api_trade_available_flag=True)])
+        client.instruments.bond_by.return_value = sdk.BondResponse(instrument=sdk.Bond(
+            uid='C', isin='RU000A105104', currency='cny', nominal=money('cny', 1000),
+            aci_value=money('cny', 7)))
+        client.instruments.currencies.return_value = sdk.CurrenciesResponse(instruments=[
+            sdk.Currency(uid='F', iso_currency_name='CNY', currency='rub', lot=1000,
+                         nominal=money('cny', 1), api_trade_available_flag=True,
+                         buy_available_flag=True, sell_available_flag=True)])
+        client.instruments.currency_by.side_effect = lambda **kw: sdk.CurrencyResponse(
+            instrument=sdk.Currency(uid=kw['id'], iso_currency_name=kw['id'][5:].upper()))
+        client.market_data.get_order_book.side_effect = self.book
+        client.market_data.get_trading_status.side_effect = (
+            lambda **kw: sdk.GetTradingStatusResponse(
+                instrument_uid=kw['instrument_id'], api_trade_available_flag=True,
+                bestprice_order_available_flag=True))
+        client.market_data.get_last_prices.side_effect = lambda **kw: sdk.GetLastPricesResponse(
+            last_prices=[sdk.LastPrice(instrument_uid=uid, price=quotation(
+                300 if uid == 'R' else 99), time=datetime.now(timezone.utc))
+                         for uid in kw['instrument_id']])
+        client.operations.get_portfolio.side_effect = self.portfolio
+        client.operations.get_positions.side_effect = self.positions
+        client.orders.get_max_lots.side_effect = self.caps
+        client.orders.get_orders.return_value = sdk.GetOrdersResponse(orders=[])
+        client.operations.get_operations.return_value = sdk.OperationsResponse(operations=[])
+        client.users.get_accounts.side_effect = lambda: sdk.GetAccountsResponse(accounts=[
+            sdk.Account(id=key, name=value['name']) for key, value in self.accounts.items()])
+
+    def open_account(self, *, name):
+        """Keep IDs and exact run ownership round-trippable through the real lifecycle."""
+        uid = str(len(self.accounts) + 1)
+        self.accounts[uid] = {'name': name, 'cash': {'rub': D(0), 'cny': D(0)}, 'held': {}}
+        return sdk.OpenSandboxAccountResponse(account_id=uid)
+
+    def pay_in(self, *, account_id, amount):
+        """Only this explicit fixture effect can add money from outside the account."""
+        self.accounts[account_id]['cash'][amount.currency] += D(amount.units) + D(amount.nano)/10**9
+        return sdk.SandboxPayInResponse(balance=amount)
+
+    @staticmethod
+    def book(*, instrument_id, depth):
+        """Different percent, RUB per share and RUB per CNY dimensions."""
+        assert depth == 1
+        price = {'R': 300, 'C': 99, 'F': 12}[instrument_id]
+        return sdk.GetOrderBookResponse(
+            instrument_uid=instrument_id,
+            orderbook_ts=datetime.now(timezone.utc),
+            bids=[sdk.Order(price=quotation(price), quantity=1000000)],
+            asks=[sdk.Order(price=quotation(price), quantity=1000000)])
+
+    def portfolio(self, *, account_id):
+        """Intentionally report a different broker CNY RUB mark; runtime must use books."""
+        account = self.accounts[account_id]
+        positions = [sdk.PortfolioPosition(
+            instrument_uid='cash-' + code,
+            instrument_type='currency', quantity=quotation(amount),
+            current_price=money('rub', 1 if code == 'rub' else 10),
+            blocked=False, blocked_lots=quotation(0)) for code, amount in account['cash'].items()
+                     if amount]
+        for uid, count in account['held'].items():
+            if count:
+                positions.append(sdk.PortfolioPosition(
+                    instrument_uid=uid,
+                    instrument_type=self.metadata[uid].instrument_type, quantity=quotation(count),
+                    current_price=money('rub', 300 if uid == 'R' else 11000),
+                    blocked=False, blocked_lots=quotation(0)))
+        return sdk.PortfolioResponse(positions=positions)
+
+    def positions(self, *, account_id):
+        """GetPositions has physical pieces and native money, never FX securities."""
+        account = self.accounts[account_id]
+        return sdk.PositionsResponse(
+            money=[money(code, amount) for code, amount in account['cash'].items()],
+            blocked=[], securities=[
+                sdk.PositionsSecurities(instrument_uid=uid, balance=int(count), blocked=0,
+                                        exchange_blocked=False)
+                for uid, count in account['held'].items() if count], futures=[], options=[],
+            limits_loading_in_progress=False)
+
+    def caps(self, *, request):
+        """Strict native own limits; zero foreign cash produces zero initial bond cap."""
+        account = self.accounts[request.account_id]
+        item = self.metadata[request.instrument_id]
+        cost = {'R': D(3000), 'C': D(997), 'F': D(12000)}[item.uid]
+        return sdk.GetMaxLotsResponse(currency=item.currency, buy_limits=sdk.BuyLimitsView(
+            buy_money_amount=quotation(account['cash'][item.currency]),
+            buy_max_lots=int(account['cash'][item.currency] / cost)),
+            sell_limits=sdk.SellLimitsView(sell_max_lots=(
+                int(account['cash']['cny'] / 1000) if item.uid == 'F'
+                else int(account['held'].get(item.uid, D(0)) / item.lot))))
+
+    def submit(self, **kwargs):
+        """One checked BESTPRICE effect, separate known sandbox fee and single bond ACI."""
+        assert 'price' not in kwargs
+        assert kwargs['order_type'] == sdk.OrderType.ORDER_TYPE_BESTPRICE
+        account = self.accounts[kwargs['account_id']]
+        item, lots = self.metadata[kwargs['instrument_id']], kwargs['quantity']
+        side = 1 if kwargs['direction'] == sdk.OrderDirection.ORDER_DIRECTION_BUY else -1
+        total = D(lots) * {'R': D(3000), 'C': D(997), 'F': D(12000)}[item.uid]
+        fee = total * D('.001')
+        account['cash'][item.currency] -= side * total + fee
+        if item.uid == 'F':
+            account['cash']['cny'] += side * D(lots * item.lot)
+        else:
+            account['held'][item.uid] = account['held'].get(item.uid, D(0)) + side * lots * item.lot
+        assert all(amount >= 0 for amount in account['cash'].values())
+        broker_id = 'broker' + str(len(self.orders))
+        fields = {'order_id': broker_id, 'instrument_uid': item.uid,
+                  'direction': kwargs['direction'], 'lots_requested': lots, 'lots_executed': lots,
+                  'execution_report_status': (
+                      sdk.OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL),
+                  'total_order_amount': money(item.currency, total),
+                  'executed_commission': money(item.currency, fee)}
+        self.orders[broker_id] = sdk.OrderState(**fields)
+        return sdk.PostOrderResponse(**fields)
+
+
+@pytest.fixture(name='offline_live')
+def fixture_offline_live(monkeypatch):
+    """Only client creation is substituted; real Runner, planner, executor and harness run."""
+    broker = OfflineBroker()
+    lifecycle = SandboxLifecycle(broker.client.sandbox, broker.client.users, 'local', 'a' * 32)
+    session = SandboxSession(broker.client, lifecycle)
+    journal = OrderJournal()
+    logger = logging.getLogger('tinkoffBot')
+    logger.addHandler(journal)
+    # Synthetic value only; the actual environment/token files are never inspected.
+    monkeypatch.setenv('SANDBOX_TOKEN', 'offline-synthetic')
+    try:
+        with patch.object(Runner, '_create_client', autospec=True, spec_set=True) as connect:
+            connect.return_value.__enter__.return_value = broker.client
+            yield (session, journal), broker
+    finally:
+        logger.removeHandler(journal)
+
+
+@pytest.mark.parametrize('algorithm,source', [
+    ('INDEX', 'CROSS'), ('COMPOSITE', 'MIX'), ('ACCOUNT', 'MIXED')])
+def test_new_mixed_scenarios_offline(offline_live, tmp_path, monkeypatch, algorithm, source):
+    """Run the very same acceptance scenario, not a rewritten weaker offline contract."""
+    live, broker = offline_live
+    scenarios.test_rub_cny_normal_application(live, tmp_path, monkeypatch, algorithm, source)
+    broker.client.orders.get_order_price.assert_not_called()
+    broker.client.operations.get_operations.assert_not_called()
+
+
+@pytest.mark.parametrize('scenario', [
+    scenarios.test_shared_cny_owners_and_unallocated_cash,
+    scenarios.test_reverse_exchange_only_for_rub_purchase,
+    scenarios.test_isolated_sale_does_not_fund_sibling,
+])
+def test_new_composite_reverse_scenarios_offline(offline_live, tmp_path, monkeypatch, scenario):
+    """Ownership and reverse FX have the same financial assertions offline and live."""
+    live, _ = offline_live
+    scenario(live, tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize('kind', ['sufficient', 'partial'])
+def test_new_existing_currency_scenarios_offline(offline_live, tmp_path, monkeypatch, kind):
+    """Existing currency is not reset or replenished to make the assertion pass."""
+    live, _ = offline_live
+    scenarios.test_existing_cny_before_lot_rounding(live, tmp_path, monkeypatch, kind)
+
+
+@pytest.mark.parametrize('fault', ['closed', 'stale', 'wrong-isin', 'wrong-currency', 'transport'])
+def test_preflight_failure_never_creates_accounts_or_orders(offline_live, fault):
+    """Market closures, malformed responses and transport faults are offline-only failures."""
+    live, broker = offline_live
+    if fault == 'closed':
+        broker.client.market_data.get_trading_status.return_value = sdk.GetTradingStatusResponse(
+            instrument_uid='R', api_trade_available_flag=False,
+            bestprice_order_available_flag=False)
+        broker.client.market_data.get_trading_status.side_effect = None
+    if fault == 'wrong-isin':
+        broker.client.instruments.bond_by.return_value.instrument.isin = 'wrong'
+    if fault == 'wrong-currency':
+        broker.metadata['C'].currency = 'rub'
+    if fault == 'stale':
+        book = broker.client.market_data.get_order_book.side_effect
+
+        def stale(**kwargs):
+            result = book(**kwargs)
+            result.orderbook_ts = datetime(2000, 1, 1, tzinfo=timezone.utc)
+            return result
+        broker.client.market_data.get_order_book.side_effect = stale
+    if fault == 'transport':
+        broker.client.instruments.find_instrument.side_effect = RuntimeError('offline transport')
+    with pytest.raises((SandboxFailure, ValueError, RuntimeError)):
+        scenarios.catalog(live[0])
+    broker.client.sandbox.open_sandbox_account.assert_not_called()
+    broker.client.orders.post_order.assert_not_called()
+
+
+def test_currency_dump_keeps_native_money_and_commissions(offline_live, tmp_path, monkeypatch):
+    """A successful monetary check must also survive the real finalizer's JSON boundary."""
+    import json  # pylint: disable=import-outside-toplevel
+    live, _ = offline_live
+    scenarios.test_existing_cny_before_lot_rounding(live, tmp_path, monkeypatch, 'partial')
+    path = tmp_path / 'native-evidence.json'
+    write_failure_dump(live[0], path)
+    result = json.loads(path.read_text())
+    assert any(event['event'] == 'native_state' and 'cny' in event['money']
+               for event in result['events'])
+    assert any(event['event'] == 'currency_app_pass' and 'cny' in event['fees']
+               for event in result['events'])
+    assert all('error' not in account for account in result['accounts'].values())

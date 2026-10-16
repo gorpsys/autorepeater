@@ -140,7 +140,7 @@ def test_find_instruments_preserves_order_duplicates_and_short_fields(client, da
         InstrumentMatch('uid-2', 'DUP', 'Second', InstrumentType.ETF, 'TQTF'),
         InstrumentMatch('uid-1', 'DUP', 'First', InstrumentType.SHARE, 'TQBR'),
         InstrumentMatch(
-            'uid-2', 'DUP', 'Second duplicate', InstrumentType.OTHER, 'TQOB'),
+            'uid-2', 'DUP', 'Second duplicate', InstrumentType.BOND, 'TQOB'),
     ]
     assert client.mock_calls == [call.instruments.find_instrument(query='DUP')]
     assert not hasattr(result[0], 'currency')

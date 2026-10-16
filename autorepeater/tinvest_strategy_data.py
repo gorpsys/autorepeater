@@ -33,6 +33,7 @@ def _instrument_type(value: str) -> InstrumentType:
     return {
         'share': InstrumentType.SHARE,
         'etf': InstrumentType.ETF,
+        'bond': InstrumentType.BOND,
         'currency': InstrumentType.CURRENCY,
     }.get(value, InstrumentType.OTHER)
 
