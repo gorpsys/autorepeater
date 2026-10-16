@@ -13,7 +13,11 @@ SDK runtime подключает оценку, валютные intents и за�
 приложения, native-денежный oracle и динамическая exact-suite проверка SHA.
 Все новые сценарии прогнаны тем же harness на строгих SDK-моках. Фактическая
 сверка sandbox-движений из пункта 7.8 и вся live-приёмка остаются PENDING;
-они не запускались и не помечены skipped/success. Этап 8 не начат.
+они не запускались и не помечены skipped/success. Из этапа 8 взят только
+согласованный версионный prerequisite 5.3.0 для допуска отдельного PR
+к sandbox после master 5.2.1; документация и ревью этапа 8 не завершены.
+16.10.2026 пользователь разрешил полный live25 в sandbox; запуск выполняет
+parent отдельно после публикации интеграции. Это не разрешение на production.
 Решения V1–V4 и уточнения о комиссиях согласованы пользователем.
 Обязательное исследование истории операций исключено: подтверждение заявки
 и готовности денег не требует истории. Подготовка денежных DTO и тестов
@@ -865,19 +869,19 @@ runtime и assertions не менялись. Этапы7–8, live-приёмк�
 ### 7. Sandbox-сценарии рабочего приложения
 
 **Files:** `e2e/test_sandbox_multicurrency.py` (создан), `e2e/conftest.py`,
-`scripts/sandbox_collection.py`, `scripts/sandbox_multicurrency.py` (созданы),
-`scripts/sandbox_support.py`, `scripts/sandbox_evidence.py`, `scripts/sandbox_retry.py`,
-`scripts/sandbox_retry_evidence.py`,
-`scripts/sandbox_retry_report.py`, `scripts/sandbox_github.py`,
-`.github/workflows/sandbox-e2e.yml`, `test/test_sandbox_github_workflow.py`,
-`test/test_sandbox_github.py`, `test/test_sandbox_retry.py`,
-`test/test_sandbox_retry_report.py`, `test/test_sandbox_evidence.py`,
+`scripts/sandbox_multicurrency.py` (создан),
+`scripts/sandbox_support.py`, `scripts/sandbox_evidence.py`, `test/test_sandbox_evidence.py`,
 `test/test_sandbox_suite.py`, `test/test_sandbox_currency.py`,
 `test/test_sandbox_currency_harness.py`, `test/test_index_bond.py` (созданы),
 `autorepeater/strategy_data.py`, `autorepeater/tinvest_strategy_data.py`,
 `autorepeater/index_strategy.py`, `test/test_autorepeater.py`,
 `test/test_tinvest_strategy_data.py`, `docs/agents/contracts.md`,
-`docs/agents/sandbox.md`, `scripts/README.md`, `CHANGELOG.md`, этот план.
+`scripts/README.md`, `CHANGELOG.md`, `autorepeater/__init__.py` (только prerequisite),
+этот план. `scripts/sandbox_collection.py`, `scripts/sandbox_retry.py`,
+`scripts/sandbox_retry_evidence.py`, `scripts/sandbox_retry_report.py`,
+`scripts/sandbox_github.py`, `.github/workflows/sandbox-e2e.yml`,
+`docs/agents/sandbox.md` и прежние инфраструктурные тесты после rebase
+унаследованы из master PR39 без изменений.
 Прежний `e2e/test_sandbox.py` сохранён без изменения как регрессия.
 
 Реализованы восемь отдельных RUB/CNY-сценариев: смешанные INDEX/COMPOSITE/
@@ -913,7 +917,9 @@ fixtures, без фильтров/addopts/внешних pytest-плагинов
 законные failed-subset retry. Skip/xfail/xpass, дубли, пропуски/лишние ID,
 незавершённость, ошибки cleanup и незаконные повторы не дают success.
 Workflow использует только complete вердикт trusted verifier; passed — диагностика.
-Числовой gate и ручной список состава удалены; правила проверены на двух размерах.
+В retry-v2 числового gate нет; независимая коллекция задаёт состав.
+Замороженный список 17 существует только для совместимости legacy retry-v1.
+Workflow явно выбирает retry-v2; отсутствие выбора сохраняет формат v1 без sha.
 
 Проверка этапа 7 (16.10.2026): RED на отсутствии dynamic collection/native
 oracle и FX money-settlement helper; отдельные RED закрепили BOND и прежний
@@ -932,8 +938,36 @@ Mypy26. `git diff --check` и staged diff check GREEN.
 без filters, GREEN:25 уникальных node IDs (17 прежних +8 новых),0.03s;
 это offline collection, а не доказательство live успеха.
 Все18 пунктов сверены: реализация/offline проверки выполнены, пункт с
-фактическим sandbox-движением денег остаётся PENDING. Отдельное разрешение
-на live не запрашивалось; токены, внешние RPC, PR/push/merge/deploy отсутствуют.
+фактическим sandbox-движением денег остаётся PENDING. На момент исходного
+прогона отдельного разрешения на live не было; токены, внешние RPC,
+PR/push/merge/deploy в реализации этапа отсутствовали.
+
+Интеграция 16.10.2026: ветка перебазирована на master
+`0492181575861adffc0c830c5f6f5e437b235db2` (v5.2.1, PR39).
+Повторённые инфраструктурные изменения старого этапа 7 заменены актуальным
+master-контрактом retry-v2/default legacy-v1; деплой по FUNCTION_ID сохранён.
+Интеграционный RED: 6 failed/343 passed, новые валютные evidence-тесты
+использовали legacy JUnit serializer и считали отсутствие коллекции запретом
+legacy-режима. Они используют существующий master `store_dynamic`, сохраняя
+module/node ID, phases, SHA и cleanup; отсутствие коллекции проверяется
+на явном v2 controller boundary. Добавлен размер 25, все негативные проверки
+сохранены. Старые master-тесты и экономические assertions не менялись.
+GREEN: 563 точечных проверки, включая весь live harness на строгих SDK-моках,
+funding/runtime/reporting и проверку версии. Release gate: RED (5.2.1 не выше
+базы/тегов) -> GREEN (5.3.0). Полный `make coverage` с прежним внешним PYTHON
+завершён exit0: 4746 passed/18 warnings за299.91s, overall99.37%
+(8841 statements/56 missing), diff от нового origin/master99%
+(1918 строк/16 missing), валютный E2E harness98.42%.
+Все29 новых Python-файлов относительно базы явно staged перед diff coverage.
+Полный `make lint` exit0: Pylint10/10, оба Flake8-прохода0, Mypy26.
+`git diff --check` и staged diff check GREEN; пороги/область сохранены.
+Весь runtime кроме версии, 64 funding/62 runtime/27 reporting-регрессий,
+старые17 и новые8 E2E совпадают со снимком до rebase; master-инфраструктура
+и деплой по FUNCTION_ID не изменены. История успешного offline cloud deploy
+v5.2.1 сохранена. После одного интеграционного коммита отдельная full collection
+с запретом socket.connect/create_connection проверит его exact SHA;
+итоговый SHA/manifest фиксируются в progress без нового документационного SHA.
+Реальные деньги/комиссии пункта 7.8 всё ещё PENDING.
 
 - [x] Не копировать диагностический тест как доказательство работы приложения:
   новый сценарий вызывает штатный планировщик и исполнитель на временных счетах.
@@ -1031,10 +1065,18 @@ Mypy26. `git diff --check` и staged diff check GREEN.
 `docs/execution-adapter.md`, `docs/agents/history.md`,
 `autorepeater/__init__.py`, `CHANGELOG.md`, этот план.
 
+Версионный prerequisite взят досрочно по прямому согласованию пользователя:
+следующий MINOR после актуального master 5.2.1 — 5.3.0. Это необходимый
+допуск отдельного валютного PR к sandbox, не расширение области этапа 7.
+Полные README, cloud-package smoke, ревью и приёмка остаются незавершёнными;
+план не переносится в completed, тег вручную не создаётся.
+
 - [ ] Описать текущее валютное поведение, границы поддержки, дополнительные
   расходы и неатомарность пары FX/бумага; историю опытов оставить в справочнике.
-- [ ] Назначить следующий MINOR от актуального master, если CLI и обязательные
+- [x] Назначить следующий MINOR от актуального master, если CLI и обязательные
   параметры совместимы; не фиксировать номер заранее и не создавать тег вручную.
+  Выполнен только согласованный prerequisite: 5.3.0 после master5.2.1,
+  `__version__` и первый раздел CHANGELOG совпадают; release gate GREEN.
 - [ ] Проверить процедуры версии, конфиги, cloud-package smoke и документационные
   тесты. Все проверки обязательны до следующего этапа приёмки.
 - [ ] Провести ревью плана/изменений, записать SHA и результаты тестов; переносить

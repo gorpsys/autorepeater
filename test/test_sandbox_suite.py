@@ -4,11 +4,12 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import create_autospec
-from test.test_sandbox_retry import attempt, store
+from test.test_sandbox_retry import attempt
+from test.test_sandbox_dynamic import store_dynamic as store
 
 import pytest
 
-from scripts import sandbox_retry_evidence as evidence
+from scripts import sandbox_retry, sandbox_retry_evidence as evidence
 from scripts import sandbox_collection as collector
 
 SHA = 'a' * 40
@@ -21,7 +22,7 @@ def collection(size):
         for index in range(size)))
 
 
-@pytest.mark.parametrize('size', [2, 5])
+@pytest.mark.parametrize('size', [2, 5, 25])
 @pytest.mark.parametrize('retry', [False, True])
 def test_exact_dynamic_suite_and_legal_failed_subset(tmp_path, size, retry):
     """A full first attempt may be followed by only its proven failed subset."""
@@ -191,8 +192,14 @@ def test_collection_module_propagates_failure(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize('expected', [None, evidence.SuiteCollection(SHA, ())])
-def test_full_verifier_requires_an_independent_nonempty_collection(tmp_path, expected):
+def test_full_verifier_requires_an_independent_nonempty_collection(tmp_path, monkeypatch, expected):
     """A locally valid subset is never its own full-suite oracle."""
+    monkeypatch.setenv('E2E_EVIDENCE_PROTOCOL', 'retry-v2')
+    monkeypatch.setenv('E2E_TESTED_SHA', SHA)
+    if expected is None:
+        with pytest.raises(evidence.RetryFailure, match='missing or unreadable'):
+            sandbox_retry.selected_collection(tmp_path)
+        return
     with pytest.raises(evidence.RetryFailure, match='independent full'):
         evidence.inspect_history(tmp_path, require_full=True, expected=expected)
 
