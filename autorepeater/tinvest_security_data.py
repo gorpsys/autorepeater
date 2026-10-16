@@ -7,6 +7,7 @@ from t_tech.invest.services import Services
 
 from autorepeater.cash_facts import MoneyAmount, SecurityQuote, SecurityQuoteUnit, currency_code
 from autorepeater.fx_data import market_timestamp
+from autorepeater.market_diagnostics import warn_book_failure
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.tinvest_requests import call_api
 
@@ -72,6 +73,7 @@ class TInvestSecurityData:
             raise ValueError('unsupported security quotation units')
         book = _read(self._client.market_data.get_order_book, instrument_id=uid, depth=1)
         now = self._clock()
+        warn_book_failure(uid, book.instrument_uid, book.orderbook_ts, now)
         market_timestamp(now)
         market_timestamp(book.orderbook_ts)
         if book.instrument_uid != uid or not timedelta(0) <= now - book.orderbook_ts <= timedelta(

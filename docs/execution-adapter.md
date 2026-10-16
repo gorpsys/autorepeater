@@ -275,6 +275,18 @@ quotes require matching positive native nominal and explicit native ACI, added
 once. Missing units or mismatched currencies fail without guessed conversion.
 Neither GetOrderPrice, operation history nor an order-price parameter is used.
 
+On a security book rejection, a bounded warning supplements the original
+ValueError: expected/received UID, market timestamp, observation time in UTC,
+age in seconds and the unchanged 60-second limit. Separate categories identify
+UID mismatch, missing/invalid/naive timestamps, future data and stale data;
+several applicable categories may coexist. Invalid timestamps are never
+replaced with observation time. Missing metadata or an invalid API permission
+marker also logs only selected identifiers/category/currency/flag. Missing,
+invalid and unloaded fields have distinct markers, without inferred RUB/False.
+No raw response, instrument name, transport exception text or diagnostic RPC
+is added. Successful fresh books emit no snapshots. Sandbox framework context
+adds the current stage, scenario and phase without changing evidence schemas.
+
 The strategy decorator and destination adapter preserve broker
 `current_price/currency` alongside `native_price/settlement_currency` and
 `rub_price`. Shared UID observations use one native book per pass. Capital,

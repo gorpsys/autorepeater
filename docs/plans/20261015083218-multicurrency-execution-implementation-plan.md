@@ -18,6 +18,8 @@ SDK runtime подключает оценку, валютные intents и за�
 к sandbox после master 5.2.1; документация и ревью этапа 8 не завершены.
 16.10.2026 пользователь разрешил полный live25 в sandbox; запуск выполняет
 parent отдельно после публикации интеграции. Это не разрешение на production.
+Диагностическое дополнение после неуспешных live25 описано ниже отдельно;
+оно не закрывает пункт 7.8 и не меняет торговые проверки. Версия остаётся 5.3.0.
 Решения V1–V4 и уточнения о комиссиях согласованы пользователем.
 Обязательное исследование истории операций исключено: подтверждение заявки
 и готовности денег не требует истории. Подготовка денежных DTO и тестов
@@ -1127,6 +1129,55 @@ Cash pools100%, funding99.53%, execution market97.16%. Новый тестовы
 последний повтор добавил две проверки действительно доступного bridge,
 без изменения runtime. Версия5.3.0 неизменна. Этап7 live cash/fees,
 этап8 (кроме версии) и отдельная облачная задача41 остаются PENDING.
+
+## Диагностика отказов live25 от 16.10.2026
+
+Одна узкая группа по отдельному запросу пользователя «расширь логгирование
+тестов, чтобы было понятно, в чём ошибка», после HEAD `79c3a32`.
+**Files:** `autorepeater/market_diagnostics.py` (новый),
+`autorepeater/tinvest_security_data.py`, `autorepeater/tinvest_strategy_data.py`,
+`e2e/conftest.py`, `e2e/test_sandbox_multicurrency.py`,
+`test/test_market_diagnostics.py` (новый), `docs/agents/sandbox.md`,
+`docs/execution-adapter.md`, `CHANGELOG.md`, этот план.
+
+Read-only evidence внешней GHA attempt2 run38916070260: completed/failure,
+updated2026-10-16T15:04:37Z; report проверял `79c3a32dcff2f33d9bb0d8165810337c417b405a`.
+15 passed/10 failed, все25 setup/teardown passed, entered/cleaned25,
+session_cleanup=true; cleanup.log содержит25 scenario и1 session marker.
+Все8 валютных сценариев по-прежнему упали на unique available instrument;
+два прежних сценария — с ValueError. Старое evidence не различает причины
+этих ValueError и не доказывает число кандидатов. Live-приёмка PENDING.
+
+Диагностика сохраняет прежний отбор, порядок и число RPC, сообщения/типы
+исключений и 60-секундный предел. На отказе выбора — один bounded whitelist
+summary с query/ожиданиями/counts/кандидатами и причинами, максимум20 записей.
+На отказе стакана — отдельные UID/time категории, фактическое время/возраст;
+при отсутствующих данных выводится missing/invalid, без RUB/False по умолчанию.
+Framework добавляет stage/scenario/phase; безопасные warning видны через -s
+без captured-секций и новых root-полей strict report/evidence. Нет новых RPC,
+сырых responses, имён, credentials или внешних текстов ошибок в диагностике.
+Три Major fix, все прежние offline/E2E assertions, допуски, retry/verifier,
+cleanup/workflow, пороги/scope покрытия и версия5.3.0 сохранены.
+
+TDD:13 новых RED/3 passed на отсутствии диагностических строк, затем90 GREEN;
+дополнительный RED2 для stdout и safe-report, ещё RED2 для известных type/currency
+ожиданий; итоговый фокус137 GREEN, включая20 новых диагностических кейсов.
+Имитированный credential в неожидаемых/невалидных полях отсутствует в stdout,
+warning и sanitized report. Полный строгий lint GREEN exit0: Pylint10/10,
+оба Flake8-прохода0, Mypy26. Полный `make coverage` GREEN exit0:
+4804 passed/18 warnings за283.25s, overall99.35% (8983 statements/58 missing).
+Diff от origin/master99% (2024 строки/17 missing); diff только диагностики
+от `79c3a32`98% (97 строк/1 missing). Новый market_diagnostics98.31%;
+единственная непокрытая строка — marker для пустой строки, без исключений
+ради процентов. Новые Python-файлы явно staged до diff coverage;
+`git diff --check` и staged diff check GREEN. Код/тесты не менялись во время
+последнего полного прогона. Независимый read-only статический recheck
+Poincare по6 диагностическим файлам CLEAN: leaks, бизнес-guards, лишних RPC
+или ослабления evidence не найдено; он не заменяет выполненные проверки.
+Диагностическая группа завершена offline. Worker не запускал live,
+новые GHA attempts, cleanup, production, push/PR/merge/deploy; parent отдельно
+публикует завершённый коммит и запускает ранее разрешённый полный25 exact SHA.
+Этап7.8 live cash/fees, этап8 кроме версии и отдельная задача41 остаются PENDING.
 
 ## Приёмка вне реализации
 

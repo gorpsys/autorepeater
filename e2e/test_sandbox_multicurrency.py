@@ -13,6 +13,7 @@ from autorepeater import reporting
 from autorepeater.cash_facts import MoneyAmount
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.fx_data import FxPair, FxQuote
+from autorepeater.market_diagnostics import instrument_facts, safe_symbol
 from autorepeater.order_plan import OrderIntent, OrderPlan
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.purchase_plan import leaves
@@ -53,11 +54,58 @@ class CurrencyPass:
     intents: list[OrderIntent]
 
 
-def _unique(session: SandboxSession, query: str, *, ticker: str | None = None) -> InstrumentInfo:
+def _selection_failure(session, request, matches, facts, outcome):
+    """Only loaded whitelist facts; no diagnostic RPC or new evidence root fields."""
+    print('Sandbox diagnostic: ' + json.dumps({
+        'stage': 'catalog', 'scenario': safe_symbol(session.scenario, limit=240),
+        'phase': 'instrument_selection', **request,
+        'raw_count': len(matches), 'eligible_count': outcome[1], 'reason': outcome[0],
+        'candidates': facts, 'omitted_count': max(0, len(matches) - len(facts)),
+    }), flush=True)
+
+
+def _unique(session: SandboxSession, query: str, *, ticker: str | None = None,
+            expected: tuple[InstrumentType, str] | None = None) -> InstrumentInfo:
+    request = {'query': safe_symbol(query),
+               'requested_ticker': ('unspecified' if ticker is None
+                                    else safe_symbol(ticker, limit=32)),
+               'requested_kind': 'unspecified' if expected is None else safe_symbol(expected[0]),
+               'requested_currency': ('unspecified' if expected is None
+                                      else safe_symbol(expected[1])),
+               'requested_class': 'unspecified'}
     matches = session.data.find_instruments(query)
-    candidates = [session.data.get_instrument(item.uid) for item in matches
-                  if ticker is None or item.ticker == ticker]
+    candidates, facts = [], []
+    for match in matches:
+        fact = instrument_facts(match, loaded=False)
+        if len(facts) < 20:
+            facts.append(fact)
+        if ticker is not None and match.ticker != ticker:
+            fact['reason'] = 'ticker_mismatch'
+            continue
+        try:
+            item = session.data.get_instrument(match.uid)
+        except Exception:
+            fact['reason'] = 'metadata_read_failed'
+            _selection_failure(session, request, matches, facts,
+                               ('metadata_read_failed', 'incomplete'))
+            raise
+        fact.update(instrument_facts(item))
+        flag = fact['api_available']
+        fact['reason'] = ('eligible' if flag is True else 'api_unavailable' if flag is False
+                          else 'api_availability_' + flag)
+        if expected is not None:
+            fact['metadata_issues'] = [name + '_mismatch' for name, actual, wanted in (
+                ('kind', fact['kind'], expected[0]), ('currency', fact['currency'], expected[1]))
+                if actual != wanted]
+        candidates.append(item)
     candidates = [item for item in candidates if item.api_trade_available]
+    if len(candidates) != 1:
+        reason = ('no_candidates' if not matches else 'no_eligible_candidates'
+                  if not candidates else 'ambiguous')
+        _selection_failure(session, request, matches, facts, (reason, len(candidates)))
+    elif any(fact.get('metadata_issues') for fact in facts):
+        _selection_failure(session, request, matches, facts,
+                           ('metadata_expectation_mismatch', len(candidates)))
     require(len(candidates) == 1, 'multicurrency setup requires unique available instrument')
     return candidates[0]
 
@@ -66,9 +114,10 @@ def catalog(session: SandboxSession) -> CurrencyCatalog:
     """Complete metadata/books/permission preflight before setup sends any order."""
     sources = session.data.valuation_sources
     session.market = ExecutionMarket(sources.fx, sources.securities)
-    rub = _unique(session, 'SBER', ticker='SBER')
-    bond = _unique(session, 'RU000A105104')
-    currency = _unique(session, 'CNYRUB_TOM', ticker='CNYRUB_TOM')
+    rub = _unique(session, 'SBER', ticker='SBER', expected=(InstrumentType.SHARE, 'rub'))
+    bond = _unique(session, 'RU000A105104', expected=(InstrumentType.BOND, 'cny'))
+    currency = _unique(session, 'CNYRUB_TOM', ticker='CNYRUB_TOM',
+                       expected=(InstrumentType.CURRENCY, 'rub'))
     full = safe_call(session.client.instruments.bond_by,
                      id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=bond.uid).instrument
     require(full.uid == bond.uid and full.isin == 'RU000A105104'

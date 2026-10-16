@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from autorepeater.market_diagnostics import set_diagnostic_context
 from scripts.sandbox_lifecycle import (
     SandboxFailure, SandboxLifecycle, list_exception_facts, sandbox_client,
 )
@@ -19,6 +20,14 @@ class SandboxInterrupted(BaseException):
     """Let fixture finally blocks run on supervisor termination."""
 
 
+class MarketDiagnosticOutput(logging.Handler):
+    """Forward only the bounded emitter's warnings, outside captured report sections."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.module == 'market_diagnostics' and record.msg == 'Market diagnostic: %s':
+            print(record.getMessage(), flush=True)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Show selected-test progress before even a slow session fixture starts."""
@@ -27,6 +36,22 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     attempt = Path(os.environ.get('E2E_ATTEMPT_REPORT', '')).parent.name
     prefix = f' attempt {int(attempt)}' if attempt.isascii() and attempt.isdecimal() else ''
     print(f'Sandbox E2E{prefix} [{index}/{len(selected)}] {item.nodeid}', flush=True)
+    set_diagnostic_context(stage='sandbox_e2e', scenario=item.nodeid, phase='setup')
+
+
+def pytest_runtest_call(item: pytest.Item) -> None:
+    """Market warnings share the current node and phase without touching evidence."""
+    set_diagnostic_context(stage='sandbox_e2e', scenario=item.nodeid, phase='call')
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, Any, None]:
+    """Keep cleanup warnings attributable, then clear context for other callers."""
+    set_diagnostic_context(stage='sandbox_e2e', scenario=item.nodeid, phase='teardown')
+    try:
+        yield
+    finally:
+        set_diagnostic_context(stage='unknown', scenario='unknown', phase='unknown')
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -123,8 +148,10 @@ def live(request: pytest.FixtureRequest, sandbox: SandboxSession
     sandbox.market = None
     sandbox.data.begin_snapshot()
     journal = OrderJournal()
+    diagnostics = MarketDiagnosticOutput(logging.WARNING)
     logger = logging.getLogger('tinkoffBot')
     logger.addHandler(journal)
+    logger.addHandler(diagnostics)
     recorder = attempt_recorder(request.session)
     if recorder is not None:
         recorder.entered.append(request.node.nodeid)
@@ -137,6 +164,7 @@ def live(request: pytest.FixtureRequest, sandbox: SandboxSession
             sandbox.records.append({'event': 'failure', 'reason': str(report.longrepr),
                                     'error': report.sandbox_error})
         logger.removeHandler(journal)
+        logger.removeHandler(diagnostics)
         artifact_root = Path(os.environ.get(
             'E2E_ARTIFACT_DIR', '/tmp/autorepeater-e2e-' + sandbox.lifecycle.run_id))
         try:

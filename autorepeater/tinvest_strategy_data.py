@@ -9,6 +9,7 @@ from t_tech.invest import (
 from t_tech.invest.services import Services
 
 from autorepeater.logging_config import logger
+from autorepeater.market_diagnostics import warn_metadata_failure
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.strategy_data import InstrumentInfo
 from autorepeater.strategy_data import InstrumentMatch
@@ -161,11 +162,13 @@ class TInvestStrategyData:
                 raise _transport_error(error) from error
             instrument = response.instrument
             if instrument is None:
+                warn_metadata_failure(uid, None, 'metadata_missing')
                 raise ValueError(f'instrument {uid}: instrument is missing')
             info = _instrument_info(instrument, _instrument_type(instrument.instrument_type))
             if self._instrument_cache is not None:
                 logger.info('Loaded instrument metadata by UID: %s (not in current catalogs)', uid)
         if not isinstance(info.api_trade_available, bool):
+            warn_metadata_failure(uid, info, 'api_availability_invalid')
             raise ValueError(f'instrument {uid}: api_trade_available_flag must be bool')
         if self._instrument_cache is not None:
             self._instrument_cache[uid] = info
