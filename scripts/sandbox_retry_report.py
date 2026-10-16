@@ -1,6 +1,7 @@
 """Sanitized original pytest facts, recorded only after actual fixture finalizers."""
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 
 from grpc import StatusCode
@@ -12,6 +13,7 @@ from autorepeater.strategy_data import DataAccessError
 from scripts.sandbox_lifecycle import SandboxFailure
 from scripts.sandbox_retry_evidence import (
     AttemptReport, PhaseFact, TRANSPORT_ROOTS, TRANSIENT_STATUSES,
+    RetryFailure, checked_sha,
 )
 
 KNOWN_ERRORS = (
@@ -76,8 +78,16 @@ class AttemptRecorder:
         report = AttemptReport(self.selected, tuple(self.phases), tuple(self.entered),
                                tuple(self.cleaned), self.session_cleanup,
                                self.collection_errors, exit_status)
+        protocol = os.environ.get('E2E_EVIDENCE_PROTOCOL', 'retry-v1')
+        if protocol not in ('retry-v1', 'retry-v2'):
+            raise RetryFailure('unsupported evidence protocol')
+        fields = asdict(report)
+        if protocol == 'retry-v2':
+            fields['sha'] = checked_sha(os.environ.get('E2E_TESTED_SHA', ''))
+        else:
+            del fields['sha']
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(asdict(report)), encoding='utf-8')
+        self.path.write_text(json.dumps(fields), encoding='utf-8')
         markers = 'Sandbox scenario cleanup complete\n' * len(self.cleaned)
         if self.session_cleanup:
             markers += 'Sandbox session cleanup complete\n'

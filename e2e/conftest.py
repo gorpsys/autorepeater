@@ -59,7 +59,8 @@ def pytest_runtest_makereport(
     report = outcome.get_result()
     recorder = attempt_recorder(getattr(item, 'session', None))
     if recorder is not None:
-        recorder.phase(item.nodeid, report.when, report.outcome,
+        recorder.phase(item.nodeid, report.when,
+                       'skipped' if hasattr(report, 'wasxfail') else report.outcome,
                        None if call.excinfo is None else call.excinfo.value)
     if call.excinfo is not None:
         exception = call.excinfo.value

@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import xml.etree.ElementTree as ET
 
 MAX_ATTEMPTS = 4
@@ -9,6 +10,7 @@ MAX_BYTES = 2_000_000
 TRANSPORT_ROOTS = frozenset(('RequestError', 'SandboxFailure', 'DataAccessError',
                              'ExecutionDataError', 'OrderExecutionError'))
 TRANSIENT_STATUSES = frozenset(('DEADLINE_EXCEEDED', 'UNAVAILABLE'))
+# Frozen v1 contract, used only for callers that have not selected retry-v2.
 EXPECTED_SCENARIOS = (
     'test_initial_monthly2000_and_noop[INDEX-PAIR]',
     'test_initial_monthly2000_and_noop[COMPOSITE-MIX]',
@@ -36,6 +38,31 @@ class RetryFailure(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class SuiteCollection:
+    """Independent full collection of the tested checkout, before any live fixture."""
+    sha: str
+    nodeids: tuple[str, ...]
+
+
+def checked_sha(value: object) -> str:
+    """A collection and all its attempts must belong to one nonzero commit."""
+    if (not isinstance(value, str) or re.fullmatch('[0-9a-f]{40}', value) is None
+            or value == '0' * 40):
+        raise RetryFailure('invalid collection SHA')
+    return value
+
+
+def read_collection(path: Path, sha: str) -> SuiteCollection:
+    """Read the independent manifest; no subset or producer verdict can replace it."""
+    fields = object_fields(read_json(path), {'version', 'sha', 'nodeids'})
+    nodes = nodeids(fields['nodeids'])
+    if (integer(fields['version']) != 1 or not nodes
+            or checked_sha(fields['sha']) != checked_sha(sha)):
+        raise RetryFailure('full collection for exact SHA required')
+    return SuiteCollection(sha, nodes)
+
+
+@dataclass(frozen=True, slots=True)
 class PhaseFact:
     """A sanitized original pytest phase, with allowlisted transport provenance."""
     nodeid: str
@@ -55,6 +82,7 @@ class AttemptReport:  # pylint: disable=too-many-instance-attributes
     session_cleanup: bool
     collection_errors: int
     exit_status: int
+    sha: str | None = None
 
 
 def read_bytes(path: Path) -> bytes:
@@ -87,8 +115,10 @@ def read_json(path: Path) -> object:
 
 
 def nodeids(value: object) -> tuple[str, ...]:
-    """Only the suite's exact node IDs can select another live process."""
-    if not isinstance(value, list) or any(item not in EXPECTED_NODEIDS for item in value):
+    """Only safe e2e module/function IDs can select another live process."""
+    if not isinstance(value, list) or any(not isinstance(item, str) or re.fullmatch(
+            r'e2e/test_[A-Za-z0-9_]+\.py::test_[A-Za-z0-9_]+(?:\[[A-Za-z0-9_.-]+\])?',
+            item) is None for item in value):
         raise RetryFailure('invalid retry node IDs')
     if len(set(value)) != len(value):
         raise RetryFailure('duplicate retry node IDs')
@@ -121,12 +151,17 @@ def integer(value: object) -> int:
     return value
 
 
-def read_report(path: Path) -> AttemptReport:
+def read_report(path: Path, *, protocol: str = 'retry-v1') -> AttemptReport:
     """Reconstruct the original immutable report without permissive defaults."""
-    fields = object_fields(read_json(path), {
-        'selected', 'phases', 'entered', 'cleaned', 'session_cleanup',
-        'collection_errors', 'exit_status',
-    })
+    if protocol not in ('retry-v1', 'retry-v2'):
+        raise RetryFailure('unsupported evidence protocol')
+    keys = {'selected', 'phases', 'entered', 'cleaned', 'session_cleanup',
+            'collection_errors', 'exit_status'}
+    fields = object_fields(read_json(path), keys | ({'sha'} if protocol == 'retry-v2' else set()))
+    if protocol == 'retry-v1' and any(
+            node not in EXPECTED_NODEIDS for key in ('selected', 'entered', 'cleaned')
+            for node in nodeids(fields[key])):
+        raise RetryFailure('invalid legacy retry node IDs')
     raw_phases = fields['phases']
     cleanup = fields['session_cleanup']
     if not isinstance(raw_phases, list) or not isinstance(cleanup, bool):
@@ -134,7 +169,8 @@ def read_report(path: Path) -> AttemptReport:
     return AttemptReport(
         nodeids(fields['selected']), tuple(map(phase_fact, raw_phases)),
         nodeids(fields['entered']), nodeids(fields['cleaned']), cleanup,
-        integer(fields['collection_errors']), integer(fields['exit_status']))
+        integer(fields['collection_errors']), integer(fields['exit_status']),
+        checked_sha(fields['sha']) if protocol == 'retry-v2' else None)
 
 
 def case_phases(report: AttemptReport, node: str) -> tuple[PhaseFact, ...]:
@@ -181,6 +217,8 @@ def validate_report(report: AttemptReport, returncode: int) -> None:
     """Require complete phases and confirmed cleanup, including failed session setup."""
     if not report.selected or report.collection_errors != 0:
         raise RetryFailure('empty collection or collection error')
+    for nodes in (report.selected, report.entered, report.cleaned):
+        nodeids(list(nodes))
     if report.exit_status != returncode or returncode not in (0, 1):
         raise RetryFailure('process canceled or exit status inconsistent')
     if not report.session_cleanup or set(report.entered) != set(report.cleaned):
@@ -210,9 +248,9 @@ def xml_states(path: Path) -> dict[str, str]:
     validate_xml_counts(root)
     states: dict[str, str] = {}
     for case in root.iter('testcase'):
-        node = 'e2e/test_sandbox.py::' + case.get('name', '')
-        if (node not in EXPECTED_NODEIDS or node in states or
-                case.get('classname') != 'e2e.test_sandbox'):
+        node = case.get('classname', '').replace('.', '/') + '.py::' + case.get('name', '')
+        nodeids([node])
+        if node in states:
             raise RetryFailure('invalid or duplicate retry JUnit case')
         states[node] = 'failed' if any(
             case.find(tag) is not None for tag in ('failure', 'error', 'skipped')) else 'passed'
@@ -236,9 +274,10 @@ def validate_xml_counts(root: ET.Element) -> None:
                 raise RetryFailure('JUnit counters disagree with original cases')
 
 
-def verify_attempt(directory: Path, returncode: int) -> AttemptReport:
+def verify_attempt(directory: Path, returncode: int, *,
+                   protocol: str = 'retry-v1') -> AttemptReport:
     """Original JSON, JUnit and cleanup markers must corroborate one execution."""
-    report = read_report(directory / 'report.json')
+    report = read_report(directory / 'report.json', protocol=protocol)
     validate_report(report, returncode)
     expected = {node: 'failed' if node in failed_nodes(report) else 'passed'
                 for node in report.selected}
@@ -272,14 +311,27 @@ def history_entries(root: Path) -> list[dict[str, object]]:
     return records
 
 
-def inspect_history(root: Path, *, require_full: bool = False) -> dict[str, str]:
+def inspect_history(root: Path, *, require_full: bool = False,
+                    expected: SuiteCollection | None = None) -> dict[str, str]:
     """Derive legal selection, rerun count and final outcomes from every original."""
     states: dict[str, str] = {}
+    if expected is not None and not expected.nodeids:
+        raise RetryFailure('independent full collection required')
+    if expected is not None:
+        checked_sha(expected.sha)
+        nodeids(list(expected.nodeids))
     next_nodes: tuple[str, ...] | None = None
     for number, entry in enumerate(history_entries(root), 1):
-        report = verify_attempt(root / 'attempts' / f'{number:02}', integer(entry['returncode']))
-        if number == 1 and require_full and set(report.selected) != set(EXPECTED_NODEIDS):
+        report = verify_attempt(root / 'attempts' / f'{number:02}', integer(entry['returncode']),
+                                protocol='retry-v2' if expected is not None else 'retry-v1')
+        if number == 1 and require_full and expected is None and (
+                set(report.selected) != set(EXPECTED_NODEIDS)):
             raise RetryFailure('full initial 17-case collection required')
+        if expected is not None and report.sha != expected.sha:
+            raise RetryFailure('attempt SHA differs from full collection')
+        if number == 1 and require_full and expected is not None and (
+                set(report.selected) != set(expected.nodeids)):
+            raise RetryFailure('full initial collection required')
         if next_nodes is not None and (not next_nodes or report.selected != next_nodes):
             raise RetryFailure('illegal retry selection or retry after permanent failure')
         states.update({node: 'failed' if node in failed_nodes(report) else 'passed'
@@ -294,16 +346,18 @@ def write_final_junit(states: dict[str, str], path: Path) -> None:
                        failures=str(sum(state != 'passed' for state in states.values())),
                        errors='0', skipped='0')
     for node, state in states.items():
-        case = ET.SubElement(suite, 'testcase', classname='e2e.test_sandbox',
-                             name=node.split('::')[1])
+        module, name = node.split('::')
+        case = ET.SubElement(suite, 'testcase', classname=module[:-3].replace('/', '.'),
+                             name=name)
         if state != 'passed':
             ET.SubElement(case, 'failure', message='sandbox scenario did not pass')
     ET.ElementTree(suite).write(path, encoding='utf-8', xml_declaration=True)
 
 
-def verify_history(root: Path, *, require_full: bool = True) -> int:
+def verify_history(root: Path, *, require_full: bool = True,
+                   expected: SuiteCollection | None = None) -> int:
     """Merged green output is accepted only when its originals independently prove it."""
-    states = inspect_history(root, require_full=require_full)
+    states = inspect_history(root, require_full=require_full, expected=expected)
     if not states or any(state != 'passed' for state in states.values()):
         raise RetryFailure('sandbox cases remain failed')
     if xml_states(root / 'junit.xml') != states:

@@ -36,7 +36,10 @@ def store(root: Path, number: int, report, *, returncode=None):
     """Original artifacts and actual exit code are retained for every round."""
     directory = root / 'attempts' / f'{number:02}'
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / 'report.json').write_text(json.dumps(asdict(report)), encoding='utf-8')
+    fields = asdict(report)
+    if report.sha is None:
+        del fields['sha']
+    (directory / 'report.json').write_text(json.dumps(fields), encoding='utf-8')
     suite = ET.Element('testsuite', tests=str(len(report.selected)), errors='0',
                        failures=str(len(evidence.failed_nodes(report))), skipped='0')
     for node in report.selected:
