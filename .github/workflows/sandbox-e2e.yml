@@ -76,7 +76,7 @@ jobs:
     if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.pending.result == 'success' }}
     runs-on: ubuntu-latest
     # Queue and environment approval wait are outside this active job deadline.
-    # All seven step limits sum to 48m, leaving 7m for runner/action overhead.
+    # Step limits leave at least 7m for runner/action overhead.
     # Cleanup (2m), markers (1m) and upload (2m) have explicitly reserved time.
     timeout-minutes: 55
     permissions:
@@ -84,6 +84,8 @@ jobs:
     env:
       SANDBOX_CI_SERIALIZED: "1"
       PYTEST_ADDOPTS: ""
+      E2E_EVIDENCE_PROTOCOL: "retry-v2"
+      E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
     defaults:
       run:
         working-directory: tested
@@ -102,9 +104,12 @@ jobs:
       - name: Install verified test dependencies with SDK fallback
         timeout-minutes: 6
         run: make setup
+      - name: Collect the full suite of the exact tested SHA without live fixtures
+        timeout-minutes: 1
+        run: .venv/bin/python -m scripts.sandbox_collection --sha "$E2E_TESTED_SHA" --output sandbox-results/collection.json
       - name: Run all real sandbox scenarios
         id: run
-        timeout-minutes: 33
+        timeout-minutes: 32
         shell: bash
         env:
           SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
@@ -162,7 +167,9 @@ jobs:
           path: sandbox-results
       - name: Verify exact full suite and fixture cleanup
         id: evidence
-        run: python3 -m scripts.sandbox_github evidence --evidence-format retry-v1 --junit sandbox-results/junit.xml
+        env:
+          TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
+        run: python3 -m scripts.sandbox_github evidence --evidence-format retry-v2 --junit sandbox-results/junit.xml --collection sandbox-results/collection.json --sha "$TESTED_SHA"
 
   publish:
     needs: [prepare, pending, live, verify]
@@ -190,12 +197,12 @@ jobs:
             const complete = process.env.LIVE_RESULT === 'success' &&
               process.env.VERIFY_RESULT === 'success' &&
               process.env.RUN_CANCELLED === 'false' &&
-              process.env.COMPLETE === 'true' && process.env.PASSED === '17';
+              process.env.COMPLETE === 'true';
             await github.rest.repos.createCommitStatus({
               ...context.repo, sha: process.env.TESTED_SHA, context: 'Sandbox E2E',
               request: { timeout: 15000 },
               state: complete ? 'success' : 'failure',
-              description: complete ? 'All 17 sandbox scenarios passed; cleanup confirmed' :
+              description: complete ? 'Full sandbox suite passed; cleanup confirmed' :
                 'Sandbox suite failed, canceled, not run or incomplete',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });

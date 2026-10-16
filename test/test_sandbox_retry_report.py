@@ -140,6 +140,21 @@ def test_hook_keeps_original_phases_after_teardown(tmp_path, monkeypatch):
     assert [phase.when for phase in facts.phases] == ['setup', 'call', 'teardown']
 
 
+@pytest.mark.parametrize('outcome', ['passed', 'skipped'])
+def test_hook_rejects_xpass_and_xfail_as_nonpassing(tmp_path, outcome):
+    """Pytest's soft XPASS has a passed outcome but must never give suite acceptance."""
+    from e2e import conftest  # pylint: disable=import-outside-toplevel
+    recorder = reporting.AttemptRecorder(tmp_path / 'report.json')
+    item = SimpleNamespace(nodeid='e2e/test_sandbox.py::test_case', session=SimpleNamespace(
+        config=SimpleNamespace(sandbox_retry_recorder=recorder)))
+    hook = conftest.pytest_runtest_makereport(item, SimpleNamespace(excinfo=None))
+    next(hook)
+    report = SimpleNamespace(when='call', outcome=outcome, wasxfail='expected')
+    with pytest.raises(StopIteration):
+        hook.send(SimpleNamespace(get_result=lambda: report))
+    assert recorder.phases[0].outcome == 'skipped'
+
+
 @pytest.mark.parametrize('failure', ['none', 'preflight', 'scan', 'cleanup', 'unknown-open'])
 def test_session_proves_cleanup_before_retry(tmp_path, monkeypatch, failure):
     """A yielded session must find unknown-created IDs; readonly preflight needs no rescan."""

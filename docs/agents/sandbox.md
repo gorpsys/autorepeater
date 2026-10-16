@@ -31,10 +31,23 @@ cleanup/отмена/общий тайм-аут не повторять. Люб�
 входа в сессию искать неизвестные созданные ID только по текущему run ID;
 ошибка первого read-only preflight допускает пустую cleanup без нового RPC.
 Cleanup доказывать структурными facts, не видимостью stdout при capture.
-retry-v1: исходные attempts/NN/report.json+junit.xml+cleanup.log и дампы,
-retry.json и итоговый уникальный junit.xml. GitHub независимо выводит
-законность всех попыток/итогов из originals, точные 17 node IDs первой попытки
-обязательны. Local -k допускается, не даёт full-suite acceptance.
+retry-v2: collection.json полного набора проверяемого SHA создаётся отдельным
+collect-only процессом до live fixtures, без inherited pytest filters/plugins.
+Dirty source, deselection, пустая коллекция и collection errors запрещены.
+Исходные attempts/NN/report.json+junit.xml+cleanup.log и дампы, retry.json
+и итоговый уникальный junit.xml сохраняются. GitHub независимо выводит
+законность всех попыток/итогов из originals: первая попытка содержит ровно
+полную коллекцию, повторные — только допустимый failed subset. SHA каждой
+попытки совпадает с collection и SHA, зафиксированным trusted workflow.
+Skipped/xfail/xpass, лишние/повторные/недостающие cases, ошибки teardown,
+collection или cleanup не дают success. Passed count — только диагностика.
+Версию выбирает инициатор: workflow задаёт E2E_EVIDENCE_PROTOCOL=retry-v2
+и E2E_TESTED_SHA, trusted verifier — --evidence-format retry-v2 с --collection
+и --sha. Отсутствие выбора сохраняет retry-v1 и его фиксированный набор 17
+сценариев; в v1 report нет sha и новых полей. Это позволяет проверить сам
+инфраструктурный PR действующим master workflow без обхода защиты.
+После мержа новый trusted master включает v2; расширенные наборы требуют v2.
+Local -k в legacy режиме допускается, не даёт full-suite acceptance.
 Linux /proc проверяет остановку всей группы перед аварийной очисткой;
 неподтверждённая остановка запрещает cleanup. Raw run.log не публиковать.
 Перекрывающиеся облачные вызовы/активные заявки проверить перед промышленным

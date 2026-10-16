@@ -117,6 +117,18 @@ def test_permissions_concurrency_and_cloud_parameters_match_original(workflows):
     assert reserve['jobs']['deploy']['env']['FUNCTION_TIMEOUT'] == '60s'
 
 
+def test_both_workflows_pin_the_same_existing_function_id(workflows):
+    """Deployment cannot select a resource by its mutable display name."""
+    original, reserve = workflows
+    target = original['jobs']['deploy']['env']['FUNCTION_ID']
+    assert target == 'd4e6d0l53hkivgrmfano'
+    assert re.fullmatch('[a-z0-9]{20}', target)
+    assert reserve['jobs']['deploy']['env']['FUNCTION_ID'] == target
+    for workflow in workflows:
+        assert 'FUNCTION_NAME' not in workflow['jobs']['deploy']['env']
+        assert '--function-name' not in str(workflow)
+
+
 @pytest.mark.parametrize('repository,ref,event,expected', [
     ('gorpsys/autorepeater', 'refs/heads/master', 'workflow_dispatch', True),
     ('fork/autorepeater', 'refs/heads/master', 'workflow_dispatch', False),

@@ -10,7 +10,9 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-from scripts.sandbox_retry_evidence import EXPECTED_SCENARIOS, RetryFailure, verify_history
+from scripts.sandbox_retry_evidence import (
+    EXPECTED_SCENARIOS, RetryFailure, read_collection, verify_history,
+)
 MAX_EVIDENCE_BYTES = 2_000_000
 BOOTSTRAP_PR_NUMBER = 28
 
@@ -211,15 +213,23 @@ def write_outputs(values: dict[str, str]) -> None:
             output.write(f'{key}={value}\n')
 
 
-def evidence_result(junit: Path, run_log: Path | None, format_name: str) -> SuiteEvidence:
+def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
+                    collection: Path | None = None, sha: str = '') -> SuiteEvidence:
     """Versioned evidence is explicit; never silently accept a legacy merged XML."""
     if format_name == 'single-v1':
         if run_log is None:
             raise GitHubFailure('single-v1 cleanup log required')
         return verify_evidence(junit, run_log)
     if junit.name != 'junit.xml':
-        raise GitHubFailure('retry-v1 requires the fixed merged JUnit path')
+        raise GitHubFailure('retry evidence requires the fixed merged JUnit path')
     try:
+        if format_name == 'retry-v2':
+            if collection is None:
+                raise GitHubFailure('independent full collection required')
+            expected = read_collection(collection, sha)
+            return SuiteEvidence(verify_history(junit.parent, expected=expected))
+        if format_name != 'retry-v1':
+            raise GitHubFailure('unsupported evidence protocol')
         return SuiteEvidence(verify_history(junit.parent, require_full=True))
     except RetryFailure:
         raise GitHubFailure('retry history does not prove full sandbox acceptance') from None
@@ -233,12 +243,15 @@ def main(argv: list[str] | None = None) -> int:
     evidence = commands.add_parser('evidence')
     evidence.add_argument('--junit', type=Path, required=True)
     evidence.add_argument('--run-log', type=Path)
-    evidence.add_argument('--evidence-format', choices=('retry-v1', 'single-v1'),
+    evidence.add_argument('--collection', type=Path)
+    evidence.add_argument('--sha', default='')
+    evidence.add_argument('--evidence-format', choices=('retry-v1', 'retry-v2', 'single-v1'),
                           default='retry-v1')
     args = parser.parse_args(argv)
     try:
         if args.command == 'evidence':
-            facts = evidence_result(args.junit, args.run_log, args.evidence_format)
+            facts = evidence_result(args.junit, args.run_log, args.evidence_format,
+                                    collection=args.collection, sha=args.sha)
             write_outputs({'complete': 'true', 'passed': str(facts.passed)})
         else:
             event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))

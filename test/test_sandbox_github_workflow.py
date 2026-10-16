@@ -80,7 +80,10 @@ def test_evidence_is_verified_on_a_separate_readonly_runner() -> None:
     assert 'actions/download-artifact@v4' in text
     assert 'ref: ${{ needs.prepare.outputs.trusted_sha }}' in text
     assert '-m scripts.sandbox_github evidence' in text
-    assert '--evidence-format retry-v1' in text
+    assert '--evidence-format retry-v2' in text
+    assert '--collection sandbox-results/collection.json' in text
+    assert '--sha "$TESTED_SHA"' in text
+    assert 'TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
     assert "needs.live.result == 'success'" in text
 
 
@@ -166,7 +169,7 @@ def test_publication_cannot_execute_tested_head_and_checks_full_success() -> Non
     text = job('publish')
     assert "process.env.LIVE_RESULT === 'success'" in text
     assert "process.env.COMPLETE === 'true'" in text
-    assert "process.env.PASSED === '17'" in text
+    assert 'process.env.PASSED' not in text
     assert "process.env.VERIFY_RESULT === 'success'" in text
     assert 'COMPLETE: ${{ needs.verify.outputs.complete }}' in text
     assert "state: complete ? 'success' : 'failure'" in text
@@ -185,8 +188,9 @@ def test_publication_cannot_execute_tested_head_and_checks_full_success() -> Non
     ('success', 'skipped', 'true', '17', 'false', False),
     ('success', 'success', '', '17', 'false', False),
     ('success', 'success', 'false', '17', 'false', False),
-    ('success', 'success', 'true', '16', 'false', False),
-    ('success', 'success', 'true', '18', 'false', False),
+    ('success', 'success', 'true', '16', 'false', True),
+    ('success', 'success', 'true', '18', 'false', True),
+    ('success', 'success', 'true', '25', 'false', True),
     ('success', 'success', 'true', '17', 'true', False),
     ('success', 'success', 'true', '17', '', False),
 ])
@@ -198,9 +202,19 @@ def test_inline_publication_predicate_is_fail_closed(
     clauses = [clause.strip() for clause in predicate.split('&&')]
     parsed = [re.fullmatch(r"process.env.([A-Z_]+) === '([a-z0-9]+)'", clause)
               for clause in clauses]
-    assert len(parsed) == 5 and all(match is not None for match in parsed)
+    assert len(parsed) == 4 and all(match is not None for match in parsed)
     environment = {'LIVE_RESULT': live, 'VERIFY_RESULT': verify,
                    'COMPLETE': complete, 'PASSED': passed, 'RUN_CANCELLED': cancelled}
     result = all(environment[match.group(1)] == match.group(2) for match in parsed
                  if match is not None)
     assert result is expected
+
+
+def test_full_collection_precedes_any_live_secret_and_selects_v2() -> None:
+    """The workflow owns the evidence version and fixes the collection's SHA."""
+    text = job('live')
+    assert 'E2E_EVIDENCE_PROTOCOL: "retry-v2"' in text
+    assert 'E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
+    collector = 'scripts.sandbox_collection --sha "$E2E_TESTED_SHA"'
+    assert collector in text
+    assert text.index(collector) < text.index('SANDBOX_TOKEN:')
