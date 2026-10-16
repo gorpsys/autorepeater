@@ -14,8 +14,9 @@ gate учитывает динамическое имя master E2E по пути
 `tinkoff` → `my-catalog` не влияет на выбор; функция не переименована.
 Lint/offline зелёные; PR E2E `38879802838` — все 17 сценариев, master E2E
 `38883490401` — SUCCESS; полное завершение и cleanup обоих прогонов подтверждены.
-Обычный деплой `38885601300` упал на создании версии с `invalid_argument` после
-OIDC, preflight ID функции и загрузки ZIP. Build log не получен; причина в SDK-индексе не доказана.
+Обычный деплой `38885601300` после OIDC, preflight ID функции и загрузки ZIP упал при сборке (exit 1); `invalid_argument` — CI-обёртка ошибки build.
+Источник: build log из облачной консоли, предоставленный пользователем 16.10.2026: SDK-индекс `opensource.tbank.ru` недоступен из cloud builder (тайм-аут соединения 15 секунд, все 5 retry).
+`pip3.12 install` завершился `No matching distribution found` для `t-tech-investments==1.51.0`; отсутствие версии или несовместимость с Python этим не доказаны.
 По отдельному согласованию выполнен [резервный offline-деплой](https://github.com/gorpsys/autorepeater/actions/runs/38888894486)
 того же `0492181`: SUCCESS, обновлён в 10:43:03 UTC.
 Read-only проверка YC в 10:50 UTC подтвердила новую latest-версию
