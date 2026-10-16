@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import subprocess
-from unittest.mock import create_autospec
+from unittest.mock import call, create_autospec
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -19,7 +19,7 @@ def settings(tmp_path):
     """User-approved cloud identities are metadata, not long-lived credentials."""
     return deploy.Settings(
         'b1gdgrp5bnth11phova8', 'ajela8pd8l3bjeupa04s', 'autorepeater-deploy',
-        'python-function', tmp_path / 'package.zip',
+        'functionid', tmp_path / 'package.zip',
         deploy.FunctionSettings('python312', 'handler.handler', '256MB', '60s',
                                 'ajelpbq7as5bpe499962'),
         deploy.SecretBinding('e6qc2ghhip6925lllhm7', 'e6qqshm7lkthgotpdqf6', 't_token', 't_token'),
@@ -41,6 +41,8 @@ def test_new_version_uses_bucket_and_keeps_environment_and_lockbox(tmp_path):
     cfg = settings(tmp_path)
     args = deploy.version_arguments(cfg, current(), 'sha/package.zip', 'f' * 64, SHA)
     assert '--source-path' not in args
+    assert '--function-name' not in args
+    assert args[args.index('--function-id') + 1] == cfg.function_id
     assert args[args.index('--memory') + 1] == '256MB'
     assert args[args.index('--execution-timeout') + 1] == '60s'
     assert args[args.index('--service-account-id') + 1] == cfg.function.service_account_id
@@ -134,7 +136,101 @@ def test_successful_publication_is_single_upload_create_and_readback(tmp_path):
     assert f'functions/{SHA}/123-2.zip' in calls[1].args[0]
     assert calls[2].args[0][:4] == ['serverless', 'function', 'version', 'create']
     assert calls[3].args[0][:4] == ['serverless', 'function', 'version', 'get-by-tag']
+    get_latest = ['serverless', 'function', 'version', 'get-by-tag',
+                  '--function-id', cfg.function_id, '--tag', '$latest']
+    yc.call.assert_has_calls([
+        call(get_latest, 'read current version'),
+        call(['storage', 's3api', 'put-object', '--body', str(cfg.archive),
+              '--bucket', cfg.bucket, '--key', f'functions/{SHA}/123-2.zip'],
+             'upload package', timeout=120),
+        call(deploy.version_arguments(cfg, before, f'functions/{SHA}/123-2.zip', digest, SHA),
+             'create function version', timeout=900),
+        call(get_latest, 'verify latest version'),
+    ])
     assert not any('invoke' in call.args[0] for call in calls)
+
+
+@pytest.mark.parametrize('function_id', [None, '', 'differentfunction'])
+def test_wrong_current_function_id_stops_before_upload(tmp_path, function_id):
+    """A matching display name cannot authorize another function's metadata."""
+    cfg = settings(tmp_path)
+    cfg.archive.write_bytes(b'ZIP')
+    client = create_autospec(deploy.YandexCLI, instance=True, spec_set=True)
+    client.call.return_value = dict(current(), functionId=function_id, name='python-function')
+    with pytest.raises(DeployError, match='function ID'):
+        deploy.publish(cfg, client, SHA, '123', '1')
+    client.call.assert_called_once_with(
+        ['serverless', 'function', 'version', 'get-by-tag',
+         '--function-id', cfg.function_id, '--tag', '$latest'], 'read current version')
+
+
+def test_missing_function_has_no_name_fallback_or_resource_creation(tmp_path):
+    """A missing pinned resource stops without another read, upload or creation."""
+    cfg = settings(tmp_path)
+    cfg.archive.write_bytes(b'ZIP')
+    client = create_autospec(deploy.YandexCLI, instance=True, spec_set=True)
+    client.call.side_effect = DeployError('cloud command failed: read; reason=not_found')
+    with pytest.raises(DeployError, match='not_found'):
+        deploy.publish(cfg, client, SHA, '123', '1')
+    client.call.assert_called_once_with(
+        ['serverless', 'function', 'version', 'get-by-tag',
+         '--function-id', cfg.function_id, '--tag', '$latest'], 'read current version')
+
+
+@pytest.mark.parametrize('stage', ['created', 'latest', 'both'])
+@pytest.mark.parametrize('function_id', [None, '', 'differentfunction'])
+def test_publication_rejects_wrong_response_function_id(tmp_path, stage, function_id):
+    """Even the same version ID cannot hide a wrong create or readback function ID."""
+    cfg = settings(tmp_path)
+    cfg.archive.write_bytes(b'ZIP')
+    client = create_autospec(deploy.YandexCLI, instance=True, spec_set=True)
+    after = dict(current(), id='newversion', secrets=[cfg.secret.as_rest()],
+                 name='python-function',
+                 description=f'GitHub master {SHA}; package sha256 '
+                             f'{deploy.package_digest(cfg.archive)}')
+    created = dict(after)
+    if stage in ('created', 'both'):
+        created['functionId'] = function_id
+    if stage in ('latest', 'both'):
+        after['functionId'] = function_id
+    client.call.side_effect = [current(), {}, created, after]
+    with pytest.raises(DeployError, match='function ID'):
+        deploy.publish(cfg, client, SHA, '123', '1')
+    assert client.call.call_count == (4 if stage == 'latest' else 3)
+
+
+@pytest.mark.parametrize('function_id', [None, '', 'differentfunction'])
+@pytest.mark.parametrize('version_id', ['newversion', 'oldversion'])
+def test_verification_rejects_agreeing_but_unexpected_function_ids(
+        tmp_path, function_id, version_id):
+    """The explicit target wins over two agreeing responses or display names."""
+    cfg = settings(tmp_path)
+    before = dict(current(), functionId=function_id, name='python-function')
+    after = dict(before, id=version_id, secrets=[cfg.secret.as_rest()],
+                 description=f'GitHub master {SHA}; package sha256 ' + 'f' * 64)
+    with pytest.raises(DeployError, match='function ID'):
+        deploy.verify_version(cfg, before, after, sha=SHA, digest='f' * 64)
+
+
+def test_publication_survives_function_rename(tmp_path):
+    """Function and folder names never participate in selecting the target resource."""
+    cfg = settings(tmp_path)
+    cfg.archive.write_bytes(b'ZIP')
+    client = create_autospec(deploy.YandexCLI, instance=True, spec_set=True)
+    before = dict(current(), name='python-function')
+    after = dict(before, name='renamed-function', id='newversion',
+                 secrets=[cfg.secret.as_rest()],
+                 description=f'GitHub master {SHA}; package sha256 '
+                             f'{deploy.package_digest(cfg.archive)}')
+    client.call.side_effect = [before, {}, after, after]
+    assert deploy.publish(cfg, client, SHA, '123', '1') == 'newversion'
+    assert client.call.call_count == 4
+    for invocation in client.call.call_args_list:
+        arguments = invocation.args[0]
+        assert '--function-name' not in arguments
+        assert 'python-function' not in arguments and 'renamed-function' not in arguments
+        if arguments[:3] == ['serverless', 'function', 'version']:
+            assert arguments[arguments.index('--function-id') + 1] == cfg.function_id
 
 
 def test_missing_package_never_calls_cloud(tmp_path):
@@ -149,7 +245,7 @@ def deployment_environment(tmp_path):
     """Explicit metadata and synthetic credentials, not production secret values."""
     return {
         'CLOUD_ID': 'cloud', 'FOLDER_ID': 'folder', 'SA_ID': 'deploysa', 'BUCKET': 'bucket',
-        'FUNCTION_NAME': 'python-function', 'ZIP_PATH': str(tmp_path / 'package.zip'),
+        'FUNCTION_ID': 'functionid', 'ZIP_PATH': str(tmp_path / 'package.zip'),
         'FUNCTION_RUNTIME': 'python312', 'FUNCTION_ENTRYPOINT': 'handler.handler',
         'FUNCTION_MEMORY': '256MB', 'FUNCTION_TIMEOUT': '60s', 'FUNCTION_SA_ID': 'runtimesa',
         'LOCKBOX_SECRET_ID': 'secret', 'LOCKBOX_VERSION_ID': 'version',
@@ -168,6 +264,7 @@ def test_settings_preserve_explicit_cloud_identities(tmp_path):
     cfg = deploy.settings_from_environment(deployment_environment(tmp_path))
     assert cfg.service_account_id == 'deploysa'
     assert cfg.cloud_id == 'cloud'
+    assert cfg.function_id == 'functionid'
     assert cfg.function.service_account_id == 'runtimesa'
     assert cfg.archive == tmp_path / 'package.zip'
 
@@ -175,12 +272,34 @@ def test_settings_preserve_explicit_cloud_identities(tmp_path):
 @pytest.mark.parametrize('key,value', [
     ('SA_ID', ''), ('SA_ID', 'injected,value'), ('CLOUD_ID', ''), ('FUNCTION_MEMORY', '128MB'),
     ('FUNCTION_TIMEOUT', '30s'), ('FUNCTION_RUNTIME', 'python311'),
+    ('FUNCTION_ID', ''), ('FUNCTION_ID', 'injected,value'), ('FUNCTION_ID', '--function-name'),
 ])
 def test_invalid_settings_have_no_production_fallback(tmp_path, key, value):
     """Missing identities and unapproved resources fail rather than use defaults."""
     env = dict(deployment_environment(tmp_path), **{key: value})
     with pytest.raises(DeployError):
         deploy.settings_from_environment(env)
+
+
+@pytest.mark.parametrize('function_id', [None, '', 'bad,id'])
+def test_invalid_function_id_stops_before_credentials(monkeypatch, tmp_path, function_id):
+    """The old FUNCTION_NAME setting cannot supply a missing or invalid ID."""
+    env = deployment_environment(tmp_path)
+    env['FUNCTION_NAME'] = 'python-function'
+    if function_id is None:
+        del env['FUNCTION_ID']
+    else:
+        env['FUNCTION_ID'] = function_id
+    monkeypatch.setattr(deploy.os, 'environ', env)
+    exchange = create_autospec(deploy.exchange_token, spec_set=True)
+    publish = create_autospec(deploy.publish, spec_set=True)
+    monkeypatch.setattr(deploy, 'exchange_token', exchange)
+    monkeypatch.setattr(deploy, 'publish', publish)
+    with pytest.raises(DeployError, match='FUNCTION_ID'):
+        deploy.settings_from_environment(env)
+    assert deploy.main() == 1
+    exchange.assert_not_called()
+    publish.assert_not_called()
 
 
 def test_oidc_exchange_uses_distinct_audiences_and_masks_both_tokens(monkeypatch, tmp_path, capsys):
@@ -499,7 +618,8 @@ def test_publication_rejects_different_latest_version(tmp_path):
     cfg = settings(tmp_path)
     cfg.archive.write_bytes(b'ZIP')
     client = create_autospec(deploy.YandexCLI, instance=True, spec_set=True)
-    client.call.side_effect = [current(), {}, {'id': 'created'}, {'id': 'other'}]
+    client.call.side_effect = [current(), {}, dict(current(), id='created'),
+                               dict(current(), id='other')]
     with pytest.raises(DeployError, match='differs'):
         deploy.publish(cfg, client, SHA, '123', '1')
 

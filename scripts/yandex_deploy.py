@@ -56,7 +56,7 @@ class Settings:  # pylint: disable=too-many-instance-attributes
     folder_id: str
     service_account_id: str
     bucket: str
-    function_name: str
+    function_id: str
     archive: Path
     function: FunctionSettings
     secret: SecretBinding
@@ -73,7 +73,7 @@ def settings_from_environment(environment: dict[str, str]) -> Settings:
     if (function.runtime, function.entrypoint, function.memory, function.timeout) != (
             'python312', 'handler.handler', '256MB', '60s'):
         raise DeployError('unexpected function execution settings')
-    return Settings(value('FOLDER_ID'), value('SA_ID'), value('BUCKET'), value('FUNCTION_NAME'),
+    return Settings(value('FOLDER_ID'), value('SA_ID'), value('BUCKET'), value('FUNCTION_ID'),
                     Path(text(environment.get('ZIP_PATH'), 'ZIP_PATH')), function,
                     SecretBinding(value('LOCKBOX_SECRET_ID'), value('LOCKBOX_VERSION_ID'),
                                   value('LOCKBOX_KEY'), value('LOCKBOX_ENVIRONMENT_VARIABLE')),
@@ -306,18 +306,25 @@ def logging_arguments(options: dict[str, object]) -> list[str]:
     return args
 
 
+def verify_function_id(settings: Settings, version: dict[str, object]) -> None:
+    """Every provider response must belong to the explicitly configured resource."""
+    expected = identifier(settings.function_id, 'FUNCTION_ID')
+    if identifier(version.get('functionId'), 'function ID') != expected:
+        raise DeployError('function ID differs from configured FUNCTION_ID')
+
+
 def version_arguments(settings: Settings, current: dict[str, object], object_key: str,
                       digest: str, sha: str) -> list[str]:
     """Validate preservation before the first mutating command (upload)."""
     if current.get('status') != 'ACTIVE':
         raise DeployError('current function version is not ACTIVE')
-    identifier(current.get('functionId'), 'current function ID')
+    verify_function_id(settings, current)
     identifier(current.get('id'), 'current version ID')
     values = environment_variables(current)
     bindings = secret_bindings(settings, current)
     function = settings.function
     args = ['serverless', 'function', 'version', 'create',
-            '--function-name', settings.function_name,
+            '--function-id', settings.function_id,
             '--runtime', function.runtime, '--entrypoint', function.entrypoint,
             '--memory', function.memory, '--execution-timeout', function.timeout,
             '--service-account-id', function.service_account_id,
@@ -339,9 +346,11 @@ def version_arguments(settings: Settings, current: dict[str, object], object_key
 def verify_version(settings: Settings, before: dict[str, object], after: dict[str, object],
                    *, sha: str, digest: str) -> None:
     """Read back $latest without invoking the function or exposing environment values."""
+    verify_function_id(settings, before)
+    verify_function_id(settings, after)
     if identifier(after.get('id'), 'new version ID') == before['id']:
         raise DeployError('latest function version was not updated')
-    expected = {'status': 'ACTIVE', 'functionId': before['functionId'],
+    expected = {'status': 'ACTIVE', 'functionId': settings.function_id,
                 'runtime': settings.function.runtime, 'entrypoint': settings.function.entrypoint,
                 'executionTimeout': settings.function.timeout,
                 'serviceAccountId': settings.function.service_account_id,
@@ -369,7 +378,8 @@ def publish(settings: Settings, yc: YandexCLI, sha: str, run_id: str, attempt: s
         raise DeployError('invalid deployment run identity')
     digest = package_digest(settings.archive)
     get_latest = ['serverless', 'function', 'version', 'get-by-tag',
-                  '--function-name', settings.function_name, '--tag', '$latest']
+                  '--function-id', identifier(settings.function_id, 'FUNCTION_ID'),
+                  '--tag', '$latest']
     before = yc.call(get_latest, 'read current version')
     key = f'functions/{sha}/{run_id}-{attempt}.zip'
     arguments = version_arguments(settings, before, key, digest, sha)
@@ -377,6 +387,7 @@ def publish(settings: Settings, yc: YandexCLI, sha: str, run_id: str, attempt: s
     yc.call(['storage', 's3api', 'put-object', '--body', str(settings.archive),
              '--bucket', settings.bucket, '--key', key], 'upload package', timeout=120)
     created = yc.call(arguments, 'create function version', timeout=900)
+    verify_function_id(settings, created)
     version_id = identifier(created.get('id'), 'created version ID')
     after = yc.call(get_latest, 'verify latest version')
     if after.get('id') != version_id:
