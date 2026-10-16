@@ -2,6 +2,7 @@
 from dataclasses import replace
 from decimal import Decimal
 import inspect
+import logging
 from types import SimpleNamespace
 from unittest.mock import call, create_autospec
 from test.test_index_currency import document
@@ -12,6 +13,7 @@ from t_tech.invest.services import InstrumentsService, MarketDataService
 
 from autorepeater.index_config import IndexConfig, validate_index_config
 from autorepeater.index_strategy import IndexStrategy
+from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.strategies import create_strategy, prepare_strategy
 from autorepeater.strategy_data import InstrumentInfo, InstrumentMatch, InstrumentType
 from autorepeater.strategy_data import PriceQuote, StrategyData
@@ -86,7 +88,7 @@ def wire(data, candidates):
     ('CNY', ('usd', 'rub', 'cny'), '2'),
 ])
 def test_index_prefers_currency_and_keeps_unique_foreign_fallback(
-        data, preferred, currencies, expected):
+        data, caplog, preferred, currencies, expected):
     """Currency outranks result order while a lone foreign candidate stays usable."""
     payload = config_document()
     if preferred is not None:
@@ -98,20 +100,43 @@ def test_index_prefers_currency_and_keeps_unique_foreign_fallback(
     assert (quote.uid, quote.currency) == (expected, candidates[int(expected)].currency)
     assert data.method_calls == [call.find_instruments('RU000A105104')] + [
         call.get_instrument(item.uid) for item in candidates] + [call.get_last_prices([expected])]
+    assert not any(record.levelno == logging.WARNING for record in caplog.records)
 
 
-@pytest.mark.parametrize('currencies,preferred', [
-    (('rub', 'rub'), 'RUB'), (('cny', 'cny', 'rub'), 'CNY'),
-    (('usd', 'eur'), 'CNY'), (('cny', 'usd'), 'RUB'),
+@pytest.mark.parametrize('case', [
+    (('rub', 'rub'), 'RUB', (0, 1)), (('cny', 'cny', 'rub'), 'CNY', (0, 1)),
+    (('usd', 'eur'), 'CNY', (0, 1)), (('cny', 'usd'), 'RUB', (0, 1)),
+    (('rub', 'cny', 'rub', 'cny'), 'RUB', (0, 2)),
+    (('rub', 'cny', 'rub', 'cny'), 'CNY', (1, 3)),
+    (('cny', 'rub', 'cny', 'rub'), 'RUB', (1, 3)),
+    (('cny', 'rub', 'cny', 'rub'), 'CNY', (0, 2)),
 ])
-def test_remaining_ambiguity_fails_before_prices(data, currencies, preferred):
-    """Neither duplicate preferred boards nor an unmatched set has a first winner."""
-    wire(data, [instrument(str(i), code) for i, code in enumerate(currencies)])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_first_available_within_currency_group_preserves_sdk_order(
+        data, caplog, case, reverse):
+    """Currency priority retains order; a closed first board never participates."""
+    currencies, preferred, group = case
+    candidates = [instrument(str(i), code) for i, code in enumerate(currencies)]
+    if reverse:
+        candidates.reverse()
+        group = group[::-1]
+    candidates.insert(0, instrument('closed', preferred.lower(), False))
+    wire(data, candidates)
     payload = dict(config_document(), preferred_currency=preferred)
-    with pytest.raises(ValueError, match='ambiguous index instrument'):
-        IndexStrategy(validate_index_config(payload)).load_snapshot(data)
-    data.get_last_prices.assert_not_called()
-    assert data.get_instrument.call_count == len(currencies)
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+        snapshot = IndexStrategy(validate_index_config(payload)).load_snapshot(data)
+    expected = str(group[0])
+    assert snapshot['RU000A105104'].uid == expected
+    assert snapshot['RU000A105104'].currency == currencies[group[0]]
+    assert data.method_calls == [call.find_instruments('RU000A105104')] + [
+        call.get_instrument(item.uid) for item in candidates] + [call.get_last_prices([expected])]
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    boards = {item.uid: item.class_code for item in candidates}
+    details = ', '.join(f'{i}/{boards[str(i)]}' for i in group)
+    assert warnings[0] == ('Multiple API-tradable index instruments: RU000A105104; '
+                           f'selected first uid={expected} class_code={boards[expected]}; '
+                           f'candidates: {details}')
 
 
 @pytest.mark.parametrize('preferred', ['CNY', 'RUB'])
@@ -134,17 +159,24 @@ def test_no_available_candidate_remains_error(data, candidates):
 
 
 @pytest.mark.parametrize('value', [None, '', ' rub', 1, True, 'credential-DO-NOT-LOG'])
-def test_missing_or_invalid_live_currency_never_becomes_rub(data, value):
+@pytest.mark.parametrize('reverse', [False, True])
+def test_missing_or_invalid_live_currency_never_becomes_rub(data, value, reverse):
     """Unknown live units cannot masquerade as a RUB preference match."""
-    wire(data, [instrument('bad', value), instrument('good', 'rub')])
+    candidates = [instrument('bad', value), instrument('good', 'rub')]
+    if reverse:
+        candidates.reverse()
+    wire(data, candidates)
     with pytest.raises(ValueError, match='currency') as caught:
         IndexStrategy(validate_index_config(config_document())).load_snapshot(data)
     assert 'credential-DO-NOT-LOG' not in str(caught.value)
     data.get_last_prices.assert_not_called()
+    assert data.get_instrument.call_args_list == [call(item.uid) for item in candidates]
 
 
 @pytest.mark.parametrize('preferred,expected', [(None, 'rub'), ('RUB', 'rub'), ('CNY', 'cny')])
-def test_prepared_config_reaches_real_sdk_selector(tmp_path, monkeypatch, preferred, expected):
+@pytest.mark.parametrize('reverse', [False, True])
+def test_prepared_config_reaches_real_sdk_selector(
+        tmp_path, monkeypatch, preferred, expected, reverse):
     """Prepared JSON drives actual SDK conversion and full metadata reads exactly once."""
     import json  # pylint: disable=import-outside-toplevel
     payload = config_document()
@@ -158,7 +190,11 @@ def test_prepared_config_reaches_real_sdk_selector(tmp_path, monkeypatch, prefer
     client = SimpleNamespace(**{name: create_autospec(
         inspect.unwrap(service), instance=True, spec_set=True) for name, service in (
             ('instruments', InstrumentsService), ('market_data', MarketDataService))})
-    candidates = [instrument('rub', 'RUB'), instrument('cny', 'CNY')]
+    candidates = [instrument('rub-0', 'RUB'), instrument('cny-0', 'CNY'),
+                  instrument('rub-1', 'RUB'), instrument('cny-1', 'CNY')]
+    if reverse:
+        candidates.reverse()
+    expected_uid = expected + ('-1' if reverse else '-0')
     client.instruments.find_instrument.return_value = sdk.FindInstrumentResponse(instruments=[
         sdk.InstrumentShort(uid=item.uid, ticker=item.ticker, instrument_type='bond',
                             class_code=item.class_code) for item in candidates])
@@ -167,16 +203,16 @@ def test_prepared_config_reaches_real_sdk_selector(tmp_path, monkeypatch, prefer
                                   class_code=item.class_code, lot=1, currency=item.currency,
                                   api_trade_available_flag=True)) for item in candidates]
     client.market_data.get_last_prices.return_value = sdk.GetLastPricesResponse(last_prices=[
-        sdk.LastPrice(instrument_uid=expected, price=sdk.Quotation(units=100, nano=0))])
+        sdk.LastPrice(instrument_uid=expected_uid, price=sdk.Quotation(units=100, nano=0))])
     adapter = TInvestStrategyData(client)
     adapter.begin_snapshot()
     snapshot = strategy.load_snapshot(adapter)
-    assert snapshot['RU000A105104'].uid == expected
+    assert snapshot['RU000A105104'].uid == expected_uid
     assert snapshot['RU000A105104'].currency == expected.upper()
     assert client.instruments.method_calls == [call.find_instrument(query='RU000A105104')] + [
         call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=item.uid)
         for item in candidates]
-    client.market_data.get_last_prices.assert_called_once_with(instrument_id=[expected])
+    client.market_data.get_last_prices.assert_called_once_with(instrument_id=[expected_uid])
 
 
 @pytest.mark.parametrize('preferred,expected', [('RUB', 'r'), ('CNY', 'c')])
@@ -225,7 +261,7 @@ def test_unavailable_invalid_currency_is_not_a_preference_candidate(data):
 @pytest.mark.parametrize('currencies,expected', [
     (('rub',), '0'), (('usd', 'rub'), None), (('cny', 'cny'), None)])
 def test_setup_preserves_unique_fallback_and_ambiguity(data, currencies, expected):
-    """Setup shares INDEX singleton fallback and rejects both forms of ambiguity."""
+    """The acceptance fixture still demands one instrument after applying currency priority."""
     wire(data, [instrument(str(i), code) for i, code in enumerate(currencies)])
     session = SimpleNamespace(data=data, scenario='offline')
     if expected is None:

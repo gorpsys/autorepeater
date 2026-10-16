@@ -303,12 +303,17 @@ INDEX stores historical reference units separately in `IndexReferenceUnits`.
 The optional root INDEX `preferred_currency` defaults to RUB and is fixed in
 `IndexConfig` during preparation. It reaches the pure selector over full SDK
 metadata: among API-available instruments matching the exact ticker and accepted
-type, prefer those with matching actual currency, ignoring case. If no currency
-matches, only a singleton available set is accepted. Several preferred matches
-or several fallback candidates fail as ambiguous. Missing or malformed live
+type, prefer those with matching actual currency, ignoring case. Select the first
+instrument within that group in original SDK order; if none match, select the
+first of all API-available candidates in their original order. Several candidates
+in the selected group emit one safe warning with the chosen UID/board and at
+most twenty ordered UID/board pairs plus an omitted count. No names, SDK reprs
+or malformed identifiers enter that warning. Missing or malformed live
 currency fails without an inferred RUB; actual UID/currency metadata is retained.
 The selector reuses loaded metadata and adds no RPCs. Currency sandbox scenarios
 explicitly configure CNY and use the same preference in their setup helper.
+The acceptance fixture additionally requires uniqueness after preference;
+its preflight assertions remain independent of runtime first-with-warning choice.
 This preference is independent of historical reference units below.
 Missing JSON currencies mean RUB even for a security trading in CNY. An explicit
 foreign reference price or capitalization currency requires a positive historical

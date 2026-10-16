@@ -80,10 +80,9 @@ def _resolve_index_instrument(data: StrategyData, ticker: str,
         details = ', '.join(f'{item.uid}/{item.class_code}' for item in candidates) or 'none'
         raise ValueError(f'no index instrument: {ticker} available via API; candidates: {details}')
     available = prefer_instrument_currency(available, preferred_currency)
-    if len(available) > 1:
-        raise ValueError(f'ambiguous index instrument: {ticker}; '
-                         f'preferred currency: {preferred_currency}')
     chosen = available[0]
+    if len(available) > 1:
+        reporting.print_index_selection_warning(ticker, chosen, available)
     reporting.print_index_instrument_selected(chosen)
     return chosen
 

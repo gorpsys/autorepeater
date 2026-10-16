@@ -9,7 +9,7 @@ def prefer_instrument_currency(candidates: Sequence[InstrumentInfo],
                                preferred_currency: str = 'rub') -> list[InstrumentInfo]:
     """Narrow to matching currency, retaining the original set when no match exists.
 
-    Callers still require a unique result and retain their own error boundary.
+    Preserve SDK order within either group; callers retain their selection policy.
     Missing or malformed live currencies never acquire a default identity.
     """
     preferred = currency_code(preferred_currency)

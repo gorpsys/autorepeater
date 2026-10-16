@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Protocol, TypeVar
 from autorepeater.cash_facts import order_cash_bound
 from autorepeater.constants import IMPORTANT
 from autorepeater.logging_config import logger
+from autorepeater.market_diagnostics import safe_symbol
 from autorepeater.money import currency_to_decimal
 from autorepeater.money import currency_to_string
 from autorepeater.money import format_decimal
@@ -100,11 +101,15 @@ def print_index_instrument_selected(instrument: InstrumentInfo) -> None:
 
 def print_index_selection_warning(ticker: str, chosen: InstrumentInfo,
                                   available: Sequence[InstrumentInfo]) -> None:
-    """Multiple live candidates use the API's original order, not a board preference."""
-    details = ', '.join(f'{item.uid}/{item.class_code}' for item in available)
+    """Explain first-in-group choice with at most twenty safe UID/board identifiers."""
+    details = ', '.join(f'{safe_symbol(item.uid)}/{safe_symbol(item.class_code, limit=16)}'
+                        for item in available[:20])
+    if len(available) > 20:
+        details += f'; omitted_count={len(available) - 20}'
     logger.warning('Multiple API-tradable index instruments: %s; '
                    'selected first uid=%s class_code=%s; candidates: %s',
-                   ticker, chosen.uid, chosen.class_code, details)
+                   safe_symbol(ticker, limit=32), safe_symbol(chosen.uid),
+                   safe_symbol(chosen.class_code, limit=16), details)
 
 
 def get_instrument(client: ReportingClient, instrument_id: str) -> DisplayInstrument:

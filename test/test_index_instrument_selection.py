@@ -80,24 +80,30 @@ def test_no_unique_available_candidate_fails_before_quotes(available):
     data.get_last_prices.assert_not_called()
 
 
-def test_multiple_available_candidates_fail_before_quotes_or_effects(caplog):
-    """Two available RUB boards are ambiguous, regardless of search order or board code."""
+def test_multiple_available_candidates_choose_first_in_search_order_with_warning(caplog):
+    """Resolve the first RUB board with one warning before any execution effects."""
     rows = [instrument('closed', 'TQTF', False), instrument('z-first', 'NEW', True),
             instrument('a-second', 'TQBR', True)]
     strategy, data = selection_case(rows)
     execution = create_autospec(ExecutionData, instance=True, spec_set=True)
+    execution.get_destination.side_effect = RuntimeError('stop after selection')
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     engine = AutoRepeater(strategy, data, execution, executor)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        with pytest.raises(ValueError, match='ambiguous index instrument: GOLD'):
+        with pytest.raises(RuntimeError, match='stop after selection'):
             engine.sync_accounts('dst')
     assert data.method_calls == [call.begin_snapshot(), call.find_instruments('GOLD'),
                                  call.get_instrument('closed'), call.get_instrument('z-first'),
-                                 call.get_instrument('a-second')]
-    data.get_last_prices.assert_not_called()
-    assert not execution.method_calls
+                                 call.get_instrument('a-second'),
+                                 call.get_last_prices(['z-first'])]
+    data.get_last_prices.assert_called_once_with(['z-first'])
+    assert execution.method_calls == [call.get_destination('dst')]
     assert not executor.method_calls
-    assert not any('Selected index instrument:' in record.message for record in caplog.records)
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].message == (
+        'Multiple API-tradable index instruments: GOLD; '
+        'selected first uid=z-first class_code=NEW; candidates: z-first/NEW, a-second/TQBR')
 
 
 @pytest.mark.parametrize('available', [None, 'true', 'false', 1, 0, object()])
