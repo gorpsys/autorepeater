@@ -8,6 +8,7 @@ from time import monotonic, sleep
 from autorepeater.cash_facts import MoneyAmount, currency_code, order_cash_bound
 from autorepeater.cash_pools import (
     CashPools, CashProceeds, cash_headroom, credit_cash_pools, native_allowance,
+    split_cash,
 )
 from autorepeater.execution import (
     ExecutionReceipt, _fresh, _positions_match, _submit,
@@ -184,8 +185,8 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
         self.fx, self.inputs = self.market._fresh_inputs(  # pylint: disable=protected-access
             self.account_id, self.value, self.uids)
         self.receipts = []
-        self.submitted, self.exchanged = set(), set()
-        self.reverse = False
+        self.submitted = set()
+        self.fx_policy = self.inputs.fx_policy
 
     def _preflight(self):
         if any(self.market.clock() - quote.market_time > timedelta(seconds=60)
@@ -265,10 +266,8 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
     def _funding(self):
         marks = {uid: self.fx.to_rub(price).amount
                  for uid, price in self.inputs.native_prices.items()}
-        # Reverse RUB proceeds never authorize a bridge to another foreign currency.
         inputs = replace(self.inputs, cash=_planning_cash(self.plan, self.ledger, marks, self.fx),
-                         fx_rules={uid: rule for uid, rule in self.inputs.fx_rules.items()
-                                   if uid not in self.exchanged and not self.reverse})
+                         fx_policy=self.fx_policy)
         own = {uid: replace(rule, api_trade_available=False) if uid in self.submitted else rule
                for uid, rule in self.own.items()}
         return build_funding_plan(
@@ -281,8 +280,7 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
         self.fx.validate_fresh(self.market.clock())
         receipt = _submit(self.account_id, intent, self.executor, wait=True)
         self.receipts.append(receipt)
-        self.exchanged.add(intent.uid)
-        self.reverse = self.reverse or intent.side == 'SELL'
+        self.fx_policy = self.fx_policy.after_fill(intent.uid, intent.side)
         if not _exchange_cash(self.ledger, exchange, receipt, self.fx):
             logger.info('Defer FX dependencies: cash attribution unavailable')
             self._settled()
@@ -308,7 +306,7 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
 
 def _split_amount(amount, pieces):
     paths = sorted(pieces)
-    parts = proportional_split(amount, [pieces[path] for path in paths])
+    parts = split_cash(amount, [pieces[path] for path in paths])
     return dict(zip(paths, parts))
 
 

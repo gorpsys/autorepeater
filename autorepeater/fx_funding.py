@@ -8,6 +8,7 @@ from types import MappingProxyType
 from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.cash_pools import (
     CashPools, Path, cash_headroom, freeze_money, initial_cash_pools, native_allowance,
+    split_cash,
 )
 from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.fx import FxSnapshot
@@ -25,6 +26,22 @@ def _freeze_costs(values):
 
 
 @dataclass(frozen=True, slots=True)
+class FxPolicy:
+    """Pass-local directions: reverse proceeds cannot finance a foreign BUY."""
+    allowed_sides: frozenset[str] = frozenset({'BUY', 'SELL'})
+    completed_uids: frozenset[str] = frozenset()
+
+    def permits(self, uid: str, side: str) -> bool:
+        """One submission per pair, retaining other direct native SELL sources."""
+        return side in self.allowed_sides and uid not in self.completed_uids
+
+    def after_fill(self, uid: str, side: str) -> 'FxPolicy':
+        """A reverse fill closes only the forward direction for this pass."""
+        return FxPolicy(self.allowed_sides - ({'BUY'} if side == 'SELL' else set()),
+                        self.completed_uids | {uid})
+
+
+@dataclass(frozen=True, slots=True)
 class FundingInputs:
     """Explicit native midpoint/fee estimates and current FX rules, all pass-local."""
     native_prices: Mapping[str, MoneyAmount] = field(default_factory=dict)
@@ -32,6 +49,7 @@ class FundingInputs:
     cash: CashPools | None = None
     fees: Mapping[str, Mapping[str, Decimal]] = field(default_factory=dict)
     fx_fees: Mapping[str, Mapping[str, Decimal]] = field(default_factory=dict)
+    fx_policy: FxPolicy = field(default_factory=FxPolicy)
 
     def __post_init__(self) -> None:
         if any(not isinstance(price, MoneyAmount) or price.amount <= 0
@@ -143,8 +161,8 @@ def _purchase_debits(context: _Context, orders: tuple[OrderIntent, ...]
             _add(principal, path, price.currency, exact_product(pieces, price.amount))
         for currency, amount in context.inputs.fees.get(intent.uid, {}).items():
             paths = sorted(intent.pieces)
-            parts = proportional_split(exact_product(amount, Decimal(intent.lots)),
-                                       [intent.pieces[path] for path in paths])
+            parts = split_cash(exact_product(amount, Decimal(intent.lots)),
+                               [intent.pieces[path] for path in paths])
             for path, part in zip(paths, parts):
                 _add(fees, path, currency, part)
     return CashPools(principal), CashPools(fees)
@@ -177,6 +195,8 @@ def _exchange(context: _Context, currency: str, side: str, needs: Mapping[Path, 
               ) -> FxIntent | None:
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     quote = context.fx.quotes[currency].lot_quote
+    if not context.inputs.fx_policy.permits(quote.uid, side):
+        return None
     fees = context.inputs.fx_fees.get(quote.uid, {})
     size = difference(Decimal(quote.lot_size), fees.get(currency, ZERO)) if side == 'BUY' else (
         Decimal(quote.lot_size))
@@ -218,14 +238,14 @@ def _exchange_amounts(context, quote: FxLotQuote, side, contributions, lots, ord
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     weights = [contributions[path] for path in sorted(contributions)]
     debits, credits_by_path, estimated_fees = {}, {}, {}
-    for path, rub in zip(sorted(contributions), proportional_split(
+    for path, rub in zip(sorted(contributions), split_cash(
             quote.quote_amount(side, lots).amount, weights)):
         debits[path] = ({'rub': rub} if side == 'BUY'
                         else {quote.base_currency: contributions[path]})
         credits_by_path[path] = ({quote.base_currency: contributions[path]} if side == 'BUY'
                                  else {'rub': rub})
     for currency, fee in context.inputs.fx_fees.get(quote.uid, {}).items():
-        for path, part in zip(sorted(contributions), proportional_split(
+        for path, part in zip(sorted(contributions), split_cash(
                 exact_product(fee, Decimal(lots)), weights)):
             _add(debits, path, currency, part)
             _add(estimated_fees, path, currency, part)
@@ -298,37 +318,58 @@ def _base_affordable(quote: FxLotQuote, rub: Decimal, fees) -> Decimal:
 
 def _reverse(context: _Context, principal: CashPools, debits: CashPools, orders,
              balances, exchanges) -> bool:
-    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    # Prefer one sufficient direct source before combining partial sources.
     for currency in sorted(context.fx.quotes):
-        quote = context.fx.quotes[currency].lot_quote
-        needs, capacities = {}, {}
-        for path in debits.balances:
-            rub = balances[path].get('rub', ZERO)
-            deficit = max(ZERO, difference(debits.amount(path, 'rub'), rub))
-            if not deficit:
-                continue
-            if principal.amount(path, 'rub') <= rub:
-                continue  # RUB fees alone never justify a reverse exchange.
-            surplus = max(ZERO, difference(context.cash.amount(path, currency), max(
-                debits.amount(path, currency), context.native_claims.amount(path, currency))))
-            if not surplus:
-                continue
-            # Bid proceeds, not a midpoint estimate, finance the RUB security.
-            fees = context.inputs.fx_fees.get(quote.uid, {})
-            net = difference(quote.quote_amount('SELL', 1).amount, fees.get('rub', ZERO))
-            if net <= 0:
-                continue
-            required = fx_ratio(exact_product(deficit, Decimal(quote.lot_size)), net)
-            capacity = fx_ratio(exact_product(surplus, Decimal(quote.lot_size)), exact_sum((
-                Decimal(quote.lot_size), fees.get(currency, ZERO))))
-            needs[path] = min(required, capacity)
-            capacities[path] = capacity
-        if needs:
-            intent = _exchange(context, currency, 'SELL', needs, capacities, orders)
-            if intent is None or not _apply_exchange(balances, intent):
-                return False
+        intent = _reverse_source(context, currency, principal, debits, orders, balances)
+        trial = {path: dict(money) for path, money in balances.items()}
+        if (intent is not None and _apply_exchange(trial, intent)
+                and all(debits.amount(path, 'rub') <= trial[path].get('rub', ZERO)
+                        for path in debits.balances)):
+            balances.update(trial)
+            exchanges.append(intent)
+            return True
+    for currency in sorted(context.fx.quotes):
+        intent = _reverse_source(context, currency, principal, debits, orders, balances)
+        if intent is not None and _apply_exchange(balances, intent):
             exchanges.append(intent)
     return True
+
+
+def _reverse_source(context, currency, principal, debits, orders, balances):
+    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    quote = context.fx.quotes[currency].lot_quote
+    rule = context.inputs.fx_rules.get(quote.uid)
+    if rule is None or not context.inputs.fx_policy.permits(quote.uid, 'SELL'):
+        return None
+    fees = context.inputs.fx_fees.get(quote.uid, {})
+    net = difference(quote.quote_amount('SELL', 1).amount, fees.get('rub', ZERO))
+    if net <= 0:
+        return None
+    needs, capacities = {}, {}
+    for path in debits.balances:
+        rub = balances[path].get('rub', ZERO)
+        deficit = max(ZERO, difference(debits.amount(path, 'rub'), rub))
+        if not deficit or principal.amount(path, 'rub') <= rub:
+            continue  # RUB fees alone never justify a reverse exchange.
+        surplus = max(ZERO, difference(context.cash.amount(path, currency), max(
+            debits.amount(path, currency), context.native_claims.amount(path, currency))))
+        if not surplus:
+            continue
+        # Bid proceeds, not midpoint, fund RUB; fee units also consume native capacity.
+        required = fx_ratio(exact_product(deficit, Decimal(quote.lot_size)), net)
+        capacity = fx_ratio(exact_product(surplus, Decimal(quote.lot_size)), exact_sum((
+            Decimal(quote.lot_size), fees.get(currency, ZERO))))
+        needs[path] = min(required, capacity)
+        capacities[path] = capacity
+    lots = min(allocate_floor(exact_sum(capacities.values()), Decimal(quote.lot_size)),
+               rule.sell_max_lots)
+    if lots <= 0:
+        return None
+    # A25-unit balance at lot10 offers at most20, never a rounded-up30-unit sale.
+    needs = take_pieces(min(exact_sum(needs.values()), Decimal(lots * quote.lot_size)), needs)
+    return _exchange(context, currency, 'SELL', needs,
+                     {path: capacities[path] for path in needs}, orders)
 
 
 def _evaluate(context: _Context, orders: tuple[OrderIntent, ...]):
@@ -495,8 +536,13 @@ def _fundable_pieces(context, candidate):
                                                    context.native_claims.amount(path, currency)))
                     amount = exact_sum((amount, fx_ratio(exact_product(
                         surplus, observation.bid), observation.pair.nominal)))
-        with localcontext(prec=28, rounding=ROUND_FLOOR):
-            result[path] = min(capacity, amount / price.amount)
+        if exact_product(capacity, price.amount) <= amount:
+            result[path] = capacity
+        else:
+            precision = max(28, len(amount.as_tuple().digits)
+                            + len(price.amount.as_tuple().digits) + 4)
+            with localcontext(prec=precision, rounding=ROUND_FLOOR):
+                result[path] = amount / price.amount
     return result
 
 

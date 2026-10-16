@@ -2,6 +2,7 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_FLOOR, localcontext
+from fractions import Fraction
 from types import MappingProxyType
 
 from autorepeater.cash_facts import MoneyAmount, currency_code
@@ -13,6 +14,35 @@ from autorepeater.strategy_plan import (
 )
 
 Path = tuple[int, ...]
+
+
+def split_cash(total: Decimal, coefficients: Sequence[Decimal]) -> tuple[Decimal, ...]:
+    """Retain finite owner money exactly; repeating ratios keep the usual residual rule."""
+    rounded = proportional_split(total, coefficients)
+    denominator = exact_sum(coefficients)
+    parts = []
+    for value in coefficients:
+        part = _finite_cash_share(Fraction(total) * Fraction(value) / Fraction(denominator))
+        if part is None:
+            return rounded
+        parts.append(part)
+    return tuple(parts)
+
+
+def _finite_cash_share(ratio: Fraction) -> Decimal | None:
+    denominator = ratio.denominator
+    powers = []
+    for factor in (2, 5):
+        power = 0
+        while denominator % factor == 0:
+            denominator //= factor
+            power += 1
+        powers.append(power)
+    if denominator != 1:
+        return None
+    scale = max(powers)
+    units = ratio.numerator * 2 ** (scale - powers[0]) * 5 ** (scale - powers[1])
+    return Decimal(f'{units}e-{scale}')
 
 
 def native_allowance(amount: Decimal, currency: str, fx: FxSnapshot) -> Decimal:
