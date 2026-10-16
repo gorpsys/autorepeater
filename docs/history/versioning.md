@@ -5,6 +5,25 @@
 Действующие правила выпуска — в [техническом README](../../scripts/README.md#версии-и-выпуск).
 Результаты калибровки вынесены в [исторический отчёт](../reports/2026-10-06-calibration.md).
 
+## v5.2.1: резервный offline-деплой, 2026-10-16
+
+[PR #39](https://github.com/gorpsys/autorepeater/pull/39) влит в 09:52:57 UTC:
+`0492181575861adffc0c830c5f6f5e437b235db2`; аннотированный тег `v5.2.1` создан автоматически.
+PATCH обвязки: оба деплоя выбирают функцию по постоянному ID `d4e6d0l53hkivgrmfano`,
+gate учитывает динамическое имя master E2E по пути workflow. Переименование каталога
+`tinkoff` → `my-catalog` не влияет на выбор; функция не переименована.
+Lint/offline зелёные; PR E2E `38879802838` — все 17 сценариев, master E2E
+`38883490401` — SUCCESS; полное завершение и cleanup обоих прогонов подтверждены.
+Обычный деплой `38885601300` упал на создании версии с `invalid_argument` после
+OIDC, preflight ID функции и загрузки ZIP. Build log не получен; причина в SDK-индексе не доказана.
+По отдельному согласованию выполнен [резервный offline-деплой](https://github.com/gorpsys/autorepeater/actions/runs/38888894486)
+того же `0492181`: SUCCESS, обновлён в 10:43:03 UTC.
+Read-only проверка YC в 10:50 UTC подтвердила новую latest-версию
+`d4ep3iiual5v3b312vpk` — ACTIVE, создана в `2026-10-16T10:42:42.510Z`:
+`python312`, `handler.handler`, 268435456 байт (256 МиБ), тайм-аут 60 секунд.
+Это подтверждение публикации, не Python cold start: production handler не вызывался.
+Live handler/FX25-приёмка ещё не выполнена; этапы 7/8 валютной фичи не завершены.
+
 ## Production-деплой через OIDC
 
 [PR #29](https://github.com/gorpsys/autorepeater/pull/29),
