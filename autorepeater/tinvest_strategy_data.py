@@ -87,12 +87,14 @@ class TInvestStrategyData:
         self.valuation_sources = ValuationSources(
             TInvestFxData(client), TInvestSecurityData(client))
         self._instrument_cache = None
+        self._find_cache = None
         self._catalogs = {}
         self._match_types = {}
 
     def begin_snapshot(self) -> None:
         """Share full metadata within one pass, never across independent calculations."""
         self._instrument_cache = {}
+        self._find_cache = {}
         self._catalogs = {}
         self._match_types = {}
 
@@ -110,6 +112,10 @@ class TInvestStrategyData:
     @measure_stage('metadata.find')
     def find_instruments(self, query: str) -> list[InstrumentMatch]:
         """Return ordered short metadata without loading full instruments."""
+        if self._find_cache is not None and query in self._find_cache:
+            matches = list(self._find_cache[query])
+            self._match_types.update((item.uid, item.instrument_type) for item in matches)
+            return matches
         try:
             with measure_stage('metadata.find.request'):
                 response = call_api(self._client.instruments.find_instrument, query=query)
@@ -127,6 +133,8 @@ class TInvestStrategyData:
             for instrument in response.instruments
         ]
         self._match_types.update((item.uid, item.instrument_type) for item in matches)
+        if self._find_cache is not None and matches:
+            self._find_cache[query] = tuple(matches)
         return matches
 
     @measure_stage('metadata.catalog_lookup')

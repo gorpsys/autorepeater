@@ -156,6 +156,9 @@ native_price/settlement_currency и rub_price; mark выбирает rub_price,
 использует порядок FindInstrument и полный api_trade_available_flag,
 кэширует метаданные UID только до следующего begin_snapshot. Неизвестный
 каталогу UID читается через GetInstrumentBy; ошибки каталога не маскируются.
+Непустые успешно преобразованные результаты FindInstrument переиспользуются
+по точному query внутри снимка, с исходным порядком и дубликатами кандидатов;
+каждый вызов получает отдельный список DTO. Пустой ответ и ошибка не кешируются.
 Цены, портфели, разрешения текущего статуса и собственные лимиты не кэшируются.
 ExecutionData: get_destination(account_id), get_trade_rules(account_id,uids);
 ExecutionSnapshot/TradeRules собственные деньги, позиции, caps и flags.

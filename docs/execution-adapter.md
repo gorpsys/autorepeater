@@ -456,7 +456,12 @@ RequestError/DataAccessError become ExecutionDataError with their cause.
 ValueError and programming errors are not masked. No trading method is
 exposed by ExecutionData.
 
-StrategyData.begin_snapshot clears UID/catalog caches before each pass.
+StrategyData.begin_snapshot clears UID/catalog/search caches before each pass.
+Only successfully converted nonempty FindInstrument results are reused by exact
+query within that snapshot. Each caller receives its own ordered list of frozen
+short DTOs, including duplicates; catalog type hints are reapplied on hits.
+Empty responses and failed conversions/requests remain uncached. Search reuse
+does not supply full metadata, currency, lot size or trading permissions.
 Full Shares/Etfs catalogs with INSTRUMENT_STATUS_ALL serve searched candidates;
 GetInstrumentBy remains the fallback for UIDs absent from a catalog. The
 full catalog API flag, not FindInstrument's short flag, remains authoritative.

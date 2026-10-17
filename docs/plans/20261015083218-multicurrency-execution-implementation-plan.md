@@ -1320,6 +1320,34 @@ P2 из независимого статического Einstein review. По�
 7.8, этап8 кроме версии и issue41 PENDING; live успех не заявляется.
 Worker не выполняет live/extra SDK/push/GH writes/merge/deploy.
 
+## Поиск в одном snapshot от 17.10.2026
+
+Одна группа оптимизации после fe88ed2: SDK-адаптер переиспользует только
+успешные непустые FindInstrument по точному query до следующего begin_snapshot.
+Порядок, дубликаты и короткие DTO сохранены, вызывающий получает свой список;
+на cache hit восстанавливаются те же подсказки типа для полного каталога.
+Пустые ответы и ошибки не кешируются. Полные Share/Etf не подставляются вместо
+Instrument другого SDK-источника. GetInstrumentBy security reader, CurrencyBy,
+портфели, книги, динамические permissions/status/caps и refresh после FILL
+сохраняют прежние источники и частоту чтений.
+
+Синтетический offline fixture с реальным конфигом IMOEX44 и одной share на
+ticker без fallback: один INDEX остаётся 44 Find + 1 Shares + 44 GetInstrumentBy
++ 44 Book = 133 RPC. Два одинаковых INDEX44 в COMPOSITE: 88 -> 44 Find,
+итого 177 -> 133 RPC; остальные вызовы совпадают по порядку и аргументам.
+Snapshot, profile и полный финансовый plan равны варианту без кеша поиска.
+Это счётчик RPC на строгих SDK-моках, не измерение ускорения брокерского API.
+Свежий sync обновляет поиск/каталог; security refresh перечитывает Instrument
+и Book, 60s принимаются, 61s отклоняется. RUB/CNY priority, первый кандидат
+и fallback, ошибки missing/invalid metadata и отсутствие эффектов проверены.
+TDD RED11 failed/2 passed -> GREEN20; расширенная регрессия GREEN1039.
+Итоги полных проверок и exact-SHA offline25 записываются в progress.
+
+Новые FX/book/quota diagnostics сохранены. Причина FX-отказа ожидается из
+отдельного live25 исходного remote fe88ed2; функционального FX-исправления,
+batch statuses или других оптимизаций здесь нет. Предел60s и fresh-before-effect
+сохранены. 7.8, этап8 кроме версии и issue41 остаются PENDING.
+
 ## Приёмка вне реализации
 
 Новый live E2E и production dry-run требуют отдельного согласования.
