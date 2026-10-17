@@ -11,26 +11,11 @@ from autorepeater.money import format_decimal, format_decimal_map
 from autorepeater.strategy_data import DataAccessError, InstrumentType
 from autorepeater.tinvest_requests import call_api
 from autorepeater.tinvest_strategy_data import _decimal_value
+from autorepeater.tinvest_validation import (
+    sdk_bool as _bool, sdk_count as _count, sdk_text as _text,
+)
 
 NANO = Decimal('0.000000001')
-
-
-def _text(value, field):
-    if not isinstance(value, str) or not value or any(char.isspace() for char in value):
-        raise ValueError(f'{field} must be a nonempty string without whitespace')
-    return value
-
-
-def _bool(value, field):
-    if not isinstance(value, bool):
-        raise ValueError(f'{field} must be bool')
-    return value
-
-
-def _count(value, field):
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f'{field} must be a nonnegative integer')
-    return value
 
 
 def _decimal(value, field, nonnegative=False):
@@ -70,7 +55,8 @@ def _portfolio_state(portfolio):
         uid = _text(position.uid, 'portfolio UID')
         context = f'portfolio {uid}'
         _text(position.currency, f'{context}.currency')
-        price = _decimal(position.current_price, f'{context}.current_price')
+        _decimal(position.current_price, f'{context}.current_price')
+        price = _decimal(position.mark, f'{context}.mark')
         quantity = _decimal(position.quantity, f'{context}.quantity')
         blocked_flag = _bool(position.blocked, f'{context}.blocked')
         blocked_count = _decimal(position.blocked_lots, f'{context}.blocked_lots', nonnegative=True)
@@ -83,7 +69,7 @@ def _portfolio_state(portfolio):
         if uid in identities and identities[uid] != identity:
             raise ValueError(f'portfolio {uid}: incompatible duplicate marks/currency/type')
         identities[uid] = identity
-        if position.currency != 'rub':
+        if position.currency != 'rub' and position.rub_price is None:
             raise ValueError(f'portfolio {uid}: valuation currency must be rub without conversion')
         if position.instrument_type != InstrumentType.CURRENCY:
             quantities[uid] = quantities.get(uid, Decimal(0)) + quantity
@@ -144,17 +130,18 @@ class TInvestExecutionData:
         self._client = client
         self._data = data
 
-    def get_destination(self, account_id):
+    def get_destination(self, account_id, *, valuation=None):
         """Keep full valuation; advertise no availability in any blocked state."""
         _text(account_id, 'account_id')
         portfolio = _read(self._data.get_portfolio, account_id=account_id)
+        if valuation is not None:
+            portfolio = valuation.portfolio(portfolio)
         budget, quantities, marks, portfolio_blocked = _portfolio_state(portfolio)
         positions = _read(self._client.operations.get_positions, account_id=account_id)
-        orders = _read(self._client.orders.get_orders, account_id=account_id)
+        active = _active_orders(_read(self._client.orders.get_orders, account_id=account_id).orders)
         cash = _money(positions.money, 'money')
         loading = _bool(positions.limits_loading_in_progress, 'limits_loading_in_progress')
         positions_blocked = _positions_blocked(positions)
-        active = _active_orders(orders.orders)
         ready = not (loading or portfolio_blocked or positions_blocked or active)
         LOGGER.info('Execution snapshot: account=%s limits_ready=%s loading=%s '
                     'portfolio_blocked=%s positions_blocked=%s active_orders=%d cash=%s',
@@ -168,7 +155,7 @@ class TInvestExecutionData:
             portfolio, budget, quantities, marks,
             {currency: amount if ready else Decimal(0) for currency, amount in cash.items()},
             {uid: quantity if ready else Decimal(0) for uid, quantity in quantities.items()},
-            active, ready)
+            active, ready, valuation.fx if valuation is not None else None)
 
     def get_trade_rules(self, account_id, uids):
         """Own money and position caps only; BESTPRICE is an explicit permission."""

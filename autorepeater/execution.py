@@ -1,11 +1,13 @@
 """Neutral receipts and one-pass execution, without SDK dependencies."""
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 import logging
 from time import monotonic, sleep
 from typing import Protocol
 
+from autorepeater.cash_facts import OrderAmounts
+from autorepeater.cash_pools import sale_paths as _sale_paths
 from autorepeater.execution_data import (
     ExecutionData, ExecutionDataError, ExecutionSnapshot, TradeRules,
 )
@@ -15,9 +17,10 @@ from autorepeater.order_plan import (
     spending_limits, validate_intent, validate_rules,
 )
 from autorepeater.purchase_plan import purchase_intents
+from autorepeater.reporting import print_order_money
 from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import (
-    StrategyPlan, exact_product, exact_sum, validate_map, validate_plan,
+    exact_product, exact_sum, validate_map, validate_plan,
 )
 
 LOGGER = logging.getLogger('tinkoffBot')
@@ -43,6 +46,7 @@ class ExecutionReceipt:  # pylint: disable=too-many-instance-attributes
     lots_requested: int
     lots_executed: int
     cash: dict[str, Decimal]
+    amounts: OrderAmounts | None = field(default=None, compare=False)
 
 
 class OrderExecutor(Protocol):  # pylint: disable=too-few-public-methods
@@ -99,7 +103,8 @@ def _wait_for_order(account_id: str, intent: OrderIntent, executor: OrderExecuto
     return receipt
 
 
-def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor) -> ExecutionReceipt:
+def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor, *,
+            wait: bool = False) -> ExecutionReceipt:
     LOGGER.info('Submitting order: account=%s uid=%s side=%s lots=%d',
                 account_id, intent.uid, intent.side, intent.lots)
     try:
@@ -107,7 +112,7 @@ def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor) -> Ex
     except OrderExecutionError:
         LOGGER.error('Stopping pass: unknown order result UID %s side %s', intent.uid, intent.side)
         raise
-    if intent.side == 'SELL' and _receipt_matches(receipt, intent):
+    if (wait or intent.side == 'SELL') and _receipt_matches(receipt, intent):
         receipt = _wait_for_order(account_id, intent, executor, receipt)
     valid = (_receipt_matches(receipt, intent) and receipt.status == 'FILL'
              and receipt.lots_executed == intent.lots)
@@ -125,13 +130,15 @@ def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor) -> Ex
     LOGGER.info('Confirmed order: uid=%s side=%s order_id=%s status=%s requested=%d executed=%d',
                 receipt.uid, receipt.side, receipt.order_id, receipt.status,
                 receipt.lots_requested, receipt.lots_executed)
+    print_order_money(receipt)
     return receipt
 
 
-def _fresh(account_id: str, data: ExecutionData, uids: Sequence[str]
+def _fresh(account_id: str, data: ExecutionData, uids: Sequence[str], *, valuation=None
            ) -> tuple[ExecutionSnapshot, dict[str, TradeRules]]:
     try:
-        snapshot = data.get_destination(account_id)
+        snapshot = (data.get_destination(account_id) if valuation is None
+                    else data.get_destination(account_id, valuation=valuation))
         LOGGER.info('Execution refresh: account=%s budget=%s available_cash=%s '
                     'limits_ready=%s active_orders=%d', account_id, format_decimal(snapshot.budget),
                     format_decimal_map(snapshot.available_cash), snapshot.limits_ready,
@@ -146,24 +153,6 @@ def _fresh(account_id: str, data: ExecutionData, uids: Sequence[str]
     validate_map(snapshot.quantities, 'fresh quantities')
     validate_map(snapshot.available_cash, 'fresh cash')
     return snapshot, rules
-
-
-def _sale_paths(origin: tuple[int, ...], by_path: dict[tuple[int, ...], StrategyPlan],
-                limits: dict[tuple[int, ...], Decimal]) -> set[tuple[int, ...]]:
-    domain = origin
-    while domain and by_path[domain[:-1]].decision.redistribution_allowed:
-        domain = domain[:-1]
-    result = set()
-    for path in limits:
-        if path[:len(domain)] != domain:
-            continue
-        crossing = [path[:depth] for depth in range(len(domain), len(path))]
-        if path == origin or all(
-                by_path[prefix].decision.redistribution_allowed
-                or prefix == origin and bool(by_path[origin].unassigned)
-                for prefix in crossing):
-            result.add(path)
-    return result
 
 
 def _fresh_money(plan: OrderPlan, ownership: dict[tuple[int, ...], dict[str, Decimal]],

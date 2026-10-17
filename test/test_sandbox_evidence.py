@@ -1,6 +1,7 @@
 """Typed sandbox evidence serializes without leaking arbitrary objects."""
 import json
 from dataclasses import asdict
+from decimal import Decimal
 
 import pytest
 from t_tech.invest import MoneyValue
@@ -36,3 +37,11 @@ def test_serializer_rejects_non_evidence_without_repr(value):
     """SDK DTOs and arbitrary objects must not gain a str/repr fallback."""
     with pytest.raises(TypeError, match='unsupported sandbox evidence type'):
         evidence_json(value)
+
+
+def test_currency_evidence_keeps_decimal_nanos_without_repr():
+    """New native snapshots and FX nominal fields retain exact public money only."""
+    assert json.loads(json.dumps({'cny': Decimal('2.000000001')}, default=evidence_json)) == {
+        'cny': '2.000000001'}
+    with pytest.raises(TypeError):
+        evidence_json(Decimal('NaN'))

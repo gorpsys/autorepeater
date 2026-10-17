@@ -9,6 +9,7 @@ from t_tech.invest.exceptions import RequestError
 from t_tech.invest.services import Services
 
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError
+from autorepeater.cash_facts import MoneyAmount, OrderAmounts
 from autorepeater.logging_config import logger as LOGGER
 from autorepeater.order_plan import OrderIntent
 from autorepeater.purchase_plan import validate_intent
@@ -42,8 +43,23 @@ def _receipt(response: PostOrderResponse | OrderState, *,
             for value in (requested, executed))
             or not 0 <= executed <= requested):
         raise OrderExecutionError('invalid order lot counts; stopping pass', request_id=request_id)
+    amounts = _amounts(response, uid, sides[direction], order_id, requested)
     return ExecutionReceipt(uid, sides[direction], order_id, statuses[status],
-                            requested, executed, {})
+                            requested, executed, {}, amounts)
+
+
+def _amounts(response, uid, side, order_id, lots):
+    """Optional monetary facts cannot repair identity or fabricate exact cash."""
+    try:
+        total = response.total_order_amount
+        fee = response.executed_commission
+        total = MoneyAmount.from_units_nano(total.currency, total.units, total.nano)
+        fee = MoneyAmount.from_units_nano(fee.currency, fee.units, fee.nano)
+        if total.amount < 0 or fee.amount < 0:
+            return None
+    except (AttributeError, ValueError):
+        return None
+    return OrderAmounts(uid, side, order_id, lots, total, fee)
 
 
 class TInvestOrderExecutor:  # pylint: disable=too-few-public-methods

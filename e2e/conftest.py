@@ -1,5 +1,6 @@
 """Live fixtures are siblings of test/, so its zero-timeout fixture cannot apply."""
 import logging
+import json
 import os
 from pathlib import Path
 import signal
@@ -8,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from autorepeater.market_diagnostics import emit_timing_summary, set_diagnostic_context
 from scripts.sandbox_lifecycle import (
     SandboxFailure, SandboxLifecycle, list_exception_facts, sandbox_client,
 )
@@ -19,6 +21,21 @@ class SandboxInterrupted(BaseException):
     """Let fixture finally blocks run on supervisor termination."""
 
 
+class MarketDiagnosticOutput(logging.Handler):
+    """Forward explicit safe facts to stdout and the existing scenario dump events."""
+
+    def __init__(self, level: int = logging.INFO, *, records: list | None = None) -> None:
+        super().__init__(level)
+        self.records = records
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.module == 'market_diagnostics' and record.msg == 'Market diagnostic: %s':
+            print(record.getMessage(), flush=True)
+            if self.records is not None:
+                self.records.append({'event': 'market_diagnostic',
+                                     'fact': json.loads(record.args[0])})
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Show selected-test progress before even a slow session fixture starts."""
@@ -27,6 +44,22 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     attempt = Path(os.environ.get('E2E_ATTEMPT_REPORT', '')).parent.name
     prefix = f' attempt {int(attempt)}' if attempt.isascii() and attempt.isdecimal() else ''
     print(f'Sandbox E2E{prefix} [{index}/{len(selected)}] {item.nodeid}', flush=True)
+    set_diagnostic_context(stage='sandbox_e2e', scenario=item.nodeid, phase='setup')
+
+
+def pytest_runtest_call(item: pytest.Item) -> None:
+    """Market warnings share the current node and phase without touching evidence."""
+    set_diagnostic_context(stage='sandbox_e2e', scenario=item.nodeid, phase='call')
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, Any, None]:
+    """Keep cleanup warnings attributable, then clear context for other callers."""
+    set_diagnostic_context(stage='sandbox_e2e', scenario=item.nodeid, phase='teardown')
+    try:
+        yield
+    finally:
+        set_diagnostic_context(stage='unknown', scenario='unknown', phase='unknown')
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -120,10 +153,15 @@ def live(request: pytest.FixtureRequest, sandbox: SandboxSession
     sandbox.records = []
     sandbox.configs = {}
     sandbox.quotes = {}
+    sandbox.market = None
     sandbox.data.begin_snapshot()
     journal = OrderJournal()
+    diagnostics = MarketDiagnosticOutput(records=sandbox.records)
     logger = logging.getLogger('tinkoffBot')
+    previous_level = logger.level
+    logger.setLevel(logging.INFO)
     logger.addHandler(journal)
+    logger.addHandler(diagnostics)
     recorder = attempt_recorder(request.session)
     if recorder is not None:
         recorder.entered.append(request.node.nodeid)
@@ -135,7 +173,10 @@ def live(request: pytest.FixtureRequest, sandbox: SandboxSession
         if report is not None and report.failed:
             sandbox.records.append({'event': 'failure', 'reason': str(report.longrepr),
                                     'error': report.sandbox_error})
+        emit_timing_summary()
         logger.removeHandler(journal)
+        logger.removeHandler(diagnostics)
+        logger.setLevel(previous_level)
         artifact_root = Path(os.environ.get(
             'E2E_ARTIFACT_DIR', '/tmp/autorepeater-e2e-' + sandbox.lifecycle.run_id))
         try:

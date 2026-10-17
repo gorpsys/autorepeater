@@ -1,5 +1,6 @@
 {
   "name": "TMON",
+  "reference_capitalization_currency": "RUB",
   "reserve": "0.0005",
   "max_lot_weight_error": "0.05",
   "min_position_value": "0",
@@ -9,6 +10,7 @@
   "instruments": [
     {
       "ticker": "TMON",
+      "reference_price_currency": "RUB",
       "reference_price": "1",
       "effective_quantity": "1",
       "free_float": "1",

@@ -3056,13 +3056,18 @@ def test_index_snapshot_refreshes_all_data(client, index_sdk_config):
     [InstrumentShort(ticker='A', instrument_type='bond', class_code='TQBR', uid='bond')],
 ])
 def test_index_snapshot_requires_exact_supported_instrument(client, index_sdk_config, matches):
-    """Other tickers and unsupported instrument types cannot replace a missing share."""
+    """Other tickers and incompatible full bond metadata cannot replace an exact security."""
     client.instruments.find_instrument.side_effect = None
     client.instruments.find_instrument.return_value = FindInstrumentResponse(instruments=matches)
-    with pytest.raises(ValueError, match=r'index instrument: A available via API'):
+    bond_candidate = bool(matches and matches[0].instrument_type == 'bond')
+    reason = ('invalid index instrument metadata: A' if bond_candidate
+              else r'index instrument: A available via API')
+    with pytest.raises(ValueError, match=reason):
         IndexStrategy(index_sdk_config).load_snapshot(TInvestStrategyData(client))
     client.instruments.find_instrument.assert_called_once_with(query='A')
-    client.instruments.get_instrument_by.assert_not_called()
+    assert client.instruments.get_instrument_by.call_args_list == ([
+        call(id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='bond')]
+        if bond_candidate else [])
     client.market_data.get_last_prices.assert_not_called()
     client.orders.post_order.assert_not_called()
 

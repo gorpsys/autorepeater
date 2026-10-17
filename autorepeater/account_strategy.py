@@ -37,7 +37,7 @@ def prepare_account_source(src: str, context: PreparationContext) -> PreparedAcc
 
 def _position_value(position: PortfolioEntry) -> Decimal:
     """Preserve the original per-position nano quantization before summing."""
-    return (position.current_price * position.quantity).quantize(NANO_QUANT)
+    return (position.mark * position.quantity).quantize(NANO_QUANT)
 
 
 class AccountStrategy:
@@ -71,7 +71,7 @@ class AccountStrategy:
         prices = {}
         for uid, position in positions.items():
             quantities[uid] = ratio * position.quantity
-            prices[uid] = position.current_price
+            prices[uid] = position.mark
         return TargetPortfolio(quantities, prices)
 
     def event_accounts(self, dst_account_id: str) -> tuple[str, ...]:
@@ -111,7 +111,7 @@ class AccountStrategy:
         values = {position.uid: _position_value(position) for position in securities}
         if sum(values.values(), Decimal(0)) != total:
             raise ValueError('account profile snapshot: source total mismatch')
-        prices = {position.uid: position.current_price for position in securities}
+        prices = {position.uid: position.mark for position in securities}
         return normalize_profile(values, prices, self.config.reserve)
 
     def should_rebalance(self, event: PositionEvent, dst_account_id: str) -> bool:

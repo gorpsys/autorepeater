@@ -15,10 +15,11 @@ from typing import Any
 
 from autorepeater.account_config import AccountConfig
 from autorepeater.account_strategy import AccountStrategy, PreparedAccountSource
+from autorepeater.cash_facts import FeeInclusion, MoneyAmount, OrderAmounts
 from autorepeater.composite_strategy import (
     CompositeSnapshot, CompositeStrategy, PreparedCompositeComponent, PreparedCompositeSource,
 )
-from autorepeater.execution import ExecutionReceipt, execute_plan
+from autorepeater.execution import ExecutionReceipt, OrderExecutionError, execute_plan
 from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.index_config import (
     AllocationDriftRange, IndexConfig, IndexInstrument, load_index_config,
@@ -196,15 +197,21 @@ class ModelExecution:
         self.quantities = dict(quantities)
         self.prices, self.lots, self.cash, self.rate = prices, lots, cash, rate
         self.orders = []
+        self.receipts = {}
 
-    def get_destination(self, _account_id):
+    def get_destination(self, _account_id, *, valuation=None):
         """Ready model state; money and quotes are deterministic and unblocked."""
         positions = tuple(entry(uid, quantity, self.prices[uid])
                           for uid, quantity in self.quantities.items() if quantity)
-        value = exact_sum(item.quantity * item.current_price for item in positions)
-        return ExecutionSnapshot(PortfolioSnapshot(positions), exact_sum((value, self.cash)),
-                                 dict(self.quantities), dict(self.prices), {'rub': self.cash},
-                                 dict(self.quantities), (), True)
+        portfolio = PortfolioSnapshot(positions)
+        if valuation is not None:
+            portfolio = valuation.portfolio(portfolio)
+        value = exact_sum(item.quantity * item.mark for item in portfolio.positions)
+        marks = {**self.prices, **{item.uid: item.mark for item in portfolio.positions}}
+        return ExecutionSnapshot(portfolio, exact_sum((value, self.cash)),
+                                 dict(self.quantities), marks, {'rub': self.cash},
+                                 dict(self.quantities), (), True,
+                                 None if valuation is None else valuation.fx)
 
     def get_trade_rules(self, _account_id, uids):
         """Own money caps bound every purchase; the model is explicitly RUB-only."""
@@ -219,9 +226,21 @@ class ModelExecution:
         self.quantities[intent.uid] = self.quantities.get(intent.uid, ZERO) + sign * quantity
         self.cash -= sign * value + value * self.rate
         self.orders.append((intent.uid, intent.side, intent.lots, intent.lot_size))
-        return ExecutionReceipt(intent.uid, intent.side, str(len(self.orders)), 'FILL',
-                                intent.lots, intent.lots,
-                                {'rub': value * (1 - self.rate)} if intent.side == 'SELL' else {})
+        order_id = str(len(self.orders))
+        amounts = OrderAmounts(intent.uid, intent.side, order_id, intent.lots,
+                               MoneyAmount('rub', value), MoneyAmount('rub', value * self.rate),
+                               FeeInclusion.SEPARATE)
+        receipt = ExecutionReceipt(
+            intent.uid, intent.side, order_id, 'FILL', intent.lots, intent.lots,
+            {'rub': value * (1 - self.rate)} if intent.side == 'SELL' else {}, amounts)
+        self.receipts[order_id] = receipt
+        return receipt
+
+    def get_order_state(self, _account_id, order_id):
+        """Read a prior model fill by its ID without repeating its cash effects."""
+        if order_id not in self.receipts:
+            raise OrderExecutionError('unknown model order')
+        return self.receipts[order_id]
 
 
 def model_plan(strategy, snapshot, model):

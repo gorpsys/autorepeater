@@ -4,8 +4,12 @@ from datetime import datetime
 from decimal import Decimal, ROUND_FLOOR
 from typing import cast
 
-from autorepeater.index_config import IndexConfig, select_index_config
+from autorepeater.index_config import (
+    IndexConfig, IndexReferenceUnits, reference_price_in_capitalization_currency,
+    select_index_config,
+)
 from autorepeater.portfolio import TargetPortfolio
+from autorepeater.instrument_selection import prefer_instrument_currency
 from autorepeater.rebalance_policy import leaf_decision
 from autorepeater.strategy_budget import available_budget
 from autorepeater.strategy_contract import PreparationContext
@@ -36,6 +40,7 @@ class IndexQuote:
     lot: int
     currency: str = ''
     time: datetime | None = None
+    native_price: Decimal | None = None
 
 
 def _load_index_candidate(data: StrategyData, match: InstrumentMatch,
@@ -58,9 +63,12 @@ def _load_index_candidate(data: StrategyData, match: InstrumentMatch,
 
 
 def _resolve_index_instrument(data: StrategyData, ticker: str,
-                              resolved: dict[str, InstrumentInfo]) -> InstrumentInfo:
-    matches = [item for item in data.find_instruments(ticker)
-               if item.ticker == ticker and item.instrument_type in INDEX_TYPES]
+                              resolved: dict[str, InstrumentInfo],
+                              preferred_currency: str = 'rub') -> InstrumentInfo:
+    exact = [item for item in data.find_instruments(ticker) if item.ticker == ticker]
+    matches = [item for item in exact if item.instrument_type in INDEX_TYPES]
+    if not matches:
+        matches = [item for item in exact if item.instrument_type == InstrumentType.BOND]
     candidates = [_load_index_candidate(data, match, resolved) for match in matches]
     available = []
     for instrument in candidates:
@@ -71,6 +79,7 @@ def _resolve_index_instrument(data: StrategyData, ticker: str,
     if not available:
         details = ', '.join(f'{item.uid}/{item.class_code}' for item in candidates) or 'none'
         raise ValueError(f'no index instrument: {ticker} available via API; candidates: {details}')
+    available = prefer_instrument_currency(available, preferred_currency)
     chosen = available[0]
     if len(available) > 1:
         reporting.print_index_selection_warning(ticker, chosen, available)
@@ -96,7 +105,8 @@ class IndexStrategy:
         """Resolve the entire base anew; unavailable data aborts the calculation."""
         instruments = {}
         for item in self.config.instruments:
-            instrument = _resolve_index_instrument(data, item.ticker, instruments)
+            instrument = _resolve_index_instrument(
+                data, item.ticker, instruments, self.config.preferred_currency)
             instruments[instrument.uid] = instrument
         response = data.get_last_prices(list(instruments))
         prices = {}
@@ -113,7 +123,7 @@ class IndexStrategy:
             quote = prices[uid]
             snapshot[ticker] = IndexQuote(
                 uid, _index_price(quote.price, ticker), instrument.lot,
-                currency=instrument.currency, time=quote.time)
+                currency=instrument.currency, time=quote.time, native_price=quote.native_price)
         return snapshot
 
     def build_target(self, snapshot: dict[str, IndexQuote], budget: Decimal) -> TargetPortfolio:
@@ -189,6 +199,7 @@ class IndexCalculation:
 def _capitalizations(config: IndexConfig, snapshot: dict[str, IndexQuote]) -> dict[str, Decimal]:
     result = {}
     uids = set()
+    units = getattr(config, 'reference_units', IndexReferenceUnits())
     for instrument in sorted(config.instruments, key=lambda item: item.ticker):
         ticker = instrument.ticker
         quote = snapshot.get(ticker)
@@ -201,8 +212,10 @@ def _capitalizations(config: IndexConfig, snapshot: dict[str, IndexQuote]) -> di
         if not isinstance(quote.uid, str) or not quote.uid or quote.uid in uids:
             raise ValueError(f'invalid or duplicate index UID: {ticker}')
         uids.add(quote.uid)
-        result[ticker] = (instrument.reference_index_capitalization * quote.price
-                          / instrument.reference_price)
+        denominator = reference_price_in_capitalization_currency(
+            instrument, units.capitalization_currency,
+            units.price_currencies.get(ticker, 'rub'), units.fx_rates.get(ticker))
+        result[ticker] = instrument.reference_index_capitalization * quote.price / denominator
     return result
 
 

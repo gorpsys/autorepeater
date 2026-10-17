@@ -1,5 +1,6 @@
 {
   "name": "IMOEX",
+  "reference_capitalization_currency": "RUB",
   "reserve": "0.01",
   "max_lot_weight_error": "0.05",
   "min_position_value": "3000",
@@ -578,6 +579,7 @@
   "instruments": [
     {
       "ticker": "AFKS",
+      "reference_price_currency": "RUB",
       "reference_price": "7.079",
       "effective_quantity": "1958950000",
       "free_float": "0.29",
@@ -587,6 +589,7 @@
     },
     {
       "ticker": "AFLT",
+      "reference_price_currency": "RUB",
       "reference_price": "32",
       "effective_quantity": "795154243",
       "free_float": "0.25",
@@ -596,6 +599,7 @@
     },
     {
       "ticker": "ALRS",
+      "reference_price_currency": "RUB",
       "reference_price": "18.93",
       "effective_quantity": "0",
       "free_float": "0.34",
@@ -605,6 +609,7 @@
     },
     {
       "ticker": "BSPB",
+      "reference_price_currency": "RUB",
       "reference_price": "262.75",
       "effective_quantity": "0",
       "free_float": "0.21",
@@ -614,6 +619,7 @@
     },
     {
       "ticker": "CBOM",
+      "reference_price_currency": "RUB",
       "reference_price": "8.815",
       "effective_quantity": "0",
       "free_float": "0.22",
@@ -623,6 +629,7 @@
     },
     {
       "ticker": "CHMF",
+      "reference_price_currency": "RUB",
       "reference_price": "623.8",
       "effective_quantity": "0",
       "free_float": "0.23",
@@ -632,6 +639,7 @@
     },
     {
       "ticker": "CNRU",
+      "reference_price_currency": "RUB",
       "reference_price": "657.2",
       "effective_quantity": "31068196",
       "free_float": "0.4",
@@ -641,6 +649,7 @@
     },
     {
       "ticker": "DOMRF",
+      "reference_price_currency": "RUB",
       "reference_price": "2025",
       "effective_quantity": "0",
       "free_float": "0.1",
@@ -650,6 +659,7 @@
     },
     {
       "ticker": "ENPG",
+      "reference_price_currency": "RUB",
       "reference_price": "288.65",
       "effective_quantity": "0",
       "free_float": "0.19",
@@ -659,6 +669,7 @@
     },
     {
       "ticker": "FLOT",
+      "reference_price_currency": "RUB",
       "reference_price": "81.16",
       "effective_quantity": "0",
       "free_float": "0.16",
@@ -668,6 +679,7 @@
     },
     {
       "ticker": "GAZP",
+      "reference_price_currency": "RUB",
       "reference_price": "96.39",
       "effective_quantity": "0",
       "free_float": "0.47",
@@ -677,6 +689,7 @@
     },
     {
       "ticker": "GMKN",
+      "reference_price_currency": "RUB",
       "reference_price": "117.76",
       "effective_quantity": "0",
       "free_float": "0.33",
@@ -686,6 +699,7 @@
     },
     {
       "ticker": "HEAD",
+      "reference_price_currency": "RUB",
       "reference_price": "2712",
       "effective_quantity": "0",
       "free_float": "0.53",
@@ -695,6 +709,7 @@
     },
     {
       "ticker": "IRAO",
+      "reference_price_currency": "RUB",
       "reference_price": "2.34",
       "effective_quantity": "23385600000",
       "free_float": "0.32",
@@ -704,6 +719,7 @@
     },
     {
       "ticker": "LKOH",
+      "reference_price_currency": "RUB",
       "reference_price": "5299.5",
       "effective_quantity": "0",
       "free_float": "0.59",
@@ -713,6 +729,7 @@
     },
     {
       "ticker": "MAGN",
+      "reference_price_currency": "RUB",
       "reference_price": "20.27",
       "effective_quantity": "1340919600",
       "free_float": "0.2",
@@ -722,6 +739,7 @@
     },
     {
       "ticker": "MDMG",
+      "reference_price_currency": "RUB",
       "reference_price": "1284",
       "effective_quantity": "0",
       "free_float": "0.27",
@@ -731,6 +749,7 @@
     },
     {
       "ticker": "MOEX",
+      "reference_price_currency": "RUB",
       "reference_price": "147.55",
       "effective_quantity": "0",
       "free_float": "0.61",
@@ -740,6 +759,7 @@
     },
     {
       "ticker": "MTSS",
+      "reference_price_currency": "RUB",
       "reference_price": "174.05",
       "effective_quantity": "0",
       "free_float": "0.41",
@@ -749,6 +769,7 @@
     },
     {
       "ticker": "NLMK",
+      "reference_price_currency": "RUB",
       "reference_price": "68.14",
       "effective_quantity": "0",
       "free_float": "0.21",
@@ -758,6 +779,7 @@
     },
     {
       "ticker": "NVTK",
+      "reference_price_currency": "RUB",
       "reference_price": "1030.3",
       "effective_quantity": "255049704",
       "free_float": "0.21",
@@ -767,6 +789,7 @@
     },
     {
       "ticker": "OZON",
+      "reference_price_currency": "RUB",
       "reference_price": "2919",
       "effective_quantity": "0",
       "free_float": "0.26",
@@ -776,6 +799,7 @@
     },
     {
       "ticker": "PHOR",
+      "reference_price_currency": "RUB",
       "reference_price": "5043",
       "effective_quantity": "7511000",
       "free_float": "0.29",
@@ -785,6 +809,7 @@
     },
     {
       "ticker": "PLZL",
+      "reference_price_currency": "RUB",
       "reference_price": "968",
       "effective_quantity": "0",
       "free_float": "0.22",
@@ -794,6 +819,7 @@
     },
     {
       "ticker": "POSI",
+      "reference_price_currency": "RUB",
       "reference_price": "1026",
       "effective_quantity": "19227780",
       "free_float": "0.27",
@@ -803,6 +829,7 @@
     },
     {
       "ticker": "RAGR",
+      "reference_price_currency": "RUB",
       "reference_price": "69.38",
       "effective_quantity": "191749920",
       "free_float": "0.2",
@@ -812,6 +839,7 @@
     },
     {
       "ticker": "RENI",
+      "reference_price_currency": "RUB",
       "reference_price": "66.84",
       "effective_quantity": "0",
       "free_float": "0.32",
@@ -821,6 +849,7 @@
     },
     {
       "ticker": "ROSN",
+      "reference_price_currency": "RUB",
       "reference_price": "352.25",
       "effective_quantity": "0",
       "free_float": "0.11",
@@ -830,6 +859,7 @@
     },
     {
       "ticker": "RTKM",
+      "reference_price_currency": "RUB",
       "reference_price": "38.63",
       "effective_quantity": "0",
       "free_float": "0.29",
@@ -839,6 +869,7 @@
     },
     {
       "ticker": "RUAL",
+      "reference_price_currency": "RUB",
       "reference_price": "23.195",
       "effective_quantity": "0",
       "free_float": "0.18",
@@ -848,6 +879,7 @@
     },
     {
       "ticker": "SBER",
+      "reference_price_currency": "RUB",
       "reference_price": "272.45",
       "effective_quantity": "0",
       "free_float": "0.48",
@@ -857,6 +889,7 @@
     },
     {
       "ticker": "SBERP",
+      "reference_price_currency": "RUB",
       "reference_price": "273.27",
       "effective_quantity": "477871000",
       "free_float": "1",
@@ -866,6 +899,7 @@
     },
     {
       "ticker": "SNGS",
+      "reference_price_currency": "RUB",
       "reference_price": "15.195",
       "effective_quantity": "0",
       "free_float": "0.25",
@@ -875,6 +909,7 @@
     },
     {
       "ticker": "SNGSP",
+      "reference_price_currency": "RUB",
       "reference_price": "40.435",
       "effective_quantity": "0",
       "free_float": "0.73",
@@ -884,6 +919,7 @@
     },
     {
       "ticker": "SVCB",
+      "reference_price_currency": "RUB",
       "reference_price": "9.33",
       "effective_quantity": "0",
       "free_float": "0.17",
@@ -893,6 +929,7 @@
     },
     {
       "ticker": "T",
+      "reference_price_currency": "RUB",
       "reference_price": "249.18",
       "effective_quantity": "0",
       "free_float": "0.51",
@@ -902,6 +939,7 @@
     },
     {
       "ticker": "TATN",
+      "reference_price_currency": "RUB",
       "reference_price": "627.6",
       "effective_quantity": "0",
       "free_float": "0.49",
@@ -911,6 +949,7 @@
     },
     {
       "ticker": "TATNP",
+      "reference_price_currency": "RUB",
       "reference_price": "599.7",
       "effective_quantity": "116531715",
       "free_float": "0.79",
@@ -920,6 +959,7 @@
     },
     {
       "ticker": "TRNFP",
+      "reference_price_currency": "RUB",
       "reference_price": "1019.8",
       "effective_quantity": "27054825",
       "free_float": "0.58",
@@ -929,6 +969,7 @@
     },
     {
       "ticker": "UGLD",
+      "reference_price_currency": "RUB",
       "reference_price": "0.722",
       "effective_quantity": "0",
       "free_float": "0.11",
@@ -938,6 +979,7 @@
     },
     {
       "ticker": "VKCO",
+      "reference_price_currency": "RUB",
       "reference_price": "110.9",
       "effective_quantity": "0",
       "free_float": "0.2",
@@ -947,6 +989,7 @@
     },
     {
       "ticker": "VTBR",
+      "reference_price_currency": "RUB",
       "reference_price": "52.57",
       "effective_quantity": "0",
       "free_float": "0.2",
@@ -956,6 +999,7 @@
     },
     {
       "ticker": "X5",
+      "reference_price_currency": "RUB",
       "reference_price": "1791.5",
       "effective_quantity": "0",
       "free_float": "0.29",
@@ -965,6 +1009,7 @@
     },
     {
       "ticker": "YDEX",
+      "reference_price_currency": "RUB",
       "reference_price": "3547",
       "effective_quantity": "0",
       "free_float": "0.26",

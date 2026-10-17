@@ -2,13 +2,15 @@
 import json
 from collections.abc import Callable
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from autorepeater import reporting
 from autorepeater.config_catalog import Candidate, discover_candidates, select_candidate
 from autorepeater.strategy_contract import UnsupportedSourceError
+from autorepeater.cash_facts import currency_code
+from autorepeater.strategy_plan import exact_product
 
 
 @dataclass
@@ -33,7 +35,15 @@ class AllocationDriftRange:
 
 
 @dataclass
-class IndexConfig:
+class IndexReferenceUnits:
+    """Historical reference units are independent of live instrument settlement units."""
+    capitalization_currency: str = 'rub'
+    price_currencies: dict[str, str] = field(default_factory=dict)
+    fx_rates: dict[str, Decimal] = field(default_factory=dict)
+
+
+@dataclass
+class IndexConfig:  # pylint: disable=too-many-instance-attributes
     """Composition, error limit for ideal lots < 1, and minimum target value."""
     name: str
     max_lot_weight_error: Decimal
@@ -41,6 +51,8 @@ class IndexConfig:
     reserve: Decimal
     allocation_drift_limits: tuple[AllocationDriftRange, ...]
     min_position_value: Decimal = Decimal(0)
+    reference_units: IndexReferenceUnits = field(default_factory=IndexReferenceUnits)
+    preferred_currency: str = 'rub'
 
 
 _INSTRUMENT_RANGES = {
@@ -53,10 +65,10 @@ _INSTRUMENT_RANGES = {
 }
 
 
-def _decimal_field(data: dict[str, object], field: str, context: str,
+def _decimal_field(data: dict[str, object], field_name: str, context: str,
                    valid_range: Callable[[Decimal], bool]) -> Decimal:
-    raw = data.get(field)
-    label = f'{context}.{field}'
+    raw = data.get(field_name)
+    label = f'{context}.{field_name}'
     if not isinstance(raw, str):
         raise ValueError(f'{label}: expected a decimal string')
     try:
@@ -68,7 +80,31 @@ def _decimal_field(data: dict[str, object], field: str, context: str,
     return value
 
 
-def _load_instrument(data: object, position: int) -> IndexInstrument:
+def _reference_currency(value: object) -> str:
+    code = currency_code(value)
+    if code not in {'rub', 'cny', 'usd', 'eur', 'hkd', 'gbp', 'chf', 'jpy', 'try',
+                    'byn', 'kzt', 'amd', 'aed', 'inr', 'zar', 'uzs', 'kgs', 'tjs'}:
+        raise ValueError('unknown reference currency')
+    return code
+
+
+def reference_price_in_capitalization_currency(instrument, capitalization_currency='rub',
+                                               price_currency='rub', rate=None):
+    """Accept the original reference contract: omitted currency/rate means RUB/RUB and 1."""
+    currency = _reference_currency(price_currency)
+    capitalization_currency = _reference_currency(capitalization_currency)
+    default = Decimal(1) if currency == capitalization_currency == 'rub' else None
+    if rate is None:
+        rate = getattr(instrument, 'reference_fx_rate', default)
+    if (not isinstance(rate, Decimal) or not rate.is_finite() or rate <= 0
+            or currency == capitalization_currency and rate != 1):
+        raise ValueError('invalid historical reference_fx_rate')
+    return (instrument.reference_price if rate == 1
+            else exact_product(instrument.reference_price, rate))
+
+
+def _load_instrument(data: object, position: int,
+                     units: IndexReferenceUnits) -> IndexInstrument:
     context = f'instruments[{position}]'
     if not isinstance(data, dict):
         raise ValueError(f'{context}: expected an object')
@@ -79,6 +115,17 @@ def _load_instrument(data: object, position: int) -> IndexInstrument:
         field: _decimal_field(data, field, f'{context} ({ticker})', valid_range)
         for field, valid_range in _INSTRUMENT_RANGES.items()
     }
+    currency = _reference_currency(data.get('reference_price_currency', 'rub'))
+    default = ({'reference_fx_rate': '1'}
+               if currency == units.capitalization_currency == 'rub' else {})
+    rate = _decimal_field({**default, **data}, 'reference_fx_rate', context,
+                          lambda value: value > 0)
+    if currency == units.capitalization_currency and rate != 1:
+        raise ValueError(f'{context}.reference_fx_rate: same currencies require 1')
+    if currency != 'rub':
+        units.price_currencies[ticker] = currency
+    if currency != 'rub' or units.capitalization_currency != 'rub':
+        units.fx_rates[ticker] = rate
     return IndexInstrument(ticker=ticker, **values)
 
 
@@ -120,6 +167,10 @@ def validate_index_config(data: object) -> IndexConfig:
     """Validate an already parsed document without filesystem access."""
     if not isinstance(data, dict):
         raise ValueError('index config: expected an object')
+    try:
+        preferred_currency = _reference_currency(data.get('preferred_currency', 'rub'))
+    except ValueError as error:
+        raise ValueError('index config.preferred_currency: invalid or unknown currency') from error
     name = data.get('name')
     if not isinstance(name, str) or not name or any(char.isspace() for char in name):
         raise ValueError('name: expected a nonempty name without whitespace')
@@ -135,14 +186,17 @@ def validate_index_config(data: object) -> IndexConfig:
         raise ValueError('instruments: expected a nonempty array')
     instruments = []
     tickers = set()
+    units = IndexReferenceUnits(
+        _reference_currency(data.get('reference_capitalization_currency', 'rub')))
     for position, record in enumerate(records):
-        instrument = _load_instrument(record, position)
+        instrument = _load_instrument(record, position, units)
         if instrument.ticker in tickers:
             raise ValueError(f'duplicate ticker: {instrument.ticker}')
         tickers.add(instrument.ticker)
         instruments.append(instrument)
     return IndexConfig(
-        data['name'], max_error, instruments, reserve, _load_drift_ranges(data), minimum)
+        data['name'], max_error, instruments, reserve, _load_drift_ranges(data), minimum,
+        units, preferred_currency)
 
 
 def read_index_document(path: str | Path) -> object:

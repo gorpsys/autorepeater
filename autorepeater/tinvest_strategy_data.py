@@ -9,6 +9,7 @@ from t_tech.invest import (
 from t_tech.invest.services import Services
 
 from autorepeater.logging_config import logger
+from autorepeater.market_diagnostics import measure_stage, warn_metadata_failure
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.strategy_data import InstrumentInfo
 from autorepeater.strategy_data import InstrumentMatch
@@ -20,6 +21,9 @@ from autorepeater.strategy_data import PositionEvent
 from autorepeater.strategy_data import PriceQuote
 from autorepeater.strategy_data import SecurityBlocking
 from autorepeater.tinvest_requests import call_api
+from autorepeater.tinvest_fx_data import TInvestFxData
+from autorepeater.tinvest_security_data import TInvestSecurityData
+from autorepeater.valuation import ValuationSources
 
 
 NANO_FACTOR = Decimal('1000000000')
@@ -30,6 +34,7 @@ def _instrument_type(value: str) -> InstrumentType:
     return {
         'share': InstrumentType.SHARE,
         'etf': InstrumentType.ETF,
+        'bond': InstrumentType.BOND,
         'currency': InstrumentType.CURRENCY,
     }.get(value, InstrumentType.OTHER)
 
@@ -79,13 +84,17 @@ class TInvestStrategyData:
 
     def __init__(self, client: Services) -> None:
         self._client = client
+        self.valuation_sources = ValuationSources(
+            TInvestFxData(client), TInvestSecurityData(client))
         self._instrument_cache = None
+        self._find_cache = None
         self._catalogs = {}
         self._match_types = {}
 
     def begin_snapshot(self) -> None:
         """Share full metadata within one pass, never across independent calculations."""
         self._instrument_cache = {}
+        self._find_cache = {}
         self._catalogs = {}
         self._match_types = {}
 
@@ -100,10 +109,16 @@ class TInvestStrategyData:
         return PortfolioSnapshot(positions=tuple(
             self._portfolio_entry(position) for position in response.positions))
 
+    @measure_stage('metadata.find')
     def find_instruments(self, query: str) -> list[InstrumentMatch]:
         """Return ordered short metadata without loading full instruments."""
+        if self._find_cache is not None and query in self._find_cache:
+            matches = list(self._find_cache[query])
+            self._match_types.update((item.uid, item.instrument_type) for item in matches)
+            return matches
         try:
-            response = call_api(self._client.instruments.find_instrument, query=query)
+            with measure_stage('metadata.find.request'):
+                response = call_api(self._client.instruments.find_instrument, query=query)
         except RequestError as error:
             raise _transport_error(error) from error
 
@@ -118,8 +133,11 @@ class TInvestStrategyData:
             for instrument in response.instruments
         ]
         self._match_types.update((item.uid, item.instrument_type) for item in matches)
+        if self._find_cache is not None and matches:
+            self._find_cache[query] = tuple(matches)
         return matches
 
+    @measure_stage('metadata.catalog_lookup')
     def _catalog_instrument(self, uid: str) -> InstrumentInfo | None:
         instrument_type = self._match_types.get(uid)
         methods = {InstrumentType.SHARE: self._client.instruments.shares,
@@ -128,8 +146,9 @@ class TInvestStrategyData:
             return None
         if instrument_type not in self._catalogs:
             try:
-                response = call_api(methods[instrument_type],
-                                    instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
+                with measure_stage('metadata.catalog.request'):
+                    response = call_api(methods[instrument_type],
+                                        instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
             except RequestError as error:
                 raise _transport_error(error) from error
             catalog = {}
@@ -142,6 +161,7 @@ class TInvestStrategyData:
                         instrument_type, len(catalog))
         return self._catalogs[instrument_type].get(uid)
 
+    @measure_stage('metadata.instrument')
     def get_instrument(self, uid: str) -> InstrumentInfo:
         """Use full catalogs for search candidates and direct reads for other UIDs."""
         if self._instrument_cache is not None and uid in self._instrument_cache:
@@ -149,17 +169,20 @@ class TInvestStrategyData:
         info = self._catalog_instrument(uid) if self._instrument_cache is not None else None
         if info is None:
             try:
-                response = call_api(self._client.instruments.get_instrument_by,
-                                    id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
+                with measure_stage('metadata.instrument.request'):
+                    response = call_api(self._client.instruments.get_instrument_by,
+                                        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id=uid)
             except RequestError as error:
                 raise _transport_error(error) from error
             instrument = response.instrument
             if instrument is None:
+                warn_metadata_failure(uid, None, 'metadata_missing')
                 raise ValueError(f'instrument {uid}: instrument is missing')
             info = _instrument_info(instrument, _instrument_type(instrument.instrument_type))
             if self._instrument_cache is not None:
                 logger.info('Loaded instrument metadata by UID: %s (not in current catalogs)', uid)
         if not isinstance(info.api_trade_available, bool):
+            warn_metadata_failure(uid, info, 'api_availability_invalid')
             raise ValueError(f'instrument {uid}: api_trade_available_flag must be bool')
         if self._instrument_cache is not None:
             self._instrument_cache[uid] = info

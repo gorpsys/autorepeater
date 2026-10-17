@@ -7,6 +7,7 @@ from grpc import StatusCode
 from t_tech.invest import RequestError
 
 from autorepeater.logging_config import logger
+from autorepeater.market_diagnostics import measure_rpc_part
 
 Result = TypeVar('Result')
 
@@ -19,7 +20,8 @@ def call_api(method: Callable[..., Result], **kwargs: object) -> Result:
     while True:
         started = time.perf_counter()
         try:
-            return method(**kwargs)
+            with measure_rpc_part('attempt'):
+                return method(**kwargs)
         except RequestError as error:
             if error.code != StatusCode.RESOURCE_EXHAUSTED:
                 status = error.code.name if isinstance(error.code, StatusCode) else 'UNKNOWN'
@@ -31,4 +33,5 @@ def call_api(method: Callable[..., Result], **kwargs: object) -> Result:
                 raise
             logger.warning('API rate limit exhausted: method=%s; retrying in 10 seconds',
                            name)
-            time.sleep(10)
+            with measure_rpc_part('quota_wait'):
+                time.sleep(10)

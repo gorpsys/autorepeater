@@ -60,9 +60,9 @@ def leaves(plan: StrategyPlan) -> dict[tuple[int, ...], StrategyPlan]:
     return {node.path: node for node in nodes(plan) if not node.children}
 
 
-def cash_bound(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+def cash_bound(_strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                rules: dict[str, TradeRules]) -> Decimal:
-    """Intersect documented own money with currency upper bound, reserve once."""
+    """Intersect real RUB and own money; reserve already limits target budgets."""
     rub = snapshot.available_cash.get('rub', ZERO)
     bounds = [rule.buy_money_amount for rule in rules.values()
               if rule.currency == 'rub' and rule.api_trade_available
@@ -70,7 +70,7 @@ def cash_bound(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
     # Different instrument bounds are never summed. Each candidate checks its
     # own documented bound, reduced by all earlier simulated spending.
     amount = min(rub, max(bounds)) if bounds else ZERO
-    return max(ZERO, difference(amount, strategy.cash_floor))
+    return amount
 
 
 def take_pieces(amount: Decimal, capacities: dict[tuple[int, ...], Decimal]
@@ -98,12 +98,14 @@ def _candidate(uid: str, state: tuple[
         StrategyPlan, dict[tuple[int, ...], dict[str, Decimal]], dict[str, Decimal],
         dict[str, TradeRules], dict[tuple[int, ...], Decimal], dict[str, Decimal],
         dict[str, int], Decimal, Decimal,
-]) -> tuple[Decimal, str, int, dict[tuple[int, ...], Decimal]] | None:
+], *, conditional: bool = False
+) -> tuple[Decimal, str, int, dict[tuple[int, ...], Decimal]] | None:
     # pylint: disable=too-many-locals
     strategy, ownership, marks, rules, money, quantities, used, remaining, spent = state
     rule = rules.get(uid)
-    if (strategy.target.quantities[uid] == 0 or rule is None
-            or rule.currency != 'rub' or not rule.api_trade_available
+    if rule is None or (not conditional and rule.currency != 'rub'):
+        return None
+    if (strategy.target.quantities[uid] == 0 or not rule.api_trade_available
             or not rule.bestprice_order_available):
         return None
     price = marks[uid]
@@ -119,11 +121,10 @@ def _candidate(uid: str, state: tuple[
                                + len(price.as_tuple().digits) + 4)
             capacities[path] = min(gap, money[path] / price)
     max_pieces = min(aggregate, exact_sum(capacities.values()))
-    max_lots = min(allocate_floor(max_pieces, Decimal(rule.lot)),
-                   rule.buy_max_lots - used.get(uid, 0),
-                   allocate_floor(remaining, cost),
-                   allocate_floor(max(ZERO, difference(
-                       difference(rule.buy_money_amount, strategy.cash_floor), spent)), cost))
+    max_lots = min(allocate_floor(max_pieces, Decimal(rule.lot)), allocate_floor(remaining, cost))
+    if not conditional:
+        max_lots = min(max_lots, rule.buy_max_lots - used.get(uid, 0),
+                       allocate_floor(max(ZERO, difference(rule.buy_money_amount, spent)), cost))
     if max_lots <= 0:
         return None
     # Every permitted full lot reduces absolute underweight by exactly its cost.
@@ -131,6 +132,26 @@ def _candidate(uid: str, state: tuple[
     # remains the winner until a cap is exhausted: batch all those lots.
     pieces = take_pieces(Decimal(max_lots * rule.lot), capacities)
     return cost, uid, max_lots, pieces
+
+
+def funding_candidates(strategy: StrategyPlan, ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                       quantities: dict[str, Decimal], marks: dict[str, Decimal],
+                       rules: dict[str, TradeRules], money: dict[tuple[int, ...], Decimal]
+                       ) -> tuple[OrderIntent, ...]:
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Conditional target/budget lots in the same absolute monetary priority queue.
+
+    Current broker cash/lot caps cannot predict caps after FX. These demands are
+    never orders authorized for submission; the funding planner checks current
+    caps for immediate purchases and requires a refresh for dependent ones.
+    """
+    state = (strategy, ownership, marks, rules, money, quantities, {},
+             exact_sum(money.values()), ZERO)
+    candidates = [item for uid in sorted(strategy.target.quantities)
+                  if (item := _candidate(uid, state, conditional=True)) is not None]
+    return tuple(OrderIntent(uid, 'BUY', lots, rules[uid].lot, pieces)
+                 for _, uid, lots, pieces in sorted(candidates,
+                                                    key=lambda item: (-item[0], item[1])))
 
 
 def purchase_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,

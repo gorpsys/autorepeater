@@ -2,9 +2,13 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from autorepeater.strategy_data import PortfolioSnapshot
+
+if TYPE_CHECKING:
+    from autorepeater.fx import FxSnapshot
+    from autorepeater.valuation import Valuation
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +44,7 @@ class ExecutionSnapshot:  # pylint: disable=too-many-instance-attributes
     available_quantities: dict[str, Decimal]
     active_orders: tuple[ActiveOrder, ...]
     limits_ready: bool
+    fx_snapshot: 'FxSnapshot | None' = None
 
 
 class ExecutionDataError(Exception):
@@ -49,7 +54,8 @@ class ExecutionDataError(Exception):
 class ExecutionData(Protocol):
     """Account-dependent reads only; never submits or cancels orders."""
 
-    def get_destination(self, account_id: str) -> ExecutionSnapshot:
+    def get_destination(self, account_id: str, *,
+                        valuation: 'Valuation | None' = None) -> ExecutionSnapshot:
         """Read a fresh destination, including readiness and physical limits."""
 
     def get_trade_rules(self, account_id: str, uids: Sequence[str]) -> dict[str, TradeRules]:

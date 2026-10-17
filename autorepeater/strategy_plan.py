@@ -144,8 +144,9 @@ def validate_positions(positions: object, marks: dict[str, Decimal] | None = Non
         finite_decimal(entry.quantity, f'positions[{entry.uid}].quantity')
         finite_decimal(entry.current_price, f'positions[{entry.uid}].current_price',
                        positive=entry.quantity > 0)
+        finite_decimal(entry.mark, f'positions[{entry.uid}].mark', positive=entry.quantity > 0)
         if marks is not None and (entry.uid not in marks
-                                  or marks[entry.uid] != entry.current_price):
+                                  or marks[entry.uid] != entry.mark):
             raise ValueError(f'positions[{entry.uid}]: price/marks mismatch')
 
 
