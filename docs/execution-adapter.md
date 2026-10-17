@@ -226,6 +226,22 @@ Base identity comes from `iso_currency_name`, checked against
 Nominal units and lot size remain separate, with strict units/nano conversion.
 Ticker strings do not establish currency identity or settlement mode.
 
+Before constructing FxPair, the adapter excludes only the observed noninstrument
+shape: exactly zero nominal after strict units/nano conversion, integer lot=0
+(not bool), and all three API/buy/sell flags explicitly False. UID, ISO base,
+nominal currency and quote currency must still be valid. A bounded WARNING
+`fx_catalog_skipped` lists the first20 skipped metadata records and omitted_count
+from that same response, without attributing a requested adjacent UID to them.
+Positive-nominal/positive-lot unavailable pairs remain usable for valuation.
+Other malformed metadata still raises; a required excluded UID has no route
+and fails before effects. No defaults, ticker/UID exceptions or extra RPCs.
+
+This addresses run38995748904 on fe88ed2: unused USDFIXME
+`c898d684-a9df-4e1a-a30b-ad9dbb5ea1f9`, USD nominal0/0, lot0 and three False
+aborted catalog conversion before valid CNYRUB_TOM could be selected. The first
+guard was nominal, not lot. These are observed facts, not a hardcoded identity.
+Offline reproduction and Runner regression do not establish live acceptance.
+
 The pure selector accepts only foreign-base/RUB-quote routes. It rejects
 inverse routes, bridges, duplicate UIDs and ambiguous catalogs. Multiple
 settlement instruments require an explicit UID; availability and catalog

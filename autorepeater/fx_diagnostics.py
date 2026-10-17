@@ -85,6 +85,16 @@ def selected_pair(item: object, normalized: object) -> None:
                           'normalized_nominal': scalar_fact(normalized)}, level=logging.INFO)
 
 
+def catalog_skipped(items: list, omitted_count: int) -> None:
+    """Bounded noninstrument facts, with no requested-UID correlation or extra reads."""
+    emit_market_fact({
+        'event': 'fx_catalog_skipped', 'operation': 'fx.list_pairs',
+        'field': 'nominal/lot/permissions',
+        'reason': 'zero_nominal_zero_lot_explicitly_unavailable',
+        'items': [sdk_metadata_facts(item) for item in items], 'omitted_count': omitted_count,
+    })
+
+
 def metadata_failure(item: object, error: ValueError, field: str, constraint: str,
                      *, normalized: object = 'unavailable') -> None:
     """Keep the same exception, adding a safe note from the exact failing operation."""

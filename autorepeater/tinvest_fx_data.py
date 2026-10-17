@@ -10,7 +10,7 @@ from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_data import ExecutionDataError, TradeRules
 from autorepeater.fx_data import FxPair, FxQuote
 from autorepeater.fx_diagnostics import (
-    metadata_failure, pair_failure, selected_pair,
+    catalog_skipped, metadata_failure, pair_failure, selected_pair,
 )
 from autorepeater.market_diagnostics import (
     BookTiming, diagnostic_operation, measure_stage, warn_book_failure,
@@ -35,7 +35,28 @@ def _amount(value, currency: str) -> Decimal:
         currency, getattr(value, 'units', None), getattr(value, 'nano', None)).amount
 
 
-def _pair(item) -> FxPair:
+def _unusable_placeholder(item, nominal: Decimal) -> bool:
+    """Only the observed zero-unit noninstrument, never a valid closed-market route."""
+    if not (nominal == 0 and isinstance(item.lot, int) and not isinstance(item.lot, bool)
+            and item.lot == 0
+            and all(flag is False for flag in (
+                item.api_trade_available_flag, item.buy_available_flag,
+                item.sell_available_flag))):
+        return False
+    try:
+        _text(item.uid, 'FX pair UID')
+    except ValueError as error:
+        metadata_failure(item, error, 'uid', 'nonempty_uid_without_whitespace')
+        raise
+    try:
+        currency_code(item.currency)
+    except ValueError as error:
+        metadata_failure(item, error, 'currency', 'three_ascii_letters')
+        raise
+    return True
+
+
+def _pair(item) -> FxPair | None:
     try:
         base = currency_code(item.iso_currency_name)
     except ValueError as error:
@@ -48,6 +69,8 @@ def _pair(item) -> FxPair:
         metadata_failure(item, error, 'nominal',
                          'integer_units_nano_abs_nano_lt_1e9_same_sign')
         raise
+    if _unusable_placeholder(item, nominal):
+        return None
     try:
         pair = FxPair(item.uid, base, item.currency, nominal, item.lot,
                       item.api_trade_available_flag, item.buy_available_flag,
@@ -94,7 +117,21 @@ class TInvestFxData:
         with measure_stage('fx.catalog.request'):
             response = _read(self._client.instruments.currencies,
                              instrument_status=InstrumentStatus.INSTRUMENT_STATUS_ALL)
-        return [_pair(item) for item in response.instruments]
+        pairs, skipped = [], []
+        omitted = 0
+        try:
+            for item in response.instruments:
+                pair = _pair(item)
+                if pair is not None:
+                    pairs.append(pair)
+                elif len(skipped) < 20:
+                    skipped.append(item)
+                else:
+                    omitted += 1
+        finally:
+            if skipped:
+                catalog_skipped(skipped, omitted)
+        return pairs
 
     def get_quote(self, pair: FxPair) -> FxQuote:
         """Depth one supplies bid/ask; last_price and its timestamp are never substitutes."""

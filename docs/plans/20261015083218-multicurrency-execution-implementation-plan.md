@@ -1343,10 +1343,44 @@ Snapshot, profile и полный финансовый plan равны вари�
 TDD RED11 failed/2 passed -> GREEN20; расширенная регрессия GREEN1039.
 Итоги полных проверок и exact-SHA offline25 записываются в progress.
 
-Новые FX/book/quota diagnostics сохранены. Причина FX-отказа ожидается из
-отдельного live25 исходного remote fe88ed2; функционального FX-исправления,
+Новые FX/book/quota diagnostics сохранены. На момент этой группы причина
+ожидалась из отдельного live25 fe88ed2; функционального FX-исправления,
 batch statuses или других оптимизаций здесь нет. Предел60s и fresh-before-effect
 сохранены. 7.8, этап8 кроме версии и issue41 остаются PENDING.
+
+## Служебная запись FX-каталога от 17.10.2026
+
+Фактический [run38995748904](https://github.com/gorpsys/autorepeater/actions/runs/38995748904)
+проверял fe88ed26baf4caf5a15da69a8d7b231508dd67b5: полный25=17+8,
+2 PASS/23 FAIL. Все8 валютных setup выбрали валидную CNY-облигацию
+RU000A105104/TQOY, затем упали до app_start/accounts/configs на посторонней
+USDFIXME/CETS UID c898d684-a9df-4e1a-a30b-ad9dbb5ea1f9: nominal USD0/0
+преобразован в Decimal0 и отклонён positive_finite_decimal раньше проверки lot.
+Её lot=0 и API/buy/sell=False; запрошенная CNYRUB_TOM
+4587ab1d-a9c9-4910-a0d6-86c7b9c42510 имеет lot1000. Полное преобразование
+каталога обрывалось до выбора этой пары. Cleanup25/session и CI extra SUCCESS.
+Оставшиеся15 FAIL (11 broker30079 с неустановленной причиной,4 stale/связанный
+assert) этим изменением не исправляются. Runtime не объявляется PASS.
+
+Одна узкая группа после850971d исключает до FxPair только точный проверенный
+класс: nominal=0, целочисленный lot=0 (не bool), три явных API/buy/sell=False.
+Валидируются UID, ISO/nominal/quote currency и точные units/nano. Никаких
+исключений по ticker/UID, подстановок nominal/lot/currency или общего
+подавления ValueError. Валидная недоступная пара с положительными nominal/lot
+остаётся для RUB-оценки имеющейся валюты; торговые разрешения проверяются
+отдельным preflight. Прочие malformed/active/missing metadata фатальны.
+Нужная исключённая пара не даёт маршрута, выбранный UID не заменяется другим.
+Один bounded WARNING содержит до20 пропущенных metadata с UID, полями,
+причиной, flags/lot/nominal и omitted_count из того же ответа, без SDK repr,
+credentials и ложного requestedUID соседней пары. Новых RPC нет.
+
+TDD RED10/22 -> GREEN128 на actual-case, порядке/нескольких записях,
+FxSnapshot и реальном Runner со строгими unwrapped SDK mocks; дополнительные
+границы и полные проверки фиксируются в progress. Все прежние assertions,
+источники/бюджеты/cash_floor/fees/lots/receipts,60s, Find-cache,17+8 live cases,
+retry-v2/exactSHA/cleanup сохранены. Офлайн-проверки не заменяют новый live25;
+7.8, этап8 кроме версии5.3.0 и issue41 остаются PENDING. Worker не выполняет
+push/GH write/live/SDK broker/cleanup/rerun/merge/deploy; parent публикует отдельно.
 
 ## Приёмка вне реализации
 
