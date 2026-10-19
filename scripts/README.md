@@ -304,12 +304,19 @@ Auth запрещает любые повторы. Цикл или непроч�
 Collection/teardown/cleanup/отмена/deadline
 и ошибки протокола сохраняют прежние стоп-условия.
 
-Подготовительный выпуск сохраняет workflow на `retry-v2`, без активации.
-Сначала его проверяет действующий trusted master и выпускается новый master
-с поддержкой v3; только затем отдельно согласуется активация в PR #40.
-Для неё инициатор должен выбрать `E2E_EVIDENCE_PROTOCOL=retry-v3`, а trusted
-проверка — `--evidence-format retry-v3 --collection sandbox-results/collection.json
---sha <tested SHA>`. Оба выбора принадлежат trusted workflow, не evidence PR.
+Поддержка v3 и auth-fix выпущены в master `1b015c6` (5.2.2, PR #42).
+В 5.2.3 подготовлен ручной input `evidence_protocol`: `retry-v2` по умолчанию,
+`retry-v3` по явному выбору инициатора. Trusted prepare проверяет allowlist
+до live и передаёт единый output в `E2E_EVIDENCE_PROTOCOL` producer и
+`--evidence-format` независимого verifier с прежними `--collection` и `--sha`.
+Неизвестные форматы (включая legacy retry-v1) в dispatch отклоняются.
+Автоматический master push всегда v2; прежний runtime с guard 60s не
+получает новую retry-политику автоматически. Проверка stale v3 остаётся >90s.
+До отдельно разрешённых проверок и merge activation PR trusted dispatcher
+master остаётся на v2. После merge явно разрешённый полный запуск с ref master,
+pr_number=40 и evidence_protocol=retry-v3 использует v3 для точного SHA PR.
+Выбор не берётся из PR checkout или его артефактов; изменение только workflow
+PR #40 не активирует trusted master.
 V1/v2 сохраняют прежние поля и поведение. Новые app-модули и зависимости
 для подготовительного выпуска не нужны; брокерские запросы классификатор
 не выполняет. Полная live-приёмка каждого будущего SHA по-прежнему обязательна.

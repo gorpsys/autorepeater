@@ -7,6 +7,13 @@
 
 ## Не выпущено
 
+## [5.2.3](https://github.com/gorpsys/autorepeater/compare/v5.2.2...v5.2.3) - 2026-10-19
+
+- Ручной Sandbox E2E получает явный trusted выбор `retry-v2`/`retry-v3`;
+  producer и независимый verifier используют одно проверенное значение.
+- Default ручного запуска и автоматический master push сохраняют v2;
+  неизвестный формат отклоняется до live. Финансовые правила не изменены.
+
 ## [5.2.2](https://github.com/gorpsys/autorepeater/compare/v5.2.1...v5.2.2) - 2026-10-19
 
 - Подготовлен протокол sandbox `retry-v3` с независимой проверкой stale-фактов

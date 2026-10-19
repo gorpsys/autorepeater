@@ -8,6 +8,14 @@ on:
         description: Open same-repository PR targeting master
         required: true
         type: string
+      evidence_protocol:
+        description: Trusted evidence protocol for this complete PR run
+        required: false
+        type: choice
+        default: retry-v2
+        options:
+          - retry-v2
+          - retry-v3
   push:
     branches: [master]
 
@@ -34,6 +42,7 @@ jobs:
       head_sha: ${{ steps.target.outputs.head_sha }}
       trusted_sha: ${{ steps.target.outputs.trusted_sha }}
       pr_number: ${{ steps.target.outputs.pr_number }}
+      evidence_protocol: ${{ steps.target.outputs.evidence_protocol }}
     steps:
       - name: Checkout trusted preparation only
         uses: actions/checkout@v4
@@ -84,7 +93,7 @@ jobs:
     env:
       SANDBOX_CI_SERIALIZED: "1"
       PYTEST_ADDOPTS: ""
-      E2E_EVIDENCE_PROTOCOL: "retry-v2"
+      E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}
       E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
     defaults:
       run:
@@ -169,7 +178,8 @@ jobs:
         id: evidence
         env:
           TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
-        run: python3 -m scripts.sandbox_github evidence --evidence-format retry-v2 --junit sandbox-results/junit.xml --collection sandbox-results/collection.json --sha "$TESTED_SHA"
+          E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}
+        run: python3 -m scripts.sandbox_github evidence --evidence-format "$E2E_EVIDENCE_PROTOCOL" --junit sandbox-results/junit.xml --collection sandbox-results/collection.json --sha "$TESTED_SHA"
 
   publish:
     needs: [prepare, pending, live, verify]
