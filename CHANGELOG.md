@@ -12,6 +12,9 @@
 - Подготовлен согласованный выбор `retry-v3` в candidate workflow после
   интеграции 5.2.2; trusted dispatcher master остаётся на v2 до отдельной активации.
 - Добавлен RUB/CNY sandbox-набор штатного приложения; INDEX распознаёт облигации.
+- Полная sandbox-коллекция дополнена controlled CNY probe двух временных
+  счетов: 2 лота против 1+1, native balances, raw суммы/комиссии и single-fee
+  история; неразличимые факты остаются inconclusive без изменения rounding.
 - INDEX выбирает валюту инструмента по `preferred_currency` (default RUB);
   затем берёт первый доступный в порядке API, при нескольких пишет безопасный
   ограниченный WARNING. Без совпадений по валюте сохраняется тот же fallback;

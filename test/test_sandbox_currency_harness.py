@@ -225,6 +225,129 @@ def test_new_existing_currency_scenarios_offline(offline_live, tmp_path, monkeyp
     scenarios.test_existing_cny_before_lot_rounding(live, tmp_path, monkeypatch, kind)
 
 
+def _wire_commission_probe(broker, model):
+    """Controlled SDK responses distinguish response rounding from charged rounding."""
+    from decimal import ROUND_HALF_UP  # pylint: disable=import-outside-toplevel
+    history = {key: [] for key in broker.accounts}
+    original = broker.client.orders.post_order.side_effect
+
+    def submit(**kwargs):
+        response = original(**kwargs)
+        account, lots = kwargs['account_id'], kwargs['quantity']
+        fee = D('.1234565') * lots
+        reported = fee if model == 'equal-fees' else fee.quantize(
+            D('.000001'), rounding=ROUND_HALF_UP)
+        charged = reported if model == 'cash-rounded' else fee
+        old_fee = D(response.executed_commission.units) + D(response.executed_commission.nano)/10**9
+        broker.accounts[account]['cash']['cny'] += old_fee - charged
+        response = replace(response, executed_commission=money('cny', reported))
+        broker.orders[response.order_id] = replace(
+            broker.orders[response.order_id], executed_commission=response.executed_commission)
+        total = D(response.total_order_amount.units) + D(response.total_order_amount.nano)/10**9
+        for kind, payment, quantity in (
+                (sdk.OperationType.OPERATION_TYPE_BUY, -total, lots),
+                (sdk.OperationType.OPERATION_TYPE_BROKER_FEE, -fee, 0)):
+            history.setdefault(account, []).append(sdk.Operation(
+                id=response.order_id + '-' + kind.name, instrument_uid='C',
+                operation_type=kind, state=sdk.OperationState.OPERATION_STATE_EXECUTED,
+                quantity=quantity, quantity_rest=0, date=datetime.now(timezone.utc),
+                payment=money('cny', payment), price=money('cny', 997), trades=[]))
+        return response
+
+    broker.client.orders.post_order.side_effect = submit
+    broker.client.operations.get_operations.side_effect = lambda **kw: sdk.OperationsResponse(
+        operations=[] if model == 'no-history' else history.get(kw['account_id'], []))
+    broker.client.sandbox.close_sandbox_account.side_effect = (
+        lambda **kw: broker.accounts.pop(kw['account_id']))
+
+
+@pytest.mark.parametrize('model,verdict', [
+    ('response-rounded', 'response_fee_rounding_6dp_consistent'),
+    ('cash-rounded', 'per_order_cash_rounding_6dp_consistent'),
+    ('equal-fees', 'inconclusive'), ('no-history', 'inconclusive'),
+])
+def test_controlled_cny_probe_offline(offline_live, monkeypatch, model, verdict):
+    """Run the additional live case with exact account, order, cash and cleanup effects."""
+    live, broker = offline_live
+    _wire_commission_probe(broker, model)
+    elapsed = [0]
+    monkeypatch.setattr(live[0], 'monotonic', lambda: elapsed[0])
+    monkeypatch.setattr(live[0], 'sleep', lambda delay: elapsed.__setitem__(0, elapsed[0] + delay))
+    scenarios.test_cny_commission_one_order_vs_split(live)
+    summary = [item for item in live[0].records if item['event'] == 'cny_commission_probe']
+    assert len(summary) == 1 and summary[0]['comparison']['verdict'] == verdict
+    steps = [item for item in live[0].records if item['event'] == 'cny_probe_step']
+    assert [item['lots'] for item in steps] == [2, 1, 1]
+    orders = broker.client.orders.post_order.call_args_list
+    assert [call.kwargs['quantity'] for call in orders] == [2, 1, 1]
+    assert orders[0].kwargs['account_id'] != orders[1].kwargs['account_id']
+    assert orders[1].kwargs['account_id'] == orders[2].kwargs['account_id']
+    payins = broker.client.sandbox.sandbox_pay_in.call_args_list
+    assert len(payins) == 2
+    assert [(call.kwargs['amount'].currency, call.kwargs['amount'].units,
+             call.kwargs['amount'].nano) for call in payins] == [('cny', 3988, 0)] * 2
+    assert payins[0].kwargs['amount'].currency == 'cny'
+    assert not live[0].lifecycle.created and not broker.accounts
+    assert broker.client.sandbox.close_sandbox_account.call_count == 2
+    broker.client.orders.get_order_price.assert_not_called()
+    assert all(item['before']['money']['cny'] > item['after']['money']['cny'] >= 0
+               for item in steps)
+    assert all(item['own_money'] >= item['principal'] + item['reported_fee'] for item in steps)
+    assert len({entry['order_id'] for entry in steps}) == 3
+    for event in live[0].records:
+        if event['event'] == 'currency_order_money':
+            for field in ('total_order_amount', 'executed_commission'):
+                raw = getattr(broker.orders[event['order_id']], field)
+                assert event[field]['units'] == {'type': 'int', 'value': str(raw.units)}
+                assert event[field]['nano'] == {'type': 'int', 'value': str(raw.nano)}
+    if model != 'no-history':
+        histories = [item for item in live[0].records if item['event'] == 'cny_probe_history']
+        assert len(histories) == 3 and all(item['complete'] for item in histories)
+        assert all(sum(op['type'] == 'OPERATION_TYPE_BROKER_FEE'
+                       for op in item['operations']) == 1 for item in histories)
+
+
+@pytest.mark.parametrize('fault', [
+    'identity', 'over-budget', 'duplicate-history', 'history-currency', 'no-own-lots', 'cleanup',
+])
+def test_controlled_probe_rejects_bad_facts_and_always_closes_owned_accounts(offline_live, fault):
+    """Diagnostic success never excuses an invalid receipt, budget or cleanup."""
+    live, broker = offline_live
+    _wire_commission_probe(broker, 'response-rounded')
+    state = broker.client.orders.get_order_state.side_effect
+    history = broker.client.operations.get_operations.side_effect
+    caps = broker.client.orders.get_max_lots.side_effect
+    if fault == 'identity':
+        broker.client.orders.get_order_state.side_effect = lambda **kw: replace(
+            state(**kw), instrument_uid='wrong')
+    if fault == 'over-budget':
+        broker.client.orders.get_order_state.side_effect = lambda **kw: replace(
+            state(**kw), executed_commission=money('cny', 10000))
+    if fault == 'duplicate-history':
+        broker.client.operations.get_operations.side_effect = lambda **kw: replace(
+            history(**kw), operations=history(**kw).operations + history(**kw).operations[:1])
+    if fault == 'history-currency':
+        broker.client.operations.get_operations.side_effect = lambda **kw: replace(
+            history(**kw), operations=[
+                replace(item, payment=money('rub', -997)) for item in history(**kw).operations])
+    if fault == 'no-own-lots':
+        broker.client.orders.get_max_lots.side_effect = lambda **kw: replace(
+            caps(**kw), buy_limits=replace(caps(**kw).buy_limits, buy_max_lots=0))
+    if fault == 'cleanup':
+        broker.client.sandbox.close_sandbox_account.side_effect = None
+    with pytest.raises(SandboxFailure):
+        scenarios.test_cny_commission_one_order_vs_split(live)
+    assert broker.client.sandbox.close_sandbox_account.call_count == 2
+    assert not live[0].lifecycle.created
+    if fault == 'cleanup':
+        assert broker.accounts
+        assert not any(item['event'] == 'cny_probe_cleanup' for item in live[0].records)
+    else:
+        assert not broker.accounts
+        assert live[0].records[-1]['event'] == 'cny_probe_cleanup'
+        assert live[0].records[-1]['confirmed_absent'] is True
+
+
 @pytest.mark.parametrize('fault', ['closed', 'stale', 'wrong-isin', 'wrong-currency', 'transport'])
 def test_preflight_failure_never_creates_accounts_or_orders(offline_live, fault):
     """Market closures, malformed responses and transport faults are offline-only failures."""

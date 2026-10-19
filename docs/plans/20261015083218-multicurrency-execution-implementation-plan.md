@@ -1470,6 +1470,19 @@ RUB/CNY price decline и FX-only decline, лоты 1/10 и реальный де
 временных счетах. Денежный oracle 1e-9 и прежние 25 сценариев сохраняются;
 до полного GitHub-прогона нового SHA это не подтверждённая live-приёмка.
 
+Controlled probe реализован отдельным 26-м сценарием без изменения прежних
+17+8. Два счета получают одинаковый CNY pay-in, затем выполняются BESTPRICE
+BUY 2 лота и BUY 1+1. Фиксируются balances до/после каждой заявки,
+OrderState total/commission units/nano и отдельные BUY/BROKER_FEE операции
+с дедупликацией ID. Модели сравниваются только при равном total principal,
+согласованных history principal и денежных фактах; иной результат явно
+inconclusive. Результат модели не является финансовой приёмкой приложения
+или доказанным API-контрактом. Денежный oracle 1e-9 и production rounding
+не меняются. Own caps, native budget, FILL identity и read-back cleanup двух
+счетов обязательны. Live нового полного SHA выполняет parent через GitHub;
+работник его не запускает. Exact-SHA offline collection должна подтвердить
+все прежние 25 node IDs и ровно один дополнительный probe.
+
 Новый live E2E и production dry-run требуют отдельного согласования.
 Не переносить автоматом разрешение многократных запусков диагностического PR #37
 на рабочие торговые запуски. Production не использовать для поиска семантики API.
