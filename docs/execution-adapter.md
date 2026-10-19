@@ -254,7 +254,7 @@ FX division uses precision 28 and HALF_EVEN independently of a caller's
 Decimal precision/rounding; later context changes cannot alter snapshot rates. RUB
 identity requires zero FX requests. Both market and receipt timestamps must
 be timezone-aware, with no future market data/receipts and market age at most
-60 seconds. Empty, crossed, nonpositive, malformed or stale books fail;
+90 seconds. Empty, crossed, nonpositive, malformed or stale books fail;
 last_price, its timestamp and an implicit rate of 1 are never fallbacks.
 The caller can recheck freshness before effects and must read new data on
 expiry. A snapshot grants no ownership, spending or trading permission.

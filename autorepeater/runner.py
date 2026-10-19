@@ -23,6 +23,16 @@ from autorepeater.execution_market import ExecutionMarket
 from autorepeater.fx import validate_pair_uids
 
 
+def _unique_pair_uids(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject repeated JSON keys before decoding can discard a conflicting route."""
+    selected = {}
+    for currency, uid in pairs:
+        if currency in selected:
+            raise ValueError('duplicate FX pair selection currency')
+        selected[currency] = uid
+    return selected
+
+
 @dataclasses.dataclass
 class RunnerParams:
     """params for init Runner class"""
@@ -35,7 +45,9 @@ class RunnerParams:
     @classmethod
     def from_environment(cls, *, debug: bool = False) -> 'RunnerParams':
         """Load launch-wide routes once, before creating any SDK client."""
-        return cls(debug=debug, fx_pair_uids=json.loads(os.environ.get('FX_PAIR_UIDS', '{}')))
+        selected = json.loads(os.environ.get('FX_PAIR_UIDS', '{}'),
+                              object_pairs_hook=_unique_pair_uids)
+        return cls(debug=debug, fx_pair_uids=selected)
 
 
 class Runner:

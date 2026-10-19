@@ -143,6 +143,7 @@ def test_sandbox_wiring_keeps_transport_outside_params():
 @pytest.mark.parametrize('raw', ['', 'not-json', 'null', '[]', '1',
                                  '{"rub":"pair"}', '{"cn":"pair"}',
                                  '{"cny":""}', '{"cny":false}', '{"cny":"bad uid"}',
+                                 '{"cny":"pair-A","cny":"pair-B"}',
                                  '{"CNY":"one","cny":"two"}'])
 def test_invalid_route_configuration_fails_before_client(wiring, monkeypatch, raw):
     """Malformed selections cannot become an implicit choice or reach the SDK."""

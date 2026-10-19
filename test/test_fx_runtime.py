@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal as D
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import create_autospec, patch
 
@@ -189,7 +190,7 @@ def test_runner_ambiguous_or_missing_explicit_pair_stops_before_effects(sdk_runt
     client.orders.post_order.assert_not_called()
 
 
-@pytest.mark.parametrize('entrypoint', ['runner', 'cli', 'cloud'])
+@pytest.mark.parametrize('entrypoint', ['runner', 'cli', 'cloud', 'one-shot'])
 def test_launch_environment_selects_fx_pair_through_real_runner(
         sdk_runtime, monkeypatch, entrypoint):
     """All normal launch boundaries use the configured route, without catalog filtering."""
@@ -215,11 +216,24 @@ def test_launch_environment_selects_fx_pair_through_real_runner(
                               spec_set=True, return_value=prepared), patch.object(
                     application.Runner, 'run', application.Runner.run_sync):
                 main.main()
-        else:
+        elif entrypoint == 'cloud':
             with patch.object(serverless, 'prepare_strategy', autospec=True,
                               spec_set=True, return_value=prepared):
                 serverless.handler({'queryStringParameters': {
                     'algoritm': 'ACCOUNT', 'src': 'synthetic', 'dst': 'dst'}}, None)
+        else:
+            for key, value in {'ALGORITM': 'ACCOUNT', 'SRC_ACCOUNT': 'synthetic',
+                               'DST_ACCOUNT': 'dst', 'ONE_SHOT_DEBUG': '0'}.items():
+                monkeypatch.setenv(key, value)
+            example = (Path(__file__).resolve().parents[1] / 'README.md').read_text(
+                encoding='utf-8')
+            example = example.partition('### Один локальный проход')[2]
+            example = example.partition("<<'PY'\n")[2].partition('\nPY\n')[0]
+            assert example
+            with patch('autorepeater.strategies.prepare_strategy', autospec=True,
+                       spec_set=True, return_value=prepared):
+                # pylint: disable=exec-used
+                exec(compile(example, __file__, 'exec'), {})
     assert state.held == 1
     assert [call.kwargs['instrument_id'] for call in client.orders.post_order.call_args_list
             ] == ['cny-rub', 'C']
