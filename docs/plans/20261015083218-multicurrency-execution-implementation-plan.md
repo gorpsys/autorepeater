@@ -1475,9 +1475,13 @@ Controlled probe реализован отдельным 26-м сценарие�
 17+8. Два счета получают одинаковый CNY pay-in, затем выполняются BESTPRICE
 BUY 2 лота и BUY 1+1. Фиксируются balances до/после каждой заявки,
 OrderState total/commission units/nano и отдельные BUY/BROKER_FEE операции
-с дедупликацией ID. Модели сравниваются только при равном total principal,
-согласованных history principal и денежных фактах; иной результат явно
-inconclusive. Результат модели не является финансовой приёмкой приложения
+с дедупликацией исполненных ID; pending остаются неучтёнными и препятствуют
+complete, наблюдавшиеся суммы сохраняются при тайм-ауте. Сопоставимость требует
+одинаковых per-fill native цен, principal и raw-комиссий на лот, согласованных
+history principal и непрерывных balances. Для raw 7dp / history и balances 6dp
+сохраняются численные прогнозы округления каждой комиссии и cumulative final
+balance с остатками. Итог остаётся inconclusive с явными неисключёнными
+альтернативами, даже если модель совпадает. Результат не является финансовой приёмкой приложения
 или доказанным API-контрактом. Денежный oracle 1e-9 и production rounding
 не меняются. Own caps, native budget, FILL identity и read-back cleanup двух
 счетов обязательны. Live нового полного SHA выполняет parent через GitHub;

@@ -29,7 +29,8 @@ from autorepeater.strategies import prepare_strategy
 from autorepeater.strategy_contract import PreparedStrategy
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType
 from scripts.sandbox_lifecycle import SandboxFailure, safe_call
-from scripts.sandbox_commission_probe import CommissionSample, compare_commissions
+from scripts.sandbox_commission_probe import (
+    CommissionObservation, CommissionSample, compare_commissions)
 from scripts.sandbox_multicurrency import (
     NativeState, TradeFact, cash_value, fees_by_currency, money_deltas, native_midpoint,
     reconcile, require, required_fx_lots,
@@ -611,19 +612,27 @@ def _probe_history(session, dst, seen, bond, pieces):
     """Each executed BUY/payment and fee ID is counted once on this disposable account."""
     response = safe_call(session.client.operations.get_operations, account_id=dst)
     require(len(response.operations) <= 100, 'unexpected commission probe history size')
-    identifiers, facts, purchases, fees = set(), [], [], []
+    require(len({operation.id for operation in response.operations}) == len(response.operations),
+            'invalid or duplicate probe operation ID')
+    consumed, pending, facts, purchases, fees = set(), [], [], [], []
     quantity = 0
     for operation in response.operations:
-        require(isinstance(operation.id, str) and bool(operation.id)
-                and operation.id not in identifiers, 'invalid or duplicate probe operation ID')
-        identifiers.add(operation.id)
+        require(isinstance(operation.id, str) and bool(operation.id),
+                'invalid or duplicate probe operation ID')
         require(isinstance(operation.state, OperationState)
                 and isinstance(operation.operation_type, OperationType),
                 'invalid probe history enum')
-        if (operation.id in seen or operation.state != OperationState.OPERATION_STATE_EXECUTED
-                or operation.operation_type not in (
+        if (operation.id in seen or operation.operation_type not in (
                     OperationType.OPERATION_TYPE_BUY, OperationType.OPERATION_TYPE_BROKER_FEE)):
             continue
+        facts.append({'id': safe_symbol(operation.id, limit=128),
+                      'uid': safe_symbol(operation.instrument_uid),
+                      'type': operation.operation_type.name, 'state': operation.state.name,
+                      'quantity': operation.quantity, 'payment': amount_fact(operation.payment)})
+        if operation.state != OperationState.OPERATION_STATE_EXECUTED:
+            pending.append(safe_symbol(operation.id, limit=128))
+            continue
+        consumed.add(operation.id)
         require(all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
                     for value in (operation.quantity, operation.quantity_rest)),
                 'invalid commission probe history quantities')
@@ -641,16 +650,37 @@ def _probe_history(session, dst, seen, bond, pieces):
             purchases.append(-payment.amount)
         else:
             fees.append(-payment.amount)
-        facts.append({'id': safe_symbol(operation.id, limit=128),
-                      'uid': safe_symbol(operation.instrument_uid),
-                      'type': operation.operation_type.name, 'state': operation.state.name,
-                      'quantity': operation.quantity, 'payment': amount_fact(operation.payment)})
-    complete = quantity == pieces and bool(purchases) and bool(fees)
+    complete = quantity == pieces and bool(purchases) and bool(fees) and not pending
     session.records.append({'event': 'cny_probe_history', 'account_id': dst,
                             'observed_utc': datetime.now(timezone.utc).isoformat(),
-                            'complete': complete, 'operations': facts})
-    return identifiers, sum(purchases, D(0)) if complete else None, (
+                            'complete': complete, 'operations': facts, 'pending_ids': pending,
+                            'observed_principal': sum(purchases, D(0)),
+                            'observed_fee': sum(fees, D(0))})
+    return consumed, sum(purchases, D(0)) if quantity == pieces and purchases else None, (
         sum(fees, D(0)) if complete else None)
+
+
+def _probe_fill_prices(session, dst, response, bond, lots):
+    """Missing native per-fill prices limit inference, without inventing trade prices."""
+    state = safe_call(session.client.orders.get_order_state,
+                      account_id=dst, order_id=response['order_id'])
+    session.check_order(state, bond.uid, lots, OrderDirection.ORDER_DIRECTION_BUY,
+                        response['order_id'])
+    require(state.execution_report_status == FILL, 'commission probe order not FILL')
+    facts, prices, quantity = [], [], 0
+    for stage in state.stages:
+        require(isinstance(stage.quantity, int) and not isinstance(stage.quantity, bool)
+                and stage.quantity > 0, 'invalid commission probe fill quantity')
+        price = MoneyAmount.from_units_nano(
+            stage.price.currency, stage.price.units, stage.price.nano)
+        require(price.currency == 'cny' and price.amount > 0, 'invalid probe native fill price')
+        quantity += stage.quantity
+        prices.append(price.amount)
+        facts.append({'quantity': stage.quantity, 'price': amount_fact(stage.price)})
+    complete = quantity == lots * bond.lot
+    session.records.append({'event': 'cny_probe_fills', 'account_id': dst,
+                            'order_id': response['order_id'], 'complete': complete, 'fills': facts})
+    return tuple(prices) if complete else ()
 
 
 def _probe_step(session, dst, instruments, lots, seen):
@@ -671,6 +701,7 @@ def _probe_step(session, dst, instruments, lots, seen):
     require(trade.total > 0 and trade.commission >= 0
             and trade.total + trade.commission <= min(before.money['cny'], rule.buy_money_amount),
             'probe receipt exceeds owned native budget or money cap')
+    fill_prices = _probe_fill_prices(session, dst, response, instruments.bond, lots)
     deadline = session.monotonic() + 30
     while True:
         history = _probe_history(session, dst, seen, instruments.bond,
@@ -691,7 +722,8 @@ def _probe_step(session, dst, instruments, lots, seen):
         'history_principal': history[1], 'history_fee': history[2]})
     return CommissionSample(lots, trade.total, trade.commission,
                             before.money['cny'] - after.money['cny'],
-                            history[1], history[2]), history[0]
+                            history[1], history[2], CommissionObservation(
+                                before.money['cny'], after.money['cny'], fill_prices)), history[0]
 
 
 def _fund_cny_probe(session, scenario, funding):

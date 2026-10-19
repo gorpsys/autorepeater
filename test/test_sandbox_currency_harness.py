@@ -226,27 +226,31 @@ def test_new_existing_currency_scenarios_offline(offline_live, tmp_path, monkeyp
 
 
 def _wire_commission_probe(broker, model):
-    """Controlled SDK responses distinguish response rounding from charged rounding."""
+    """Raw 7dp fees with 6dp history/positions distinguish numeric balance models."""
     from decimal import ROUND_HALF_UP  # pylint: disable=import-outside-toplevel
     history = {key: [] for key in broker.accounts}
+    exact_balances = {}
     original = broker.client.orders.post_order.side_effect
 
     def submit(**kwargs):
-        response = original(**kwargs)
         account, lots = kwargs['account_id'], kwargs['quantity']
-        fee = D('.1234565') * lots
-        reported = fee if model == 'equal-fees' else fee.quantize(
-            D('.000001'), rounding=ROUND_HALF_UP)
-        charged = reported if model == 'cash-rounded' else fee
-        old_fee = D(response.executed_commission.units) + D(response.executed_commission.nano)/10**9
-        broker.accounts[account]['cash']['cny'] += old_fee - charged
-        response = replace(response, executed_commission=money('cny', reported))
-        broker.orders[response.order_id] = replace(
-            broker.orders[response.order_id], executed_commission=response.executed_commission)
+        before = broker.accounts[account]['cash']['cny']
+        response = original(**kwargs)
+        fee = D('.123456' if model == 'equal-fees' else '.1234565') * lots
+        history_fee = fee.quantize(D('.000001'), rounding=ROUND_HALF_UP)
         total = D(response.total_order_amount.units) + D(response.total_order_amount.nano)/10**9
+        exact_balances[account] = exact_balances.get(account, before) - total - (
+            history_fee if model == 'cash-rounded' else fee)
+        broker.accounts[account]['cash']['cny'] = exact_balances[account].quantize(
+            D('.000001'), rounding=ROUND_HALF_UP)
+        response = replace(response, executed_commission=money('cny', fee))
+        broker.orders[response.order_id] = replace(
+            broker.orders[response.order_id], executed_commission=response.executed_commission,
+            stages=[sdk.OrderStage(price=money('cny', 997), quantity=lots,
+                                   trade_id=response.order_id + '-fill')])
         for kind, payment, quantity in (
                 (sdk.OperationType.OPERATION_TYPE_BUY, -total, lots),
-                (sdk.OperationType.OPERATION_TYPE_BROKER_FEE, -fee, 0)):
+                (sdk.OperationType.OPERATION_TYPE_BROKER_FEE, -history_fee, 0)):
             history.setdefault(account, []).append(sdk.Operation(
                 id=response.order_id + '-' + kind.name, instrument_uid='C',
                 operation_type=kind, state=sdk.OperationState.OPERATION_STATE_EXECUTED,
@@ -262,8 +266,8 @@ def _wire_commission_probe(broker, model):
 
 
 @pytest.mark.parametrize('model,verdict', [
-    ('response-rounded', 'response_fee_rounding_6dp_consistent'),
-    ('cash-rounded', 'per_order_cash_rounding_6dp_consistent'),
+    ('response-rounded', 'inconclusive'),
+    ('cash-rounded', 'inconclusive'),
     ('equal-fees', 'inconclusive'), ('no-history', 'inconclusive'),
 ])
 def test_controlled_cny_probe_offline(offline_live, monkeypatch, model, verdict):
@@ -276,6 +280,12 @@ def test_controlled_cny_probe_offline(offline_live, monkeypatch, model, verdict)
     scenarios.test_cny_commission_one_order_vs_split(live)
     summary = [item for item in live[0].records if item['event'] == 'cny_commission_probe']
     assert len(summary) == 1 and summary[0]['comparison']['verdict'] == verdict
+    if model != 'no-history':
+        assert any(item['model'] == (
+            'per-operation-fee' if model == 'cash-rounded' else 'display-final-balance')
+            for item in summary[0]['comparison']['consistent_models'])
+    else:
+        assert not summary[0]['comparison']['consistent_models']
     steps = [item for item in live[0].records if item['event'] == 'cny_probe_step']
     assert [item['lots'] for item in steps] == [2, 1, 1]
     orders = broker.client.orders.post_order.call_args_list
@@ -305,6 +315,103 @@ def test_controlled_cny_probe_offline(offline_live, monkeypatch, model, verdict)
         assert len(histories) == 3 and all(item['complete'] for item in histories)
         assert all(sum(op['type'] == 'OPERATION_TYPE_BROKER_FEE'
                        for op in item['operations']) == 1 for item in histories)
+
+
+def test_pending_probe_fee_is_not_consumed_or_complete(offline_live):
+    """An executed fee cannot make a second pending fee disappear on the next poll."""
+    # pylint: disable=protected-access
+    live, broker = offline_live
+    operations = [sdk.Operation(
+        id=identity, instrument_uid='C', operation_type=kind, state=state,
+        quantity=quantity, quantity_rest=0, payment=money('cny', payment))
+        for identity, kind, state, quantity, payment in (
+            ('buy', sdk.OperationType.OPERATION_TYPE_BUY,
+             sdk.OperationState.OPERATION_STATE_EXECUTED, 1, -997),
+            ('fee1', sdk.OperationType.OPERATION_TYPE_BROKER_FEE,
+             sdk.OperationState.OPERATION_STATE_EXECUTED, 0, D('-.1')),
+            ('fee2', sdk.OperationType.OPERATION_TYPE_BROKER_FEE,
+             sdk.OperationState.OPERATION_STATE_PROGRESS, 0, D('-.2')))]
+    broker.client.operations.get_operations.return_value = sdk.OperationsResponse(
+        operations=operations)
+    broker.client.operations.get_operations.side_effect = None
+    bond = broker.metadata['C']
+    seen, principal, fee = scenarios._probe_history(live[0], 'dst', set(), bond, D(1))
+    assert seen == {'buy', 'fee1'}
+    assert principal == 997 and fee is None
+    fact = live[0].records[-1]
+    assert fact['complete'] is False
+    assert fact['observed_fee'] == D('.1')
+    assert fact['pending_ids'] == ['fee2']
+    operations[2] = replace(operations[2], state=sdk.OperationState.OPERATION_STATE_EXECUTED)
+    next_seen, _, _ = scenarios._probe_history(live[0], 'dst', seen, bond, D(1))
+    assert next_seen == {'fee2'}
+    assert live[0].records[-1]['observed_fee'] == D('.2')
+    assert live[0].records[-1]['complete'] is False
+
+
+@pytest.mark.parametrize('state', [
+    sdk.OperationState.OPERATION_STATE_PROGRESS, sdk.OperationState.OPERATION_STATE_CANCELED])
+def test_incomplete_history_preserves_facts_until_fee_executes(offline_live, state):
+    """Polling the same BUY must retain it, not silently complete with a pending fee."""
+    # pylint: disable=protected-access
+    live, broker = offline_live
+    operations = [sdk.Operation(
+        id='buy', instrument_uid='C', operation_type=sdk.OperationType.OPERATION_TYPE_BUY,
+        state=sdk.OperationState.OPERATION_STATE_EXECUTED, quantity=1, quantity_rest=0,
+        payment=money('cny', -997)), sdk.Operation(
+            id='fee', instrument_uid='C',
+            operation_type=sdk.OperationType.OPERATION_TYPE_BROKER_FEE,
+            state=state, quantity=0, quantity_rest=0, payment=money('cny', D('-.123457')))]
+    broker.client.operations.get_operations.return_value = sdk.OperationsResponse(
+        operations=operations)
+    for _ in range(2):
+        consumed, principal, fee = scenarios._probe_history(
+            live[0], 'dst', set(), broker.metadata['C'], D(1))
+        assert consumed == {'buy'} and principal == 997 and fee is None
+        assert live[0].records[-1]['complete'] is False
+        assert len(live[0].records[-1]['operations']) == 2
+    operations[1] = replace(operations[1], state=sdk.OperationState.OPERATION_STATE_EXECUTED)
+    consumed, principal, fee = scenarios._probe_history(
+        live[0], 'dst', set(), broker.metadata['C'], D(1))
+    assert consumed == {'buy', 'fee'} and principal == 997 and fee == D('.123457')
+    assert live[0].records[-1]['complete'] is True
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'quantity', 'different-prices', 'invalid-quantity', 'invalid-price'])
+def test_probe_checks_native_fill_prices_without_inventing_them(offline_live, fault):
+    """Native per-fill provenance is required for comparison, independently of totals."""
+    live, broker = offline_live
+    _wire_commission_probe(broker, 'cash-rounded')
+    original = broker.client.orders.get_order_state.side_effect
+
+    def state(**kwargs):
+        response = original(**kwargs)
+        stages = response.stages
+        if fault == 'missing':
+            stages = []
+        elif fault == 'quantity':
+            stages = [replace(stages[0], quantity=50)]
+        elif fault == 'different-prices':
+            stages = [replace(stages[0], price=money('cny', 900 + response.lots_requested))]
+        elif fault == 'invalid-quantity':
+            stages = [replace(stages[0], quantity=True)]
+        else:
+            stages = [replace(stages[0], price=money('rub', 997))]
+        return replace(response, stages=stages)
+
+    broker.client.orders.get_order_state.side_effect = state
+    if fault.startswith('invalid'):
+        with pytest.raises(SandboxFailure, match='probe.*(fill quantity|fill price)'):
+            scenarios.test_cny_commission_one_order_vs_split(live)
+    else:
+        scenarios.test_cny_commission_one_order_vs_split(live)
+        comparison = next(item['comparison'] for item in live[0].records
+                          if item['event'] == 'cny_commission_probe')
+        assert comparison['controlled_inputs'] is False
+        assert not comparison['consistent_models']
+        assert comparison['verdict'] == 'inconclusive'
+    assert not broker.accounts
 
 
 @pytest.mark.parametrize('fault', [
