@@ -37,6 +37,9 @@ def store(root: Path, number: int, report, *, returncode=None):
     directory = root / 'attempts' / f'{number:02}'
     directory.mkdir(parents=True, exist_ok=True)
     fields = asdict(report)
+    for phase in fields['phases']:
+        del phase['stale_book']
+        del phase['auth_failure']
     if report.sha is None:
         del fields['sha']
     (directory / 'report.json').write_text(json.dumps(fields), encoding='utf-8')
