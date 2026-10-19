@@ -223,11 +223,12 @@ def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
     if junit.name != 'junit.xml':
         raise GitHubFailure('retry evidence requires the fixed merged JUnit path')
     try:
-        if format_name == 'retry-v2':
+        if format_name in ('retry-v2', 'retry-v3'):
             if collection is None:
                 raise GitHubFailure('independent full collection required')
             expected = read_collection(collection, sha)
-            return SuiteEvidence(verify_history(junit.parent, expected=expected))
+            return SuiteEvidence(verify_history(junit.parent, expected=expected,
+                                                protocol=format_name))
         if format_name != 'retry-v1':
             raise GitHubFailure('unsupported evidence protocol')
         return SuiteEvidence(verify_history(junit.parent, require_full=True))
@@ -245,7 +246,8 @@ def main(argv: list[str] | None = None) -> int:
     evidence.add_argument('--run-log', type=Path)
     evidence.add_argument('--collection', type=Path)
     evidence.add_argument('--sha', default='')
-    evidence.add_argument('--evidence-format', choices=('retry-v1', 'retry-v2', 'single-v1'),
+    evidence.add_argument('--evidence-format',
+                          choices=('retry-v1', 'retry-v2', 'retry-v3', 'single-v1'),
                           default='retry-v1')
     args = parser.parse_args(argv)
     try:
