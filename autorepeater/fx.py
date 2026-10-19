@@ -10,6 +10,21 @@ from autorepeater.fx_data import FxData, FxPair, FxQuote, fx_ratio, market_times
 from autorepeater.strategy_plan import exact_product
 
 
+def validate_pair_uids(value: Mapping[str, str]) -> Mapping[str, str]:
+    """Freeze explicit native-currency routes without guessing settlement or availability."""
+    if not isinstance(value, Mapping):
+        raise ValueError('FX pair selections must be a currency-to-UID mapping')
+    selected = {}
+    for currency, uid in value.items():
+        code = currency_code(currency)
+        if code == 'rub' or code in selected:
+            raise ValueError('invalid or duplicate FX pair selection currency')
+        if not isinstance(uid, str) or not uid or any(char.isspace() for char in uid):
+            raise ValueError('invalid FX pair selection UID')
+        selected[code] = uid
+    return MappingProxyType(selected)
+
+
 def select_direct_pair(pairs: Sequence[FxPair], currency: str, *,
                        pair_uid: str | None = None) -> FxPair:
     """Never infer identity/settlement from a ticker, availability or catalog order."""

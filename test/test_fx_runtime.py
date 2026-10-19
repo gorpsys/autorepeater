@@ -1,5 +1,7 @@
 """Real Runner/SDK-adapter multicurrency flow against strict offline broker doubles."""
 import inspect
+import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal as D
 from types import SimpleNamespace
@@ -135,7 +137,7 @@ def fixture_sdk_runtime():
     return client, state
 
 
-def launch(client, *, debug=False):
+def launch(client, *, debug=False, params=None):
     """Use the actual public Runner without entering a real SDK Client."""
     config = AccountConfig('synthetic', '0004', D('.1'), D('.01'))
     prepared = PreparedStrategy(
@@ -144,8 +146,83 @@ def launch(client, *, debug=False):
         connect.return_value.__enter__.return_value = client
         with patch('autorepeater.repeater.reporting.print_rebalance_plan') as report:
             application.Runner('synthetic', prepared, 'dst',
+                               params if params is not None else
                                application.RunnerParams(debug)).run_sync()
     return report.call_args.args[0]
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('available', [False, True])
+def test_configured_runner_selects_exact_fx_uid(sdk_runtime, reverse, available):
+    """The public Runner carries selection into valuation, funding and refreshed execution."""
+    client, state = sdk_runtime
+    pairs = client.instruments.currencies.return_value.instruments
+    other = replace(pairs[0], uid='other-cny-rub', api_trade_available_flag=available,
+                    buy_available_flag=available, sell_available_flag=available)
+    pairs.insert(0, other)
+    if reverse:
+        pairs.reverse()
+    plan = launch(client, params=application.RunnerParams(
+        False, fx_pair_uids={'CNY': 'cny-rub'}))
+    assert plan.marks == {'C': D(720)}
+    assert [(order.uid, order.lots) for order in plan.funding.exchanges] == [('cny-rub', 69)]
+    assert state.cash == {'rub': D(171), 'cny': D(8)}
+    assert state.held == 1
+    assert [call.kwargs['instrument_id'] for call in client.orders.post_order.call_args_list
+            ] == ['cny-rub', 'C']
+    assert not any(call.kwargs['instrument_id'] == other.uid
+                   for call in client.market_data.get_order_book.call_args_list)
+    assert not any(uid == other.uid for _, uid in state.events)
+
+
+@pytest.mark.parametrize('selection', [None, 'missing'])
+def test_runner_ambiguous_or_missing_explicit_pair_stops_before_effects(sdk_runtime, selection):
+    """An absent configured route never falls back to another valid CNY pair."""
+    client, state = sdk_runtime
+    pairs = client.instruments.currencies.return_value.instruments
+    pairs.append(replace(pairs[0], uid='other-cny-rub'))
+    params = application.RunnerParams(False) if selection is None else application.RunnerParams(
+        False, fx_pair_uids={'cny': selection})
+    with pytest.raises(ValueError, match='ambiguous' if selection is None else 'no direct'):
+        launch(client, params=params)
+    assert state.cash == {'rub': D(1000), 'cny': D(0)}
+    client.orders.post_order.assert_not_called()
+
+
+@pytest.mark.parametrize('entrypoint', ['runner', 'cli', 'cloud'])
+def test_launch_environment_selects_fx_pair_through_real_runner(
+        sdk_runtime, monkeypatch, entrypoint):
+    """All normal launch boundaries use the configured route, without catalog filtering."""
+    import main  # pylint: disable=import-outside-toplevel
+    from autorepeater import serverless  # pylint: disable=import-outside-toplevel
+    client, state = sdk_runtime
+    pairs = client.instruments.currencies.return_value.instruments
+    pairs.insert(0, replace(pairs[0], uid='other-cny-rub'))
+    monkeypatch.setenv('FX_PAIR_UIDS', json.dumps({'cny': 'cny-rub'}))
+    monkeypatch.setenv('INVEST_TOKEN', 'offline-synthetic')
+    config = AccountConfig('synthetic', '0004', D('.1'), D('.01'))
+    prepared = PreparedStrategy(
+        AccountStrategy, PreparedAccountSource('0004', config), 'synthetic')
+    with patch.object(application.Runner, '_create_client', autospec=True,
+                      spec_set=True) as connect:
+        connect.return_value.__enter__.return_value = client
+        if entrypoint == 'runner':
+            application.Runner('synthetic', prepared, 'dst').run_sync()
+        elif entrypoint == 'cli':
+            monkeypatch.setattr('sys.argv', [
+                'main.py', '--algoritm', 'ACCOUNT', '-s', 'synthetic', '-d', 'dst'])
+            with patch.object(main, 'prepare_strategy', autospec=True,
+                              spec_set=True, return_value=prepared), patch.object(
+                    application.Runner, 'run', application.Runner.run_sync):
+                main.main()
+        else:
+            with patch.object(serverless, 'prepare_strategy', autospec=True,
+                              spec_set=True, return_value=prepared):
+                serverless.handler({'queryStringParameters': {
+                    'algoritm': 'ACCOUNT', 'src': 'synthetic', 'dst': 'dst'}}, None)
+    assert state.held == 1
+    assert [call.kwargs['instrument_id'] for call in client.orders.post_order.call_args_list
+            ] == ['cny-rub', 'C']
 
 
 def test_public_runtime_bond_fx_then_native_buy_without_history_or_price(sdk_runtime):

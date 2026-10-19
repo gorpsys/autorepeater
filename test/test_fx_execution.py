@@ -34,6 +34,25 @@ def runtime():
     return ExecutionMarket(fx, books, clock=lambda: NOW), fx, books
 
 
+def test_explicit_unavailable_pair_can_value_cash_without_trading_or_retargeting():
+    """Valuation identity is independent of permissions and of caller mapping mutations."""
+    _, fx, books = runtime()
+    quote = market().quotes['cny']
+    chosen = replace(quote.pair, api_trade_available=False, buy_available=False,
+                     sell_available=False)
+    other = replace(quote.pair, uid='other')
+    fx.list_pairs.return_value = [other, chosen]
+    fx.get_quote.side_effect = None
+    fx.get_quote.return_value = replace(quote, pair=chosen)
+    selections = {'cny': chosen.uid}
+    execution_market = ExecutionMarket(fx, books, clock=lambda: NOW, fx_pair_uids=selections)
+    selections['cny'] = other.uid
+    value = execution_market.valuation()
+    assert value.to_rub(MoneyAmount('cny', D(100))) == MoneyAmount('rub', D(1200))
+    fx.get_quote.assert_called_once_with(chosen)
+    fx.get_trade_rules.assert_not_called()
+
+
 def receipt(intent, total=None, fee='0', currency='rub', status='FILL'):
     """Order fields are explicit bounds; exact receipt.cash remains empty."""
     result = ExecutionReceipt(intent.uid, intent.side, 'broker-' + intent.uid, status,

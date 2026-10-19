@@ -22,6 +22,7 @@ from autorepeater.instrument_selection import prefer_instrument_currency
 from autorepeater.order_plan import OrderIntent, OrderPlan
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.purchase_plan import leaves
+from autorepeater.runner import RunnerParams
 from autorepeater.strategies import prepare_strategy
 from autorepeater.strategy_contract import PreparedStrategy
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType
@@ -339,6 +340,11 @@ def configure(live: LiveCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
               instruments: CurrencyCatalog) -> Path:
     """Synthetic reference snapshot is explicit about native and capitalization currencies."""
     session, _ = live
+    monkeypatch.setenv('FX_PAIR_UIDS', json.dumps(
+        {instruments.pair.base_currency: instruments.pair.uid}))
+    sources = session.data.valuation_sources
+    session.market = ExecutionMarket(sources.fx, sources.securities,
+                                     fx_pair_uids=RunnerParams.from_environment().fx_pair_uids)
     records = reference_records(session, instruments)
     directories = {name: tmp_path / name.lower() for name in ('INDEX', 'ACCOUNT', 'COMPOSITE')}
     for name, directory in directories.items():

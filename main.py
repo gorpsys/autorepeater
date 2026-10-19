@@ -28,7 +28,7 @@ def main() -> None:
         token=invest_token,
         prepared_strategy=prepared,
         dst=args.dst,
-        params=RunnerParams(
+        params=RunnerParams.from_environment(
             debug=args.debug))
     runer.run()
 

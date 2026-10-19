@@ -1,5 +1,5 @@
 """Pass-local market wiring and confirmed native-cash execution, without SDK types."""
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -14,7 +14,7 @@ from autorepeater.execution import (
     ExecutionReceipt, _fresh, _positions_match, _submit,
 )
 from autorepeater.execution_data import ExecutionData
-from autorepeater.fx import FxSnapshot, select_direct_pair
+from autorepeater.fx import FxSnapshot, select_direct_pair, validate_pair_uids
 from autorepeater.fx_data import FxData
 from autorepeater.fx_funding import FundingInputs, build_funding_plan
 from autorepeater.logging_config import logger
@@ -43,7 +43,8 @@ class MarketValuation(Valuation):
         if amount.currency != 'rub' and amount.currency not in self.fx.quotes:
             if self._pairs is None:
                 self._pairs = self.market.fx.list_pairs()
-            pair = select_direct_pair(self._pairs, amount.currency)
+            pair = select_direct_pair(self._pairs, amount.currency,
+                                      pair_uid=self.market.fx_pair_uids.get(amount.currency))
             quote = self.market.fx.get_quote(pair)
             if quote.pair != pair:
                 raise ValueError('FX quote identity differs from selected pair')
@@ -86,9 +87,11 @@ class ExecutionMarket:
     """The same explicit read-only ports serve CLI, cloud and offline execution."""
 
     def __init__(self, fx: FxData, securities: SecurityData, *,
-                 clock: Callable[[], datetime] | None = None) -> None:
+                 clock: Callable[[], datetime] | None = None,
+                 fx_pair_uids: Mapping[str, str] | None = None) -> None:
         self.fx = fx
         self.securities = securities
+        self.fx_pair_uids = validate_pair_uids({} if fx_pair_uids is None else fx_pair_uids)
         self.clock = clock if clock is not None else lambda: datetime.now(timezone.utc)
 
     def valuation(self) -> Valuation:

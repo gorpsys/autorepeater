@@ -303,3 +303,36 @@ def test_all_currency_scenarios_with_competing_rub_bond(
                    for call in broker.client.orders.post_order.call_args_list)
     broker.client.orders.get_order_price.assert_not_called()
     broker.client.operations.get_operations.assert_not_called()
+
+
+@pytest.mark.parametrize('scenario_case', [
+    (scenarios.test_rub_cny_normal_application, ('INDEX', 'CROSS')),
+    (scenarios.test_rub_cny_normal_application, ('COMPOSITE', 'MIX')),
+    (scenarios.test_rub_cny_normal_application, ('ACCOUNT', 'MIXED')),
+    (scenarios.test_shared_cny_owners_and_unallocated_cash, ()),
+    (scenarios.test_existing_cny_before_lot_rounding, ('sufficient',)),
+    (scenarios.test_existing_cny_before_lot_rounding, ('partial',)),
+    (scenarios.test_reverse_exchange_only_for_rub_purchase, ()),
+    (scenarios.test_isolated_sale_does_not_fund_sibling, ()),
+])
+@pytest.mark.parametrize('catalog_case', [
+    (False, False), (False, True), (True, False), (True, True),
+])
+def test_all_currency_scenarios_with_competing_fx_pairs(
+        offline_live, tmp_path, monkeypatch, scenario_case, catalog_case):
+    """Setup state and the unmodified Runner use the same explicitly configured FX UID."""
+    scenario, args = scenario_case
+    reverse, available = catalog_case
+    live, broker = offline_live
+    pairs = broker.client.instruments.currencies.return_value.instruments
+    pairs.insert(0, replace(pairs[0], uid='other-fx', api_trade_available_flag=available,
+                            buy_available_flag=available, sell_available_flag=available))
+    if reverse:
+        pairs.reverse()
+    scenario(live, tmp_path, monkeypatch, *args)
+    assert not any(call.kwargs.get('instrument_id') == 'other-fx'
+                   for call in broker.client.market_data.get_order_book.call_args_list)
+    assert not any(call.kwargs.get('instrument_id') == 'other-fx'
+                   for call in broker.client.orders.post_order.call_args_list)
+    broker.client.orders.get_order_price.assert_not_called()
+    broker.client.operations.get_operations.assert_not_called()

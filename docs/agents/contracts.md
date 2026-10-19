@@ -136,7 +136,16 @@ Reporting использует загруженные DTO/UID без допол�
 AutoRepeater(strategy, data, execution_data, executor), sync_accounts/mainflow
 получают dst. sync_accounts дополнительно принимает явный keyword-only
 Valuation для read-only валютной оценки; прежний вызов без него совместим.
-RunnerParams содержит только debug. SDK StrategyData дополнительно предоставляет
+RunnerParams содержит debug и необязательный mapping fx_pair_uids из валюты в UID
+прямой пары к RUB. Mapping проверяется и копируется без SDK; дубликаты валют после
+нормализации регистра, RUB-ключи и невалидные UID запрещены. Штатные CLI/облако
+загружают его из JSON FX_PAIR_UIDS; явные RunnerParams заменяют настройку целиком.
+ExecutionMarket передаёт выбранный UID чистому select_direct_pair для оценки
+источника/назначения и всего дерева; исполнение сохраняет выбранную пару.
+Без явного UID несколько прямых пар по-прежнему запрещены. Выбор не зависит
+от порядка каталога или API availability; отсутствующий/неверный маршрут
+отклоняется без fallback. Прежние RUB-вызовы не требуют настройки.
+SDK StrategyData дополнительно предоставляет
 read-only ValuationSources; Runner передаёт их в ExecutionMarket, включающий
 общую RUB-оценку, native funding и подтверждённое FX-исполнение.
 Нейтральные порты без этой необязательной capability сохраняют прежний путь;

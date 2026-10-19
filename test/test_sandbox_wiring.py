@@ -131,12 +131,39 @@ def test_sandbox_wiring_requires_explicit_bool(wiring, value):
     wiring.sandbox.assert_not_called()
 
 
-def test_sandbox_wiring_keeps_debug_only_params():
-    """Transport selection is keyword-only and does not become a financial parameter."""
-    assert [field.name for field in fields(application.RunnerParams)] == ['debug']
+def test_sandbox_wiring_keeps_transport_outside_params():
+    """Transport remains keyword-only; route selection has a backward-compatible default."""
+    assert [field.name for field in fields(application.RunnerParams)] == ['debug', 'fx_pair_uids']
+    assert application.RunnerParams(False).fx_pair_uids == {}
     parameter = inspect.signature(application.Runner).parameters['sandbox']
     assert parameter.kind == inspect.Parameter.KEYWORD_ONLY
     assert parameter.default is False
+
+
+@pytest.mark.parametrize('raw', ['', 'not-json', 'null', '[]', '1',
+                                 '{"rub":"pair"}', '{"cn":"pair"}',
+                                 '{"cny":""}', '{"cny":false}', '{"cny":"bad uid"}',
+                                 '{"CNY":"one","cny":"two"}'])
+def test_invalid_route_configuration_fails_before_client(wiring, monkeypatch, raw):
+    """Malformed selections cannot become an implicit choice or reach the SDK."""
+    monkeypatch.setenv('FX_PAIR_UIDS', raw)
+    with pytest.raises(ValueError):
+        application.Runner('synthetic', wiring.prepared, 'dst')
+    wiring.production.assert_not_called()
+    wiring.sandbox.assert_not_called()
+
+
+def test_explicit_route_params_override_environment_and_copy_mapping(wiring, monkeypatch):
+    """Explicit params replace inherited selection and do not retain mutable caller state."""
+    monkeypatch.setenv('FX_PAIR_UIDS', 'invalid-json')
+    choices = {'CNY': 'chosen'}
+    params = application.RunnerParams(False, fx_pair_uids=choices)
+    choices['CNY'] = 'other'
+    runner = application.Runner('synthetic', wiring.prepared, 'dst', params)
+    assert runner.params.fx_pair_uids == {'cny': 'chosen'}
+    empty = application.Runner('synthetic', wiring.prepared, 'dst', application.RunnerParams(False))
+    assert empty.params.fx_pair_uids == {}
+    wiring.production.assert_not_called()
 
 
 @pytest.mark.parametrize('source_id', ['0004', '2a78f51a-42c0-4a3e-8f95-b9ef692d2da1'])
