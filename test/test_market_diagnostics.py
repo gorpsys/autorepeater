@@ -145,7 +145,7 @@ def fixture_books():
 
 @pytest.mark.parametrize('case', [
     ('other', NOW, 'uid_mismatch', 0, 'security book UID mismatch or stale market time'),
-    ('uid', NOW - timedelta(seconds=61), 'market_time_stale', 61,
+    ('uid', NOW - timedelta(seconds=91), 'market_time_stale', 91,
      'security book UID mismatch or stale market time'),
     ('uid', NOW + timedelta(seconds=1), 'market_time_future', -1,
      'security book UID mismatch or stale market time'),
@@ -168,16 +168,16 @@ def test_book_failures_are_distinct_without_changing_exceptions(books, caplog, c
     assert len(records) == 1
     fact = json.loads(records[0].message.removeprefix('Market diagnostic: '))
     assert reason in fact['reasons']
-    assert fact['age_seconds'] == age and fact['freshness_limit_seconds'] == 60
+    assert fact['age_seconds'] == age and fact['freshness_limit_seconds'] == 90
     assert fact['expected_uid'] == 'uid' and fact['received_uid'] == uid
     assert fact['observed_utc'] == NOW.isoformat()
     assert SECRET not in caplog.text
     assert len(client.instruments.method_calls) == len(client.market_data.method_calls) == 1
 
 
-@pytest.mark.parametrize('age', [0, 60])
+@pytest.mark.parametrize('age', [0, 60, 61, 90])
 def test_fresh_book_does_not_log_and_keeps_quote(books, caplog, age):
-    """Both original inclusive boundaries remain accepted and quiet."""
+    """The old boundary and newly permitted ages remain accepted and quiet."""
     client, data = books
     client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=age)
     assert data.get_security_quote('uid').estimate_per_piece().amount == 1.5
@@ -202,7 +202,7 @@ def test_live_book_diagnostic_survives_safe_report_without_leaking(books, capsys
     client, data = books
     book = client.market_data.get_order_book.return_value
     book.instrument_uid = {'credentials': SECRET}
-    book.orderbook_ts = NOW - timedelta(seconds=61)
+    book.orderbook_ts = NOW - timedelta(seconds=91)
     book.credentials = SECRET
     item = SimpleNamespace(nodeid='e2e/test_sandbox.py::test_drift[INDEX-PAIR]')
     live_hooks.pytest_runtest_call(item)

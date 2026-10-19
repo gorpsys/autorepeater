@@ -159,7 +159,9 @@ native_price/settlement_currency и rub_price; mark выбирает rub_price,
 и назначению, читает один native midpoint на UID за проход. Начало прохода
 очищает локальные книги и проверяет свежесть FX. Получение native-книг
 отделено от SDK-порта стратегий через SecurityData; TInvestSecurityData
-проверяет UID, единицы и возраст рыночного стакана до 60 секунд.
+проверяет UID, единицы и возраст рыночного стакана до 90 секунд включительно.
+FX-котировки, preflight исполнения и диагностика используют тот же общий
+ORDER_BOOK_MAX_AGE_SECONDS; guards будущего/неизвестного времени сохраняются.
 Движок вызывает begin_snapshot перед каждым пересчётом. SDK-адаптер лениво
 читает полные Shares/Etfs с INSTRUMENT_STATUS_ALL один раз за проход,
 использует порядок FindInstrument и полный api_trade_available_flag,

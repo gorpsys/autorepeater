@@ -103,7 +103,7 @@ def test_shared_uid_composite_uses_one_book_and_one_fx_before_any_effect(debug):
 
 def test_stale_fx_fails_before_any_account_or_effect():
     """A prior RUB broker mark cannot authorize a pass with expired foreign cash rates."""
-    value, _ = valuation(clock=lambda: NOW + timedelta(seconds=61))
+    value, _ = valuation(clock=lambda: NOW + timedelta(seconds=91))
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     port = create_autospec(ExecutionData, instance=True, spec_set=True)
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)

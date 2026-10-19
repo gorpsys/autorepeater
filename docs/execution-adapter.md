@@ -284,7 +284,7 @@ read-only loading, fixing each midpoint once before the financial tree is built.
 Debug constructs the same native funding plan without submission.
 
 `TInvestSecurityData` reads matching metadata and depth-one security books,
-checks positive two-sided levels and timezone-aware market time up to 60 seconds
+checks positive two-sided levels and timezone-aware market time up to 90 seconds
 old, and returns native `SecurityQuote` units. Security and direct FX books are
 independent reads. Share/ETF midpoints are money per piece; bond clean percent
 quotes require matching positive native nominal and explicit native ACI, added
@@ -293,7 +293,7 @@ Neither GetOrderPrice, operation history nor an order-price parameter is used.
 
 On a security book rejection, a bounded warning supplements the original
 ValueError: expected/received UID, market timestamp, observation time in UTC,
-age in seconds and the unchanged 60-second limit. Separate categories identify
+age in seconds and the shared 90-second limit. Separate categories identify
 UID mismatch, missing/invalid/naive timestamps, future data and stale data;
 several applicable categories may coexist. Invalid timestamps are never
 replaced with observation time. Missing metadata or an invalid API permission
@@ -307,7 +307,7 @@ Book rejection facts also retain ticker/class/currency from the already loaded
 instrument, or an explicit missing label. Observational monotonic and UTC clocks
 record request start, response and check, request duration and response-to-check
 delay. Receipt age uses observational UTC; check age retains the original
-validation clock. Neither clock replaces market time or changes the 60s guard.
+validation clock. Neither clock replaces market time or changes the 90s guard.
 E2E aggregates named metadata/catalog/book operations and separates RPC attempts
 from quota waits; nested stage totals are inclusive. Successful payloads are not
 streamed and no extra lookups, retries or clock calls for validation are added.

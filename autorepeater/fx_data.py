@@ -8,6 +8,8 @@ from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.strategy_plan import exact_product, exact_sum, finite_decimal
 
+ORDER_BOOK_MAX_AGE_SECONDS = 90
+
 
 def market_timestamp(value: datetime) -> None:
     """A receipt clock or last-trade time cannot replace the market-data timestamp."""
@@ -140,11 +142,11 @@ class FxQuote:
                           self.pair.nominal, self.pair.lot_size, self.bid, self.ask)
 
     def validate_fresh(self, now: datetime) -> None:
-        """Inclusive sixty-second market age; no stale or future-data fallback."""
+        """Inclusive ninety-second market age; no stale or future-data fallback."""
         market_timestamp(now)
         if now < self.received_time:
             raise ValueError('FX receipt timestamp is in the future')
-        if now - self.market_time > timedelta(seconds=60):
+        if now - self.market_time > timedelta(seconds=ORDER_BOOK_MAX_AGE_SECONDS):
             raise ValueError('stale FX order book')
 
     def can_trade(self, side: str, lots: int, rules: TradeRules,

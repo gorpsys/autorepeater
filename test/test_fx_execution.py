@@ -553,7 +553,7 @@ def test_second_buy_remains_bounded_by_actual_cash_and_own_money(cash, cap):
 
 
 def test_quote_expiring_during_caps_read_is_refreshed_before_first_effect():
-    """Sixty seconds is measured at submission, not merely at receipt of the book."""
+    """Ninety seconds is measured at submission, not merely at receipt of the book."""
     broker, value, plan, data, executor, fx, _ = setup_plan()
     clock = [NOW]
     broker.clock = lambda: clock[0]
@@ -562,7 +562,7 @@ def test_quote_expiring_during_caps_read_is_refreshed_before_first_effect():
         old, market_time=clock[0], received_time=clock[0])
 
     def delayed_caps(_account, pair):
-        clock[0] = NOW + timedelta(seconds=61)
+        clock[0] = NOW + timedelta(seconds=91)
         return rules(pair.uid)[pair.uid]
 
     fx.get_trade_rules.side_effect = delayed_caps

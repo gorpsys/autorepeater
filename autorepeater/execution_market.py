@@ -15,7 +15,7 @@ from autorepeater.execution import (
 )
 from autorepeater.execution_data import ExecutionData
 from autorepeater.fx import FxSnapshot, select_direct_pair, validate_pair_uids
-from autorepeater.fx_data import FxData
+from autorepeater.fx_data import ORDER_BOOK_MAX_AGE_SECONDS, FxData
 from autorepeater.fx_funding import FundingInputs, build_funding_plan
 from autorepeater.logging_config import logger
 from autorepeater.order_plan import (
@@ -192,8 +192,8 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
         self.fx_policy = self.inputs.fx_policy
 
     def _preflight(self):
-        if any(self.market.clock() - quote.market_time > timedelta(seconds=60)
-               for quote in self.fx.quotes.values()):
+        if any(self.market.clock() - quote.market_time > timedelta(
+                seconds=ORDER_BOOK_MAX_AGE_SECONDS) for quote in self.fx.quotes.values()):
             self._market_refresh()
         self.fx.validate_fresh(self.market.clock())
         return self.market._preflight(  # pylint: disable=protected-access
