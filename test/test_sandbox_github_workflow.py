@@ -80,7 +80,8 @@ def test_evidence_is_verified_on_a_separate_readonly_runner() -> None:
     assert 'actions/download-artifact@v4' in text
     assert 'ref: ${{ needs.prepare.outputs.trusted_sha }}' in text
     assert '-m scripts.sandbox_github evidence' in text
-    assert '--evidence-format retry-v3' in text
+    assert '--evidence-format "$E2E_EVIDENCE_PROTOCOL"' in text
+    assert 'E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}' in text
     assert '--collection sandbox-results/collection.json' in text
     assert '--sha "$TESTED_SHA"' in text
     assert 'TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
@@ -210,11 +211,26 @@ def test_inline_publication_predicate_is_fail_closed(
     assert result is expected
 
 
-def test_full_collection_precedes_any_live_secret_and_selects_v3() -> None:
+def test_full_collection_precedes_live_secret_and_uses_trusted_protocol_output() -> None:
     """The workflow owns the evidence version and fixes the collection's SHA."""
     text = job('live')
-    assert 'E2E_EVIDENCE_PROTOCOL: "retry-v3"' in text
+    assert 'E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}' in text
     assert 'E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
     collector = 'scripts.sandbox_collection --sha "$E2E_TESTED_SHA"'
     assert collector in text
     assert text.index(collector) < text.index('SANDBOX_TOKEN:')
+
+
+def test_dispatch_protocol_default_and_selection_are_owned_by_prepare() -> None:
+    """The same validated prepare output binds producer and independent verifier."""
+    text = WORKFLOW.read_text(encoding='utf-8')
+    inputs = text.split('  workflow_dispatch:', 1)[1].split('  push:', 1)[0]
+    assert 'evidence_protocol:' in inputs
+    protocol_input = inputs.split('      evidence_protocol:', 1)[1]
+    assert 'required: false' in protocol_input
+    assert 'default: retry-v3' in inputs
+    assert 'type: choice' in inputs
+    assert '- retry-v2' in inputs and '- retry-v3' in inputs
+    assert '- retry-v1' not in inputs
+    assert 'evidence_protocol: ${{ steps.target.outputs.evidence_protocol }}' in job('prepare')
+    assert 'inputs.evidence_protocol' not in job('live') + job('verify')

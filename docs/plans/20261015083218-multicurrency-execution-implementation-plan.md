@@ -1464,10 +1464,11 @@ RUB/CNY price decline и FX-only decline, лоты 1/10 и реальный де
 проверяются на границе submit. Partial-fill, permissions, money/lot caps,
 свежесть и денежные assertions E2E не ослабляются.
 
-Отдельный activation PR #43 (`28b0967`, 5.2.3) подготовлен поверх master,
-но не активирован этой реализацией. Последующий controlled CNY probe
-сравнит одну заявку на два лота с двумя заявками по одному лоту на двух
-временных счетах. Денежный oracle 1e-9 и прежние 25 сценариев сохраняются;
+Отдельный activation PR #43 (`28b0967`, 5.2.3) после 17/17 E2E и cleanup
+вмержен родителем в master `b4044a089eeef99fde95ecf81cadc30aa557d063`.
+Он принимает явный trusted input evidence_protocol=retry-v3; default и push v2.
+Controlled CNY probe сравнивает одну заявку на два лота с двумя по одному
+на двух временных счетах. Денежный oracle 1e-9 и прежние 25 сценариев сохраняются;
 до полного GitHub-прогона нового SHA это не подтверждённая live-приёмка.
 
 Controlled probe реализован отдельным 26-м сценарием без изменения прежних
@@ -1482,6 +1483,14 @@ inconclusive. Результат модели не является финанс
 счетов обязательны. Live нового полного SHA выполняет parent через GitHub;
 работник его не запускает. Exact-SHA offline collection должна подтвердить
 все прежние 25 node IDs и ровно один дополнительный probe.
+
+Обычным merge в PR40 интегрирован actual master b4044a0 после отдельного
+verified probe commit `4bc1b1f` (26 unique nodes). Версия остаётся 5.3.0,
+candidate default и будущий master push сохраняют v3 для guard 90s,
+а явный v2 остаётся доступен. Оба jobs используют один allowlisted output
+trusted prepare вместо разных hardcoded значений. Не менять текущий master:
+для приёмки PR40 parent явно выбирает evidence_protocol=retry-v3 с ref master.
+Этот merge не меняет финансовый P1 fix `f8d9d58`, probe или прежние assertions.
 
 Новый live E2E и production dry-run требуют отдельного согласования.
 Не переносить автоматом разрешение многократных запусков диагностического PR #37

@@ -167,10 +167,15 @@ def test_evidence_cli_reports_completion_only_after_validation(tmp_path: Path, m
     assert not output.exists()
 
 
-def test_prepare_dispatch_checks_both_initiator_and_rerunner(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize('protocol', [None, 'retry-v2', 'retry-v3'])
+def test_prepare_dispatch_checks_both_initiator_and_rerunner(
+        tmp_path: Path, monkeypatch, protocol) -> None:
     """Reruns cannot bypass either identity check and selection is fixed once."""
     event = tmp_path / 'event.json'
-    event.write_text(json.dumps({'inputs': {'pr_number': '27'}}), encoding='utf-8')
+    inputs = {'pr_number': '27'}
+    if protocol is not None:
+        inputs['evidence_protocol'] = protocol
+    event.write_text(json.dumps({'inputs': inputs}), encoding='utf-8')
     output = tmp_path / 'outputs'
     for key, value in {'GITHUB_EVENT_PATH': str(event), 'GITHUB_EVENT_NAME': 'workflow_dispatch',
                        'GITHUB_REPOSITORY': REPO, 'GITHUB_ACTOR': 'owner',
@@ -185,7 +190,40 @@ def test_prepare_dispatch_checks_both_initiator_and_rerunner(tmp_path: Path, mon
     assert [call.args[1] for call in reader.call_args_list] == [
         'collaborators/owner/permission', 'collaborators/rerunner/permission', 'pulls/27']
     assert output.read_text(encoding='utf-8') == (
-        f'head_sha={SHA}\npr_number=27\ntrusted_sha={"b" * 40}\n')
+        f'head_sha={SHA}\npr_number=27\ntrusted_sha={"b" * 40}\n'
+        f'evidence_protocol={protocol or "retry-v3"}\n')
+
+
+@pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3'])
+def test_dispatch_protocol_is_explicit_trusted_input(protocol):
+    """Only the initiator input chooses the format; artifact fields cannot select it."""
+    assert subject.select_protocol(
+        {'inputs': {'evidence_protocol': protocol}}, 'workflow_dispatch') == protocol
+    assert subject.select_protocol(
+        {'inputs': {'evidence_protocol': protocol}}, 'push') == 'retry-v3'
+    assert subject.select_protocol({'inputs': {}}, 'workflow_dispatch') == 'retry-v3'
+
+
+@pytest.mark.parametrize('protocol', [
+    'retry-v1', '', None, False, [], {}, 'retry-v4', 'retry-v3\ncomplete=true',
+])
+def test_unknown_dispatch_protocol_stops_before_any_api(tmp_path, monkeypatch, protocol):
+    """An unknown format cannot publish outputs or reach the broker job."""
+    event = tmp_path / 'event.json'
+    event.write_text(json.dumps({'inputs': {'evidence_protocol': protocol}}))
+    monkeypatch.setenv('GITHUB_EVENT_PATH', str(event))
+    monkeypatch.setenv('GITHUB_EVENT_NAME', 'workflow_dispatch')
+    monkeypatch.setenv('GITHUB_REPOSITORY', REPO)
+    monkeypatch.setenv('GH_TOKEN', 'synthetic')
+    output = tmp_path / 'outputs'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    reader = create_autospec(subject.GitHubClient.read, spec_set=True)
+    monkeypatch.setattr(subject.GitHubClient, 'read', reader)
+    with pytest.raises(subject.GitHubFailure, match='protocol'):
+        subject.select_protocol(json.loads(event.read_text()), 'workflow_dispatch')
+    assert subject.main(['prepare']) == 1
+    assert not output.exists()
+    reader.assert_not_called()
 
 
 @pytest.mark.parametrize('scenario_count,session_count', [

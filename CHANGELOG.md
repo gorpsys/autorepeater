@@ -7,10 +7,10 @@
 
 ## Не выпущено
 
-## [5.3.0](https://github.com/gorpsys/autorepeater/compare/v5.2.2...v5.3.0) - 2026-10-16
+## [5.3.0](https://github.com/gorpsys/autorepeater/compare/v5.2.3...v5.3.0) - 2026-10-16
 
-- Подготовлен согласованный выбор `retry-v3` в candidate workflow после
-  интеграции 5.2.2; trusted dispatcher master остаётся на v2 до отдельной активации.
+- Интегрирован 5.2.3 с единым trusted выбором протокола producer/verifier;
+  candidate 5.3.0 сохраняет default `retry-v3` для приложения с guard 90s.
 - Добавлен RUB/CNY sandbox-набор штатного приложения; INDEX распознаёт облигации.
 - Полная sandbox-коллекция дополнена controlled CNY probe двух временных
   счетов: 2 лота против 1+1, native balances, raw суммы/комиссии и single-fee
@@ -52,6 +52,13 @@
 - Недоступная служебная FX-запись с нулевыми nominal и lot не блокирует каталог;
   пропуск явно диагностируется. Валидные недоступные пары сохраняются для оценки,
   остальные ошибки метаданных и отсутствие нужного маршрута блокируют проход.
+
+## [5.2.3](https://github.com/gorpsys/autorepeater/compare/v5.2.2...v5.2.3) - 2026-10-19
+
+- Ручной Sandbox E2E получает явный trusted выбор `retry-v2`/`retry-v3`;
+  producer и независимый verifier используют одно проверенное значение.
+- Default ручного запуска и автоматический master push сохраняют v2;
+  неизвестный формат отклоняется до live. Финансовые правила не изменены.
 
 ## [5.2.2](https://github.com/gorpsys/autorepeater/compare/v5.2.1...v5.2.2) - 2026-10-19
 

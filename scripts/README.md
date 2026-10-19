@@ -318,17 +318,24 @@ Auth запрещает любые повторы. Цикл или непроч�
 Collection/teardown/cleanup/отмена/deadline
 и ошибки протокола сохраняют прежние стоп-условия.
 
-Поддержка v3 вместе с auth-fix выпущена в master `1b015c6` (5.2.2, PR #42),
-но его trusted workflow остаётся на `retry-v2`. В candidate workflow PR #40
-подготовлены `E2E_EVIDENCE_PROTOCOL=retry-v3` и trusted команда
-`--evidence-format retry-v3 --collection sandbox-results/collection.json
---sha <tested SHA>`. Это не активирует v3 при dispatch с ref master:
-оба выбора и verifier берутся из trusted master, а не из checkout PR.
-Для активации до мержа PR #40 нужен отдельный согласованный PR в master,
-меняющий оба выбора в `.github/workflows/sandbox-e2e.yml`; обязательные checks
-и merge выполняются без обхода защиты. Затем отдельно разрешённый dispatch
-с ref master проверяет точный новый SHA PR #40 по v3. До этого PR #40
-при выборе master продолжает производить совместимый v2 evidence.
+Поддержка v3 и auth-fix выпущены в master `1b015c6` (5.2.2, PR #42).
+Activation PR #43 после полной приёмки вмержен в `b4044a0` (5.2.3).
+Trusted master принимает ручной input `evidence_protocol`: `retry-v2` по умолчанию,
+`retry-v3` по явному выбору инициатора. Его master push остаётся v2.
+Candidate 5.3.0 сохраняет default v3 для приложения с guard 90s;
+после его merge default dispatch и master push будут v3, явный v2 доступен.
+Trusted prepare проверяет allowlist
+до live и передаёт единый output в `E2E_EVIDENCE_PROTOCOL` producer и
+`--evidence-format` независимого verifier с прежними `--collection` и `--sha`.
+Неизвестные форматы (включая legacy retry-v1) в dispatch отклоняются.
+Проверка stale v3 остаётся >90s. Полный запуск с ref master,
+pr_number=40 и evidence_protocol=retry-v3 использует v3 для точного SHA PR.
+Выбор не берётся из PR checkout или его артефактов; изменение только workflow
+PR #40 не активирует trusted master.
+
+```bash
+gh workflow run sandbox-e2e.yml --repo gorpsys/autorepeater --ref master -f pr_number=40 -f evidence_protocol=retry-v3
+```
 V1/v2 сохраняют прежние поля и поведение. Новые app-модули и зависимости
 для подготовительного выпуска не нужны; брокерские запросы классификатор
 не выполняет. Полная live-приёмка каждого будущего SHA по-прежнему обязательна.

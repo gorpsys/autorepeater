@@ -17,7 +17,12 @@ cleanup; локальный запуск при общей песочнице н
 Дамп/JUnit содержат только безопасные проверенные факты.
 История bootstrap PR #28 сохранена в [истории версий](../history/versioning.md#bootstrap-sandbox-e2e-2026-10-08).
 Ручной запуск через Actions > Sandbox live E2E > Run workflow
-(ref master, pr_number с номером открытого PR).
+(ref master, pr_number с номером открытого PR). В candidate 5.3.0 поле
+evidence_protocol по умолчанию retry-v3; retry-v2 доступен явно.
+Trusted prepare проверяет allowlist до live и фиксирует единый output для
+producer и независимого verifier. Неизвестный выбор, включая retry-v1,
+отклоняется; совместимость legacy v1 в Python helpers сохраняется.
+После merge 5.3.0 master push выбирает v3 независимо от полей payload.
 Обычный ручной запуск и автоматический master push одобрения не требуют.
 Live hook до fixture пишет flush-прогресс: attempt N [index/selected_count]
 и node ID. Повторы считают только выбранный subset; прогресс не evidence.
@@ -41,7 +46,7 @@ Dirty source, deselection, пустая коллекция и collection errors 
 попытки совпадает с collection и SHA, зафиксированным trusted workflow.
 Skipped/xfail/xpass, лишние/повторные/недостающие cases, ошибки teardown,
 collection или cleanup не дают success. Passed count — только диагностика.
-Версию выбирает инициатор: workflow задаёт E2E_EVIDENCE_PROTOCOL=retry-v2
+В протоколе v2 инициатор задаёт E2E_EVIDENCE_PROTOCOL=retry-v2
 и E2E_TESTED_SHA, trusted verifier — --evidence-format retry-v2 с --collection
 и --sha. Отсутствие выбора сохраняет retry-v1 и его фиксированный набор 17
 сценариев; в v1 report нет sha и новых полей. Это позволяет проверить сам
@@ -50,16 +55,13 @@ collection или cleanup не дают success. Passed count — только �
 Подготовленный `retry-v3` сохраняет независимую полную коллекцию и точный SHA.
 Он выбирается только инициатором через E2E_EVIDENCE_PROTOCOL=retry-v3 и trusted
 verifier --evidence-format retry-v3, не по полям недоверенного артефакта.
-Поддержка v3 и fail-closed auth-разбор выпущены в master 1b015c6 (5.2.2, PR #42).
-Trusted dispatcher этого master всё ещё выбирает v2. Candidate workflow PR #40
-подготовлен с v3 в live env и verify command; dispatch с ref master продолжает
-брать оба выбора с master, поэтому изменение только PR #40 не активирует v3.
-Для активации до мержа PR #40 нужен отдельно согласованный PR в master:
-изменить оба выбора формата в .github/workflows/sandbox-e2e.yml, пройти
-обязательные проверки точного SHA и merge без обхода защиты. Только после
-этого явно разрешённый запуск с ref master использует v3 для PR #40.
-До активации producer PR #40 сохраняет совместимость с v2. Не проверять
-evidence кодом PR. Старый master 0492181 не поддерживает v3.
+Поддержка v3 и auth-fix выпущены в master 1b015c6 (5.2.2, PR #42).
+Activation PR #43 проверен и вмержен в b4044a0 (5.2.3): trusted master
+принимает evidence_protocol=retry-v3 для полного запуска PR #40 с ref master.
+Его default и master push остаются v2. Candidate 5.3.0 сохраняет future default
+v3 для guard 90s и использует тот же validated output в producer и verifier.
+Candidate workflow PR сам по себе не переключает trusted dispatcher master.
+Старый master 0492181 отвергает v3. Не проверять evidence кодом PR.
 V3 повторяет только eligible failed cases даже при постоянных ошибках других
 сценариев. Их результаты сохраняются в итоговом JUnit и запрещают общий success;
 пройденные и постоянно упавшие сценарии не запускаются повторно.
