@@ -80,6 +80,26 @@ def required_fx_lots(purchase: D, reserve: D, available: D, lot: int, *,
         rounding=ROUND_CEILING))
 
 
+def money_deltas(before: NativeState, after: NativeState,
+                 trades: list[TradeFact]) -> dict[str, dict[str, D]]:
+    """Observe the oracle's native deltas without rounding or changing its assertions."""
+    expected = dict(before.money)
+    for trade in trades:
+        sign = D(1) if trade.side == 'BUY' else D(-1)
+        if trade.base_currency is not None:
+            expected[trade.base_currency] = expected.get(trade.base_currency, D(0)) + sign * D(
+                trade.lots * trade.lot_size)
+        expected[trade.currency] = (expected.get(trade.currency, D(0))
+                                    - sign * trade.total - trade.commission)
+    return {code: {
+        'before': before.money.get(code, D(0)), 'expected': expected.get(code, D(0)),
+        'actual': after.money.get(code, D(0)),
+        'expected_delta': expected.get(code, D(0)) - before.money.get(code, D(0)),
+        'actual_delta': after.money.get(code, D(0)) - before.money.get(code, D(0)),
+        'residual': after.money.get(code, D(0)) - expected.get(code, D(0)),
+    } for code in sorted(set(before.money) | set(expected) | set(after.money))}
+
+
 def reconcile(before: NativeState, after: NativeState, trades: list[TradeFact]) -> None:
     """Sandbox conservation at nano precision; no slippage comparison with estimates."""
     quantities, cash = dict(before.quantities), dict(before.money)

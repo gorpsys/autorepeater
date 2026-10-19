@@ -14,7 +14,7 @@ from autorepeater import reporting
 from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.fx_data import FxPair, FxQuote
-from autorepeater.fx_diagnostics import requested_pair, scalar_fact, sdk_metadata_facts
+from autorepeater.fx_diagnostics import amount_fact, requested_pair, scalar_fact, sdk_metadata_facts
 from autorepeater.market_diagnostics import (
     emit_market_fact, instrument_facts, measure_stage, safe_symbol,
 )
@@ -28,7 +28,7 @@ from autorepeater.strategy_contract import PreparedStrategy
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType
 from scripts.sandbox_lifecycle import SandboxFailure, safe_call
 from scripts.sandbox_multicurrency import (
-    NativeState, TradeFact, cash_value, fees_by_currency, native_midpoint,
+    NativeState, TradeFact, cash_value, fees_by_currency, money_deltas, native_midpoint,
     reconcile, require, required_fx_lots,
 )
 from scripts.sandbox_support import FILL, SandboxSession
@@ -253,6 +253,16 @@ def _trade_facts(session: SandboxSession, dst: str, instruments: CurrencyCatalog
         trades.append(TradeFact(item.uid, side, broker.lots_executed, item.lot, total.currency,
                                 total.amount, fee.amount,
                                 'cny' if item.uid == instruments.currency.uid else None))
+        session.records.append({
+            'event': 'currency_order_money', 'account_id': dst,
+            'request_id': response['request_id'], 'order_id': broker.order_id,
+            'status': broker.execution_report_status.name,
+            'requested': broker.lots_requested, 'executed': broker.lots_executed,
+            'trade': asdict(trades[-1]),
+            'total_order_amount': amount_fact(broker.total_order_amount),
+            'executed_commission': amount_fact(broker.executed_commission),
+            'executed_order_price': amount_fact(broker.executed_order_price),
+        })
     return trades
 
 
@@ -297,8 +307,15 @@ def _settled_money(session: SandboxSession, dst: str, before: NativeState,
                 trade.lots * trade.lot_size) * (1 if trade.side == 'BUY' else -1)
     session.wait_positions(dst, {uid: value for uid, value in expected.items() if value})
     deadline = session.monotonic() + 30
+    poll = 0
     while True:
         after = native_state(session, dst)
+        poll += 1
+        session.records.append({
+            'event': 'currency_settlement_poll', 'account_id': dst, 'poll': poll,
+            'observed_utc': datetime.now(timezone.utc).isoformat(),
+            'money': money_deltas(before, after, trades), 'blocked': dict(after.blocked),
+        })
         try:
             reconcile(before, after, trades)
             break

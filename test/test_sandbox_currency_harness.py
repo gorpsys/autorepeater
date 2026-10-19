@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from dataclasses import replace
 from decimal import Decimal as D
 import inspect
+import json
 import logging
 from types import SimpleNamespace
 from unittest.mock import create_autospec, patch
@@ -266,7 +267,6 @@ def test_setup_uses_index_preference_for_all_security_queries(offline_live):
 
 def test_currency_dump_keeps_native_money_and_commissions(offline_live, tmp_path, monkeypatch):
     """A successful monetary check must also survive the real finalizer's JSON boundary."""
-    import json  # pylint: disable=import-outside-toplevel
     live, _ = offline_live
     scenarios.test_existing_cny_before_lot_rounding(live, tmp_path, monkeypatch, 'partial')
     path = tmp_path / 'native-evidence.json'
@@ -277,6 +277,93 @@ def test_currency_dump_keeps_native_money_and_commissions(offline_live, tmp_path
     assert any(event['event'] == 'currency_app_pass' and 'cny' in event['fees']
                for event in result['events'])
     assert all('error' not in account for account in result['accounts'].values())
+
+
+@pytest.mark.parametrize('snapshot_fails', [False, True])
+def test_failed_money_check_keeps_order_fields_and_poll_deltas(
+        offline_live, tmp_path, monkeypatch, snapshot_fails):
+    """One micro-CNY must still fail while retaining the already-read monetary evidence."""
+    live, broker = offline_live
+    session = live[0]
+    elapsed = [0]
+
+    def sleep(seconds):
+        elapsed[0] += seconds
+
+    def order_state(**kwargs):
+        state = broker.orders[kwargs['order_id']]
+        state = replace(state, executed_order_price=money(
+            state.total_order_amount.currency, D('1005.699000001')))
+        if state.instrument_uid == 'C':
+            fee = state.executed_commission
+            return replace(state, executed_commission=money(
+                'cny', D(fee.units) + D(fee.nano) / 10**9 + D('.000001')),
+                executed_order_price=money('cny', D('1005.699000001')))
+        return state
+
+    monkeypatch.setattr(session, 'monotonic', lambda: elapsed[0])
+    monkeypatch.setattr(session, 'sleep', sleep)
+    broker.client.orders.get_order_state.side_effect = order_state
+    with pytest.raises(SandboxFailure, match=(
+            '^native money disagrees with order totals and single commissions$')):
+        scenarios.test_existing_cny_before_lot_rounding(live, tmp_path, monkeypatch, 'partial')
+    assert elapsed == [30]
+    assert broker.client.orders.post_order.call_count == 3
+    assert broker.client.orders.get_order_state.call_count == 3
+    broker.client.orders.get_order_price.assert_not_called()
+    broker.client.operations.get_operations.assert_not_called()
+    if snapshot_fails:
+        monkeypatch.setattr(session, 'diagnostic', create_autospec(
+            session.diagnostic, spec_set=True, side_effect=RuntimeError('secret SDK payload')))
+    path = tmp_path / 'failed-money.json'
+    write_failure_dump(session, path)
+    result = json.loads(path.read_text())
+    assert set(result) == {'time', 'scenario', 'configs', 'quotes', 'events', 'accounts'}
+    assert 'secret SDK payload' not in path.read_text()
+    events = result['events']
+    orders = [event for event in events if event['event'] == 'currency_order_money']
+    assert len(orders) == 2
+    for event in orders:
+        _assert_order_money(event, broker, order_state(order_id=event['order_id']))
+    assert {event['trade']['base_currency'] for event in orders} == {None, 'cny'}
+    _assert_settlement_polls(events, orders)
+    assert not any(event['event'] == 'currency_app_pass' for event in events)
+    assert broker.client.orders.get_order_state.call_count == 3
+
+
+def _assert_order_money(event, broker, state):
+    """Whitelist fields survive JSON with raw units/nano and their exact normalized amount."""
+    assert event['account_id'] in broker.accounts
+    assert event['request_id']
+    assert event['status'] == 'EXECUTION_REPORT_STATUS_FILL'
+    assert event['requested'] == event['executed'] == state.lots_executed
+    assert event['trade']['uid'] == state.instrument_uid
+    assert event['trade']['lot_size'] == broker.metadata[state.instrument_uid].lot
+    for field in ('total_order_amount', 'executed_commission', 'executed_order_price'):
+        value = getattr(state, field)
+        fact = event[field]
+        assert fact['currency'] == {'type': 'str', 'value': value.currency}
+        assert fact['units'] == {'type': 'int', 'value': str(value.units)}
+        assert fact['nano'] == {'type': 'int', 'value': str(value.nano)}
+    assert D(event['trade']['total']) == D(event['total_order_amount']['normalized']['value'])
+    assert D(event['trade']['commission']) == D(event['executed_commission']['normalized']['value'])
+
+
+def _assert_settlement_polls(events, orders):
+    """The original bounded polling preserves every observation before the monetary failure."""
+    polls = [event for event in events if event['event'] == 'currency_settlement_poll']
+    assert [event['poll'] for event in polls] == list(range(1, 17))
+    for event in polls:
+        assert event['account_id'] == orders[0]['account_id']
+        assert datetime.fromisoformat(event['observed_utc']).tzinfo is not None
+        assert all(D(value) == 0 for value in event['blocked'].values())
+        cny = {key: D(value) for key, value in event['money']['cny'].items()}
+        assert cny['residual'] == D('.000001')
+        assert cny['actual'] - cny['expected'] == cny['residual']
+        assert cny['expected_delta'] == cny['expected'] - cny['before']
+        assert cny['actual_delta'] == cny['actual'] - cny['before']
+        assert D(event['money']['rub']['residual']) == 0
+    assert events.index(orders[-1]) < events.index(polls[0])
 
 
 @pytest.mark.parametrize('scenario,args', [

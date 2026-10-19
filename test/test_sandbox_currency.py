@@ -84,6 +84,28 @@ def test_sell_currency_only_changes_native_money():
         subject.TradeFact('fx', 'SELL', 1, 1000, 'rub', D(12000), D(10), 'cny')])
 
 
+@pytest.mark.parametrize('side,original,expected', [
+    ('BUY', {'rub': D(30000)}, {'rub': D(17990), 'cny': D(2)}),
+    ('SELL', {'cny': D(2000)}, {'rub': D(11990), 'cny': D(1996)}),
+])
+@pytest.mark.parametrize('residual', [D('.000001'), D('-.000001')])
+def test_diagnostic_money_deltas_preserve_exact_native_residual(side, original, expected, residual):
+    """Diagnostic BUY/SELL arithmetic includes FX units, ACI totals and one fee per fill."""
+    trades = [subject.TradeFact('fx', side, 1, 1000, 'rub', D(12000), D(10), 'cny'),
+              subject.TradeFact('bond', side, 1, 1, 'cny', D(997), D(1), None)]
+    before = subject.NativeState({}, original, {})
+    actual = {**expected, 'cny': expected['cny'] + residual}
+    after = subject.NativeState({}, actual, {})
+    facts = subject.money_deltas(before, after, trades)
+    assert facts == {code: {
+        'before': original.get(code, D(0)), 'expected': expected[code], 'actual': actual[code],
+        'expected_delta': expected[code] - original.get(code, D(0)),
+        'actual_delta': actual[code] - original.get(code, D(0)),
+        'residual': actual[code] - expected[code],
+    } for code in ('rub', 'cny')}
+    assert before.money == original and after.money == actual
+
+
 @pytest.mark.parametrize('available,expected', [(D(0), 2), (D(500), 1), (D(1050), 0)])
 def test_existing_currency_subtracted_before_rounding(available, expected):
     """Reserve is one leaf allocation, not a second fee per order or FX lot."""

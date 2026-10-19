@@ -101,5 +101,14 @@ quota waits. Вложенные интервалы включают дочерн
 время приложения. Новых RPC, изменений retry/clock guards и оптимизаций нет.
 По решению пользователя от 19.10.2026 общий лимит возраста стаканов бумаг и FX
 составляет 90 секунд включительно; исторические evidence с лимитом 60s сохраняются.
+Валютный harness до сверки денег сохраняет в events currency_order_money:
+проверенные ID/сторону/лоты, total_order_amount, executed_commission и
+executed_order_price из уже прочитанного GetOrderState, включая исходные
+currency/units/nano и нормализованные Decimal. Каждый существующий settlement
+poll до assertion сохраняет currency_settlement_poll с UTC, номером наблюдения,
+блокировками и native before/expected/actual, expected_delta/actual_delta/residual
+по валютам; residual = actual - expected. Даже при отказе сверки или финального
+снимка счёта события остаются в дампе. Новых RPC, округления, изменений денежных
+assertions/допусков, повторов или верхнеуровневых полей evidence нет.
 Перекрывающиеся облачные вызовы/активные заявки проверить перед промышленным
 частым таймером; истории/кеша/внешнего хранилища этот проект не добавляет.
