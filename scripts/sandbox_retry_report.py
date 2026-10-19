@@ -81,19 +81,20 @@ def stale_book_facts(error: BaseException | None) -> dict[str, object] | None:
 
 
 def auth_failure(error: BaseException | None) -> bool:
-    """Auth forbids all retries, including when another case has a transient error."""
+    """Auth or incomplete bounded inspection forbids retries of every case."""
     visited: set[int] = set()
     while error is not None and id(error) not in visited and len(visited) < 8:
         visited.add(id(error))
         if isinstance(error, RequestError) and error.code in (
                 StatusCode.UNAUTHENTICATED, StatusCode.PERMISSION_DENIED):
             return True
-        if isinstance(error, SandboxFailure) and any(
+        # A full stored buffer cannot prove that no auth failure was truncated.
+        if isinstance(error, SandboxFailure) and (len(error.api_facts) >= 8 or any(
                 fact.get('grpc_status') in ('UNAUTHENTICATED', 'PERMISSION_DENIED')
-                for fact in error.api_facts):
+                for fact in error.api_facts[:8])):
             return True
         error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
-    return False
+    return error is not None
 
 
 def stored_transport(facts: tuple[dict[str, object], ...]) -> tuple[tuple[str, ...], str | None]:
@@ -126,7 +127,8 @@ def transport_facts(error: BaseException | None) -> tuple[tuple[str, ...], str |
                 StatusCode.DEADLINE_EXCEEDED, StatusCode.UNAVAILABLE) else None
         if isinstance(error, SandboxFailure) and error.api_facts:
             suffix, status_name = stored_transport(error.api_facts)
-            return (*chain, *suffix), status_name
+            combined = (*chain, *suffix)
+            return combined[:8], status_name if len(combined) <= 8 else None
         error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
     return tuple(chain), None
 

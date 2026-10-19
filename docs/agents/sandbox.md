@@ -64,7 +64,10 @@ aware market/observed timestamps и возраст строго больше 90 
 Verifier сам проверяет возраст и идентичность; ValueError по тексту и логи
 не дают retry. Классификатор не импортирует будущие валютные модули приложения.
 Future/missing/naive/invalid timestamps, UID mismatch и assertions не повторяются.
-Auth останавливает все повторы; collection/teardown/cleanup/cancellation/deadline
+Auth останавливает все повторы. Неполный auth-разбор тоже запрещает все повторы:
+цикл или остаток raw-цепочки после восьми исключений, либо восемь и более
+сохранённых SandboxFailure.api_facts (окончание цепочки не доказано).
+Collection/teardown/cleanup/cancellation/deadline
 и ошибки протокола сохраняют прежние стоп-проверки. Лимит — те же три
 дополнительных процесса с общим бюджетом и подтверждённой очисткой.
 Local -k в legacy режиме допускается, не даёт full-suite acceptance.

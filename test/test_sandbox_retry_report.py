@@ -100,6 +100,17 @@ def test_setup_wrapper_does_not_hide_unknown_or_absent_transport(facts):
     assert reporting.transport_facts(SandboxFailure('fixed', api_facts=facts))[1] is None
 
 
+@pytest.mark.parametrize('wrappers', [5, 6, 7, 8])
+def test_stored_transport_obeys_combined_chain_limit(wrappers):
+    """The setup wrapper consumes one provenance slot; truncation loses retry status."""
+    error = SandboxFailure('fixed', api_facts=[{'type': 'DataAccessError'}] * wrappers + [
+        {'type': 'RequestError', 'grpc_status': 'UNAVAILABLE'}])
+    chain, status = reporting.transport_facts(error)
+    expected = ('SandboxFailure', *('DataAccessError',) * wrappers, 'RequestError')
+    assert chain == expected[:8]
+    assert status == ('UNAVAILABLE' if wrappers <= 6 else None)
+
+
 def test_report_records_failed_session_setup_without_scenario_markers(tmp_path):
     """A cleaned empty lifecycle can safely retry all cached setup failures."""
     node = 'e2e/test_sandbox.py::test_full_balanced_imoex_oblg_gold'

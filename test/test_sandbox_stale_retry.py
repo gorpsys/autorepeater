@@ -15,7 +15,7 @@ from t_tech.invest import RequestError
 from t_tech.invest.services import MarketDataService
 
 from autorepeater.strategy_data import DataAccessError
-from scripts.sandbox_lifecycle import SandboxFailure
+from scripts.sandbox_lifecycle import SandboxFailure, list_exception_facts
 from scripts import sandbox_github, sandbox_retry, sandbox_retry_evidence as evidence
 from scripts import sandbox_retry_report as reporting
 
@@ -214,6 +214,67 @@ def test_auth_failure_stops_all_eligible_cases(tmp_path, status, stored):
     with pytest.raises(evidence.RetryFailure, match='illegal retry'):
         evidence.inspect_history(tmp_path, expected=evidence.SuiteCollection(SHA, (NODE, OTHER)),
                                  protocol='retry-v3')
+
+
+@pytest.mark.parametrize('status', [StatusCode.UNAUTHENTICATED, StatusCode.PERMISSION_DENIED])
+@pytest.mark.parametrize('stored', [False, True])
+@pytest.mark.parametrize('link', ['__cause__', '__context__'])
+@pytest.mark.parametrize('wrappers', [7, 8, 9])
+def test_auth_chain_boundary_stops_mixed_retries(tmp_path, status, stored, link, wrappers):
+    """A truncated raw or sanitized auth chain cannot authorize another live process."""
+    error = RequestError(status, 'private', {'token': 'private'})
+    for _ in range(wrappers):
+        wrapper = DataAccessError('private')
+        setattr(wrapper, link, error)
+        error = wrapper
+    if stored:
+        error = SandboxFailure('fixed', api_facts=list_exception_facts(error))
+    recorder = reporting.AttemptRecorder(tmp_path / 'report.json')
+    recorder.phase(OTHER, 'call', 'failed', error)
+    first = v3_attempt((NODE, OTHER), (NODE, OTHER))
+    first = replace(first, phases=tuple(
+        recorder.phases[0] if phase.nodeid == OTHER and phase.outcome == 'failed' else phase
+        for phase in first.phases))
+    store_v3(tmp_path, 1, first)
+    report = evidence.verify_attempt(tmp_path / 'attempts' / '01', 1, protocol='retry-v3')
+    assert next(phase for phase in report.phases if phase.nodeid == OTHER
+                and phase.outcome == 'failed').auth_failure
+    assert not evidence.retry_nodes(report, protocol='retry-v3')
+    assert 'private' not in (tmp_path / 'attempts' / '01' / 'report.json').read_text()
+    store_v3(tmp_path, 2, v3_attempt(failed=()))
+    with pytest.raises(evidence.RetryFailure, match='illegal retry'):
+        evidence.inspect_history(tmp_path, expected=evidence.SuiteCollection(SHA, (NODE, OTHER)),
+                                 protocol='retry-v3')
+
+
+@pytest.mark.parametrize('stored', [False, True])
+@pytest.mark.parametrize('count', [7, 8, 9])
+def test_auth_inspection_requires_complete_chain(stored, count):
+    """Raw termination is observable; a full stored buffer may have lost its tail."""
+    error = ValueError('private')
+    for _ in range(count - 1):
+        wrapper = DataAccessError('private')
+        wrapper.__cause__ = error
+        error = wrapper
+    if stored:
+        error = SandboxFailure('fixed', api_facts=list_exception_facts(error))
+    assert reporting.auth_failure(error) == (count >= (8 if stored else 9))
+
+
+def test_cyclic_auth_inspection_stops_all_retries():
+    """A repeated exception cannot prove that auth inspection reached the end."""
+    error = DataAccessError('private')
+    error.__cause__ = error
+    assert reporting.auth_failure(error)
+
+
+def test_stored_auth_inspection_is_bounded():
+    """An uninspected stored suffix is a stop condition, never an unbounded scan."""
+    unread = create_autospec(dict, instance=True, spec_set=True)
+    unread.get.side_effect = AssertionError('stored inspection limit exceeded')
+    error = SandboxFailure('fixed', api_facts=[{'type': 'DataAccessError'}] * 8 + [unread])
+    assert reporting.auth_failure(error)
+    unread.get.assert_not_called()
 
 
 @pytest.mark.parametrize('protocol', ['retry-v1', 'retry-v2', 'retry-v3'])
