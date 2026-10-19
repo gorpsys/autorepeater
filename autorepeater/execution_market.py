@@ -1,6 +1,6 @@
 """Pass-local market wiring and confirmed native-cash execution, without SDK types."""
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from time import monotonic, sleep
@@ -18,13 +18,15 @@ from autorepeater.fx import FxSnapshot, select_direct_pair, validate_pair_uids
 from autorepeater.fx_data import ORDER_BOOK_MAX_AGE_SECONDS, FxData
 from autorepeater.fx_funding import FundingInputs, build_funding_plan
 from autorepeater.logging_config import logger
+from autorepeater.market_diagnostics import safe_symbol
+from autorepeater.money import format_decimal
 from autorepeater.order_plan import (
     OrderIntent, OrderPlan, ready, sale_intents, spending_limits, validate_rules,
 )
 from autorepeater.purchase_plan import ZERO, difference, funding_candidates, validate_intent
 from autorepeater.reporting import print_fx_snapshot
 from autorepeater.strategy_allocation import proportional_split
-from autorepeater.strategy_plan import exact_sum, validate_plan
+from autorepeater.strategy_plan import exact_product, exact_sum, validate_plan
 from autorepeater.valuation import SecurityData, Valuation
 
 SETTLEMENT_TIMEOUT = 30
@@ -179,6 +181,7 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
     data: ExecutionData
     executor: object
     value: Valuation
+    terminal_reason: str = field(init=False, default='preflight_or_sales_rejected')
 
     def __post_init__(self):
         self.uids = sorted(self.plan.rules)
@@ -229,22 +232,34 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
 
     def run(self):
         """All-currency preflight precedes even the first independent RUB sale."""
-        if not self._preflight() or not self._sales():
+        try:
+            if not self._preflight() or not self._sales():
+                return tuple(self.receipts)
+            self.ledger.limits = spending_limits(
+                self.plan.strategy, self.ledger.ownership, self.plan.marks)
+            while self._can_continue():
+                funding = self._funding()
+                if not funding.purchases:
+                    self.terminal_reason = 'no_funded_purchase'
+                    if funding.demands:
+                        logger.info('Defer remaining purchases: native cash/FX lot/own caps/budget')
+                    break
+                self.terminal_reason = 'submission_or_refresh_failed'
+                continued = (self._exchange(funding.exchanges[0]) if funding.exchanges
+                             else self._buy(funding))
+                if not continued:
+                    break
+                self.terminal_reason = 'readiness_positions_cash_or_preflight'
+                self._market_refresh()
             return tuple(self.receipts)
-        self.ledger.limits = spending_limits(
-            self.plan.strategy, self.ledger.ownership, self.plan.marks)
-        while self._can_continue():
-            funding = self._funding()
-            if not funding.purchases:
-                if funding.demands:
-                    logger.info('Defer remaining purchases: native cash/FX lot/own caps/budget')
-                break
-            continued = (self._exchange(funding.exchanges[0]) if funding.exchanges
-                         else self._buy(funding))
-            if not continued:
-                break
-            self._market_refresh()
-        return tuple(self.receipts)
+        finally:
+            remaining = [safe_symbol(uid) for uid, target in sorted(
+                self.plan.strategy.target.quantities.items()) if uid not in self.submitted
+                and target > exact_sum(values.get(uid, ZERO)
+                                       for values in self.ledger.ownership.values())]
+            logger.info('Native execution end: terminal_reason=%s remaining_buy_uids=%s '
+                        'omitted_count=%d', self.terminal_reason, remaining[:20],
+                        max(0, len(remaining) - 20))
 
     def _can_continue(self):
         return (ready(self.snapshot) and _positions_match(self.snapshot, self.ledger.ownership)
@@ -285,11 +300,13 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
         self.receipts.append(receipt)
         self.fx_policy = self.fx_policy.after_fill(intent.uid, intent.side)
         if not _exchange_cash(self.ledger, exchange, receipt, self.fx):
+            self.terminal_reason = 'fx_cash_attribution_unavailable'
             logger.info('Defer FX dependencies: cash attribution unavailable')
             self._settled()
             return False
         currency = next(code for code, quote in self.fx.quotes.items()
                         if quote.pair.uid == intent.uid) if intent.side == 'BUY' else 'rub'
+        self.terminal_reason = 'fx_settlement_unconfirmed'
         return self._settled(currency)
 
     def _buy(self, funding):
@@ -298,12 +315,15 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
         receipt = _submit(self.account_id, intent, self.executor)
         self.receipts.append(receipt)
         self.submitted.add(intent.uid)
-        if not _purchase_cash(self.ledger, intent, receipt, self.fx,
+        if not _purchase_cash(self.ledger, intent, receipt, self.plan.marks,
                               currency_code(self.own[intent.uid].currency)):
+            self.terminal_reason = 'purchase_cash_rejected'
             return False
         for path, pieces in intent.pieces.items():
             self.ledger.ownership[path][intent.uid] = exact_sum((
                 self.ledger.ownership[path].get(intent.uid, ZERO), pieces))
+        self.terminal_reason = ('purchase_settlement_unconfirmed' if len(funding.purchases) > 1
+                                else 'no_further_funded_purchase')
         return len(funding.purchases) > 1 and self._settled()
 
 
@@ -335,17 +355,30 @@ def _exchange_cash(ledger, intent, receipt, fx):
     return ledger.change(debits, cash_credits)
 
 
-def _purchase_cash(ledger, intent, receipt, fx, settlement):
+def _purchase_cash(ledger, intent, receipt, marks, settlement):
     bound = _bound(receipt)
     if bound is None or bound.amount.amount <= 0 or bound.amount.currency != settlement:
         logger.info('Defer further purchases: monetary debit bound unavailable')
         return False
-    total = receipt.amounts.total
-    principal = _split_amount(fx.to_rub(total).amount, intent.pieces)
-    if any(amount > ledger.limits[path] for path, amount in principal.items()):
-        return False
+    principal = {path: exact_product(pieces, marks[intent.uid])
+                 for path, pieces in intent.pieces.items()}
     debits = {path: {bound.amount.currency: amount}
               for path, amount in _split_amount(bound.amount.amount, intent.pieces).items()}
+    for path, amount in principal.items():
+        reason = ('security_capacity_exceeded' if amount > ledger.limits[path]
+                  else 'owner_native_cash_exceeded' if debits[path][settlement] > (
+                      ledger.cash.amount(path, settlement)) else 'within_owner_bounds')
+        logger.info('Native purchase bounds: uid=%s path=%s reason=%s currency=%s '
+                    'planning_cost_rub=%s capacity_rub=%s principal_native=%s '
+                    'commission_native=%s debit_upper_native=%s owner_cash_native=%s',
+                    safe_symbol(intent.uid), path, reason, settlement,
+                    format_decimal(amount), format_decimal(ledger.limits[path]),
+                    format_decimal(receipt.amounts.total.amount),
+                    format_decimal(receipt.amounts.executed_commission.amount),
+                    format_decimal(debits[path][settlement]),
+                    format_decimal(ledger.cash.amount(path, settlement)))
+    if any(amount > ledger.limits[path] for path, amount in principal.items()):
+        return False
     if not ledger.change(debits, {}):
         return False
     for path, amount in principal.items():

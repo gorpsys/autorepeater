@@ -2,6 +2,7 @@
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal as D
+import logging
 from test.test_fx_funding import NOW, market
 from test.test_order_plan import destination, leaf, parent, rules
 from unittest.mock import create_autospec
@@ -12,9 +13,10 @@ from autorepeater.cash_facts import MoneyAmount, OrderAmounts, SecurityQuote, Se
 from autorepeater.cash_pools import CashPools
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError, OrderExecutor
 from autorepeater.execution_data import ExecutionData
-from autorepeater.execution_market import ExecutionMarket, _Ledger, _credit_sales
+from autorepeater.execution_market import ExecutionMarket, _Ledger, _credit_sales, _purchase_cash
 from autorepeater.fx_data import FxData
 from autorepeater.order_plan import build_order_plan
+from autorepeater.order_plan import OrderIntent
 from autorepeater.valuation import SecurityData
 
 
@@ -147,7 +149,8 @@ def test_closed_currency_preflight_prevents_other_composite_rub_sale():
 
 
 @pytest.mark.parametrize('currency', ['rub', 'cny'])
-def test_two_buys_can_spend_commission_reserve_without_second_floor(currency):
+@pytest.mark.parametrize('principal', [D(450), D(456), D(444)])
+def test_two_buys_can_spend_commission_reserve_without_second_floor(currency, principal):
     """1000/100 reserve: 450+5 then450+5 remains legal at545."""
     broker, fx, books = runtime()
     books.get_security_quote.side_effect = lambda uid: SecurityQuote(
@@ -165,17 +168,98 @@ def test_two_buys_can_spend_commission_reserve_without_second_floor(currency):
     data = create_autospec(ExecutionData, instance=True, spec_set=True)
     data.get_destination.return_value = replace(
         snapshot, quantities={'A': D(1)}, available_quantities={'A': D(1)},
-        available_cash={currency: D(545)/rate})
+        available_cash={currency: (D(1000) - principal - D(5))/rate})
     data.get_trade_rules.return_value = {
-        uid: replace(rule, buy_money_amount=D(545)/rate) for uid, rule in own.items()}
+        uid: replace(rule, buy_money_amount=(D(1000) - principal - D(5))/rate)
+        for uid, rule in own.items()}
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda account, order: receipt(
-        order, str(D(450)/rate), str(D(5)/rate), currency)
+        order, str(principal/rate), str(D(5)/rate), currency)
     result = broker.execute('dst', plan, data, executor, value)
     assert [item.uid for item in result] == ['A', 'B']
     assert executor.submit_order.call_count == 2
     if currency == 'rub':
         fx.get_trade_rules.assert_not_called()
+
+
+@pytest.mark.parametrize('currency', ['rub', 'cny'])
+@pytest.mark.parametrize('principal', ['89', '91'])
+def test_security_capacity_uses_fixed_mark_not_receipt_or_refreshed_fx(currency, principal):
+    """A shared fill consumes immutable RUB marks even when native price/FX move."""
+    intent = OrderIntent('C', 'BUY', 1, 1, {(0,): D('.25'), (1,): D('.75')})
+    mark = D(90) * (12 if currency == 'cny' else 1)
+    ledger = _Ledger(
+        CashPools({(0,): {currency: D(30)}, (1,): {currency: D(90)}}, {currency: D(1000)}),
+        {}, {(0,): mark / 4, (1,): mark * D('.75')})
+    fill = receipt(intent, principal, '1', currency)
+    assert _purchase_cash(ledger, intent, fill, {'C': mark}, currency)
+    assert ledger.limits == {(0,): D(0), (1,): D(0)}
+    debit = D(principal) + 1
+    assert ledger.cash.amount((0,), currency) == D(30) - debit / 4
+    assert ledger.cash.amount((1,), currency) == D(90) - debit * D('.75')
+    assert ledger.cash.protected == {currency: D(1000)}
+
+
+@pytest.mark.parametrize('currency', ['rub', 'cny'])
+@pytest.mark.parametrize('principal,fee', [('101', '0'), ('99', '2')])
+def test_security_receipt_cannot_borrow_neighbor_or_unallocated_cash(currency, principal, fee):
+    """Native principal plus fee must fit every original owner's cash, including reserve."""
+    intent = OrderIntent('C', 'BUY', 1, 1, {(0,): D('.5'), (1,): D('.5')})
+    ledger = _Ledger(
+        CashPools({(0,): {currency: D(50)}, (1,): {currency: D(500)}}, {currency: D(1000)}),
+        {}, {(0,): D(500), (1,): D(500)})
+    before = ledger.cash
+    assert not _purchase_cash(ledger, intent, receipt(intent, principal, fee, currency),
+                              {'C': D(900)}, currency)
+    assert ledger.cash == before
+    assert ledger.limits == {(0,): D(500), (1,): D(500)}
+
+
+@pytest.mark.parametrize('currency', ['rub', 'cny'])
+def test_security_capacity_cannot_be_enlarged_by_a_cheaper_fill(currency):
+    """Cash is sufficient, but a filled lot cannot consume more than the fixed ceiling."""
+    intent = OrderIntent('C', 'BUY', 1, 1, {(): D(1)})
+    ledger = _Ledger(CashPools({(): {currency: D(100)}}), {}, {(): D(89)})
+    before = ledger.cash
+    assert not _purchase_cash(ledger, intent, receipt(intent, '80', '1', currency),
+                              {'C': D(90)}, currency)
+    assert ledger.cash == before
+    assert ledger.limits == {(): D(89)}
+
+
+@pytest.mark.parametrize('currency', ['rub', 'cny'])
+def test_security_partial_fill_stops_before_cash_attribution_or_neighbor(currency):
+    """A partial BUY never spends capacity as if the requested pieces were filled."""
+    uid = 'C' if currency == 'cny' else 'A'
+    broker, value, plan, data, executor, _, _ = setup_plan(
+        leaf(target={uid: D(2), 'B': D(1)}, budget='2000', floor='200'),
+        cash={currency: D(2000)}, own={**rules(uid, currency=currency), **rules('B')})
+    executor.submit_order.side_effect = lambda account, order: replace(
+        receipt(order, '450', '1', currency, status='PARTIALLYFILL'), lots_executed=1)
+    with pytest.raises(OrderExecutionError, match='not fully confirmed'):
+        broker.execute('dst', plan, data, executor, value)
+    executor.submit_order.assert_called_once()
+    data.get_destination.assert_not_called()
+
+
+def test_purchase_failure_logs_owner_bounds_and_remaining_uids(caplog):
+    """Loaded facts explain why a preceding receipt stops the next GOLD purchase."""
+    broker, value, plan, data, executor, _, _ = setup_plan(
+        leaf(target={'A': D(1), 'GOLD': D(1)}, budget='1000', floor='100'),
+        own=rules('A', 'GOLD'))
+    executor.submit_order.side_effect = lambda account, order: receipt(order, '995', '6')
+    with caplog.at_level(logging.INFO, logger='tinkoffBot'):
+        assert len(broker.execute('dst', plan, data, executor, value)) == 1
+    assert 'reason=owner_native_cash_exceeded' in caplog.text
+    assert 'capacity_rub=900.0' in caplog.text
+    assert 'planning_cost_rub=450.0' in caplog.text
+    assert 'principal_native=995.0' in caplog.text
+    assert 'commission_native=6.0' in caplog.text
+    assert 'debit_upper_native=1001.0' in caplog.text
+    assert 'owner_cash_native=1000.0' in caplog.text
+    assert "remaining_buy_uids=['GOLD']" in caplog.text
+    assert 'terminal_reason=purchase_cash_rejected' in caplog.text
+    data.get_destination.assert_not_called()
 
 
 def test_transport_uncertainty_never_retries_fx_or_reads_balances():

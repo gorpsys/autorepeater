@@ -251,7 +251,7 @@ def test_exact_receipt_bound_debits_the_same_owners_without_fabricating_cash():
     intent = plan.buys[0]
     ledger = _Ledger(plan.funding.cash, {(0,): {}, (1,): {}}, dict(plan.funding.spending_limits))
     fact = receipt(intent, '100')
-    assert _purchase_cash(ledger, intent, fact, plan.snapshot.fx_snapshot, 'rub')
+    assert _purchase_cash(ledger, intent, fact, plan.marks, 'rub')
     assert ledger.cash.total('rub') == 0
     assert all(amount == 0 for amount in ledger.limits.values())
     assert fact.cash == {}
