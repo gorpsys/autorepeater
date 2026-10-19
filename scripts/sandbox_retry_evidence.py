@@ -1,5 +1,6 @@
 """Pure, strict retry evidence and independent reconstruction of final results."""
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import re
@@ -10,6 +11,7 @@ MAX_BYTES = 2_000_000
 TRANSPORT_ROOTS = frozenset(('RequestError', 'SandboxFailure', 'DataAccessError',
                              'ExecutionDataError', 'OrderExecutionError'))
 TRANSIENT_STATUSES = frozenset(('DEADLINE_EXCEEDED', 'UNAVAILABLE'))
+PROTOCOLS = ('retry-v1', 'retry-v2', 'retry-v3')
 # Frozen v1 contract, used only for callers that have not selected retry-v2.
 EXPECTED_SCENARIOS = (
     'test_initial_monthly2000_and_noop[INDEX-PAIR]',
@@ -70,6 +72,8 @@ class PhaseFact:
     outcome: str
     transport_chain: tuple[str, ...]
     grpc_status: str | None
+    stale_book: dict[str, object] | None = None
+    auth_failure: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,23 +129,57 @@ def nodeids(value: object) -> tuple[str, ...]:
     return tuple(value)
 
 
-def phase_fact(value: object) -> PhaseFact:
+def validate_stale_book(value: object) -> dict[str, object]:
+    """Recompute the exact 90-second guard from explicit identity and aware clocks."""
+    fields = object_fields(value, {'reason', 'expected_uid', 'received_uid', 'market_time',
+                                   'observed_utc', 'freshness_limit_seconds'})
+    uid = fields['expected_uid']
+    if (not isinstance(uid, str) or re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', uid) is None
+            or uid != fields['received_uid'] or uid in ('missing', 'invalid')):
+        raise RetryFailure('invalid stale book identity')
+    if (fields['reason'] != 'market_time_stale'
+            or integer(fields['freshness_limit_seconds']) != 90):
+        raise RetryFailure('invalid stale book reason or freshness limit')
+    try:
+        stamps = [datetime.fromisoformat(stamp) for stamp in
+                  (fields['market_time'], fields['observed_utc']) if isinstance(stamp, str)]
+        if (len(stamps) != 2 or any(stamp.utcoffset() is None for stamp in stamps)
+                or stamps[1] - stamps[0] <= timedelta(seconds=90)):
+            raise ValueError
+    except (ValueError, OverflowError):
+        raise RetryFailure('invalid stale book timestamps') from None
+    return fields
+
+
+def phase_fact(value: object, *, protocol: str = 'retry-v1') -> PhaseFact:
     """Read own typed phase fields; arbitrary error text has no classification role."""
-    fields = object_fields(value, {'nodeid', 'when', 'outcome', 'transport_chain', 'grpc_status'})
+    if protocol not in PROTOCOLS:
+        raise RetryFailure('unsupported evidence protocol')
+    fields = object_fields(value, {'nodeid', 'when', 'outcome', 'transport_chain', 'grpc_status'} |
+                           ({'stale_book', 'auth_failure'} if protocol == 'retry-v3' else set()))
     node = nodeids([fields['nodeid']])[0]
     when, outcome = fields['when'], fields['outcome']
     if when not in ('setup', 'call', 'teardown') or outcome not in ('passed', 'failed', 'skipped'):
         raise RetryFailure('invalid retry phase outcome')
     chain = fields['transport_chain']
     if not isinstance(chain, list) or len(chain) > 8 or any(
-            not isinstance(item, str) or item not in TRANSPORT_ROOTS | {'other'} for item in chain):
+            not isinstance(item, str) or item not in TRANSPORT_ROOTS | {'other'} |
+            ({'ValueError'} if protocol == 'retry-v3' else set()) for item in chain):
         raise RetryFailure('invalid transport provenance')
     status = fields['grpc_status']
     if status is not None and (not isinstance(status, str) or status not in TRANSIENT_STATUSES):
         raise RetryFailure('invalid retry transport status')
-    if outcome == 'passed' and (chain or status is not None):
+    stale = (validate_stale_book(fields['stale_book'])
+             if fields.get('stale_book') is not None else None)
+    auth = fields.get('auth_failure', False)
+    if not isinstance(auth, bool):
+        raise RetryFailure('invalid auth failure fact')
+    phase = PhaseFact(node, str(when), str(outcome), tuple(chain), status, stale, auth)
+    if stale is not None and not stale_transient(phase):
+        raise RetryFailure('invalid stale book provenance')
+    if outcome == 'passed' and (chain or status is not None or stale is not None or auth):
         raise RetryFailure('passed phase contains error facts')
-    return PhaseFact(node, str(when), str(outcome), tuple(chain), status)
+    return phase
 
 
 def integer(value: object) -> int:
@@ -153,11 +191,11 @@ def integer(value: object) -> int:
 
 def read_report(path: Path, *, protocol: str = 'retry-v1') -> AttemptReport:
     """Reconstruct the original immutable report without permissive defaults."""
-    if protocol not in ('retry-v1', 'retry-v2'):
+    if protocol not in PROTOCOLS:
         raise RetryFailure('unsupported evidence protocol')
     keys = {'selected', 'phases', 'entered', 'cleaned', 'session_cleanup',
             'collection_errors', 'exit_status'}
-    fields = object_fields(read_json(path), keys | ({'sha'} if protocol == 'retry-v2' else set()))
+    fields = object_fields(read_json(path), keys | ({'sha'} if protocol != 'retry-v1' else set()))
     if protocol == 'retry-v1' and any(
             node not in EXPECTED_NODEIDS for key in ('selected', 'entered', 'cleaned')
             for node in nodeids(fields[key])):
@@ -167,10 +205,11 @@ def read_report(path: Path, *, protocol: str = 'retry-v1') -> AttemptReport:
     if not isinstance(raw_phases, list) or not isinstance(cleanup, bool):
         raise RetryFailure('invalid retry phase or cleanup facts')
     return AttemptReport(
-        nodeids(fields['selected']), tuple(map(phase_fact, raw_phases)),
+        nodeids(fields['selected']), tuple(phase_fact(phase, protocol=protocol)
+                                           for phase in raw_phases),
         nodeids(fields['entered']), nodeids(fields['cleaned']), cleanup,
         integer(fields['collection_errors']), integer(fields['exit_status']),
-        checked_sha(fields['sha']) if protocol == 'retry-v2' else None)
+        checked_sha(fields['sha']) if protocol != 'retry-v1' else None)
 
 
 def case_phases(report: AttemptReport, node: str) -> tuple[PhaseFact, ...]:
@@ -203,9 +242,30 @@ def transient(phase: PhaseFact) -> bool:
                 for name in phase.transport_chain[:-1]))
 
 
-def retry_nodes(report: AttemptReport) -> tuple[str, ...]:
-    """A permanent failure stops this run; never retry it or hide it behind successes."""
+def stale_transient(phase: PhaseFact) -> bool:
+    """Only a failed validation with matching UID and independently checked age may retry."""
+    if (phase.when == 'teardown' or phase.outcome != 'failed' or phase.auth_failure
+            or phase.grpc_status is not None or not phase.transport_chain):
+        return False
+    if (phase.transport_chain[-1] != 'ValueError' or any(
+            name not in TRANSPORT_ROOTS - {'RequestError'} for name in phase.transport_chain[:-1])):
+        return False
+    try:
+        validate_stale_book(phase.stale_book)
+    except RetryFailure:
+        return False
+    return True
+
+
+def retry_nodes(report: AttemptReport, *, protocol: str = 'retry-v1') -> tuple[str, ...]:
+    """V3 retries eligible cases while retaining permanent outcomes in the history."""
     failed = failed_nodes(report)
+    if protocol == 'retry-v3':
+        if any(phase.auth_failure for phase in report.phases):
+            return ()
+        return tuple(node for node in failed if all(
+            transient(phase) or stale_transient(phase)
+            for phase in case_phases(report, node) if phase.outcome == 'failed'))
     for node in failed:
         if any(not transient(phase) for phase in case_phases(report, node)
                if phase.outcome == 'failed'):
@@ -312,9 +372,14 @@ def history_entries(root: Path) -> list[dict[str, object]]:
 
 
 def inspect_history(root: Path, *, require_full: bool = False,
-                    expected: SuiteCollection | None = None) -> dict[str, str]:
+                    expected: SuiteCollection | None = None,
+                    protocol: str | None = None) -> dict[str, str]:
     """Derive legal selection, rerun count and final outcomes from every original."""
     states: dict[str, str] = {}
+    if protocol is None:
+        protocol = 'retry-v2' if expected is not None else 'retry-v1'
+    if protocol not in PROTOCOLS or (protocol == 'retry-v3' and expected is None):
+        raise RetryFailure('full collection and supported protocol required')
     if expected is not None and not expected.nodeids:
         raise RetryFailure('independent full collection required')
     if expected is not None:
@@ -323,7 +388,7 @@ def inspect_history(root: Path, *, require_full: bool = False,
     next_nodes: tuple[str, ...] | None = None
     for number, entry in enumerate(history_entries(root), 1):
         report = verify_attempt(root / 'attempts' / f'{number:02}', integer(entry['returncode']),
-                                protocol='retry-v2' if expected is not None else 'retry-v1')
+                                protocol=protocol)
         if number == 1 and require_full and expected is None and (
                 set(report.selected) != set(EXPECTED_NODEIDS)):
             raise RetryFailure('full initial 17-case collection required')
@@ -336,7 +401,7 @@ def inspect_history(root: Path, *, require_full: bool = False,
             raise RetryFailure('illegal retry selection or retry after permanent failure')
         states.update({node: 'failed' if node in failed_nodes(report) else 'passed'
                        for node in report.selected})
-        next_nodes = retry_nodes(report)
+        next_nodes = retry_nodes(report, protocol=protocol)
     return states
 
 
@@ -355,9 +420,10 @@ def write_final_junit(states: dict[str, str], path: Path) -> None:
 
 
 def verify_history(root: Path, *, require_full: bool = True,
-                   expected: SuiteCollection | None = None) -> int:
+                   expected: SuiteCollection | None = None,
+                   protocol: str | None = None) -> int:
     """Merged green output is accepted only when its originals independently prove it."""
-    states = inspect_history(root, require_full=require_full, expected=expected)
+    states = inspect_history(root, require_full=require_full, expected=expected, protocol=protocol)
     if not states or any(state != 'passed' for state in states.values()):
         raise RetryFailure('sandbox cases remain failed')
     if xml_states(root / 'junit.xml') != states:

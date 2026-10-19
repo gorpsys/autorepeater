@@ -10,8 +10,8 @@ import sys
 import time
 
 from scripts.sandbox_retry_evidence import (
-    MAX_ATTEMPTS, RetryFailure, SuiteCollection, inspect_history, read_collection, read_report,
-    retry_nodes, write_final_junit,
+    MAX_ATTEMPTS, PROTOCOLS, RetryFailure, SuiteCollection, inspect_history, read_collection,
+    read_report, retry_nodes, write_final_junit,
 )
 
 
@@ -55,10 +55,10 @@ class RetryRuntime:
 def selected_collection(root: Path) -> SuiteCollection | None:
     """The initiating workflow selects v2; absence preserves the frozen v1 contract."""
     protocol = os.environ.get('E2E_EVIDENCE_PROTOCOL', 'retry-v1')
-    if protocol not in ('retry-v1', 'retry-v2'):
+    if protocol not in PROTOCOLS:
         raise RetryFailure('unsupported evidence protocol')
     return (read_collection(root / 'collection.json', os.environ.get('E2E_TESTED_SHA', ''))
-            if protocol == 'retry-v2' else None)
+            if protocol != 'retry-v1' else None)
 
 
 def run_attempts(arguments: list[str], root: Path, timeout: int, *,
@@ -71,6 +71,7 @@ def run_attempts(arguments: list[str], root: Path, timeout: int, *,
         raise RetryFailure('fresh retry directory and one suite selector required')
     root.mkdir(parents=True, exist_ok=True)
     expected = selected_collection(root)
+    protocol = os.environ.get('E2E_EVIDENCE_PROTOCOL', 'retry-v1')
     history: list[dict[str, int]] = []
     nodes = None
     for number in range(1, MAX_ATTEMPTS + 1):
@@ -84,14 +85,15 @@ def run_attempts(arguments: list[str], root: Path, timeout: int, *,
         print(f'Sandbox attempt {number}/{MAX_ATTEMPTS}; '
               f'shared time remaining {int(remaining)}s', flush=True)
         try:
-            result = runtime.run(attempt_arguments(arguments, nodes, directory), env=environment,
-                                 timeout=remaining, check=False)
+            history.append({'number': number, 'returncode': runtime.run(
+                attempt_arguments(arguments, nodes, directory), env=environment,
+                timeout=remaining, check=False).returncode})
         except subprocess.TimeoutExpired:
             return 124
-        history.append({'number': number, 'returncode': result.returncode})
         (root / 'retry.json').write_text(
             json.dumps({'version': 1, 'attempts': history}), encoding='utf-8')
         states = inspect_history(root, expected=expected,
+                                 protocol=protocol,
                                  require_full=expected is not None or
                                  os.environ.get('GITHUB_ACTIONS') == 'true')
         write_final_junit(states, root / 'junit.xml')
@@ -100,7 +102,7 @@ def run_attempts(arguments: list[str], root: Path, timeout: int, *,
         if all(state == 'passed' for state in states.values()):
             return 0
         nodes = retry_nodes(read_report(directory / 'report.json',
-                                        protocol='retry-v2' if expected else 'retry-v1'))
+                                        protocol=protocol), protocol=protocol)
         if not nodes or deadline - runtime.clock() <= 10:
             return 1
         if number < MAX_ATTEMPTS:

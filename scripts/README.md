@@ -293,6 +293,36 @@ sandbox-results/collection.json --sha <tested SHA>`. Без выбора produce
 Формат отчёта для одной попытки выбирается явно через
 `--evidence-format single-v1`.
 
+Подготовлен `retry-v3`: независимая коллекция, точный SHA, максимум четыре
+попытки, общий deadline и подтверждённая очистка остаются обязательными.
+V3 повторяет только failed API timeout и подтверждённый `market_time_stale`,
+даже рядом с постоянными ошибками. Постоянные сценарии сохраняются failed
+в итоговом JUnit и не запускаются повторно; их нельзя скрыть общим success.
+Stale требует исключения из известной загруженной точки валидации, совпадающих
+UID, двух timezone-aware timestamps и возраста строго больше 90 секунд.
+Trusted verifier независимо проверяет эти факты. Assertions, произвольный
+ValueError, будущее/отсутствующее время и UID mismatch не дают retry.
+Auth запрещает любые повторы. Цикл или непрочитанный остаток после восьми
+исключений, как и заполненный восьмиэлементный буфер сохранённых API-фактов,
+тоже запрещают все повторы: отсутствие auth в остатке не доказано.
+Collection/teardown/cleanup/отмена/deadline
+и ошибки протокола сохраняют прежние стоп-условия.
+
+Поддержка v3 вместе с auth-fix выпущена в master `1b015c6` (5.2.2, PR #42),
+но его trusted workflow остаётся на `retry-v2`. В candidate workflow PR #40
+подготовлены `E2E_EVIDENCE_PROTOCOL=retry-v3` и trusted команда
+`--evidence-format retry-v3 --collection sandbox-results/collection.json
+--sha <tested SHA>`. Это не активирует v3 при dispatch с ref master:
+оба выбора и verifier берутся из trusted master, а не из checkout PR.
+Для активации до мержа PR #40 нужен отдельный согласованный PR в master,
+меняющий оба выбора в `.github/workflows/sandbox-e2e.yml`; обязательные checks
+и merge выполняются без обхода защиты. Затем отдельно разрешённый dispatch
+с ref master проверяет точный новый SHA PR #40 по v3. До этого PR #40
+при выборе master продолжает производить совместимый v2 evidence.
+V1/v2 сохраняют прежние поля и поведение. Новые app-модули и зависимости
+для подготовительного выпуска не нужны; брокерские запросы классификатор
+не выполняет. Полная live-приёмка каждого будущего SHA по-прежнему обязательна.
+
 `sandbox_collection.py` фиксирует полный набор без исполнения fixtures;
 
 `sandbox_github.py` реализует GitHub-обвязку;

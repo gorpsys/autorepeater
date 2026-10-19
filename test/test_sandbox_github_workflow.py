@@ -80,7 +80,7 @@ def test_evidence_is_verified_on_a_separate_readonly_runner() -> None:
     assert 'actions/download-artifact@v4' in text
     assert 'ref: ${{ needs.prepare.outputs.trusted_sha }}' in text
     assert '-m scripts.sandbox_github evidence' in text
-    assert '--evidence-format retry-v2' in text
+    assert '--evidence-format retry-v3' in text
     assert '--collection sandbox-results/collection.json' in text
     assert '--sha "$TESTED_SHA"' in text
     assert 'TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
@@ -210,10 +210,10 @@ def test_inline_publication_predicate_is_fail_closed(
     assert result is expected
 
 
-def test_full_collection_precedes_any_live_secret_and_selects_v2() -> None:
+def test_full_collection_precedes_any_live_secret_and_selects_v3() -> None:
     """The workflow owns the evidence version and fixes the collection's SHA."""
     text = job('live')
-    assert 'E2E_EVIDENCE_PROTOCOL: "retry-v2"' in text
+    assert 'E2E_EVIDENCE_PROTOCOL: "retry-v3"' in text
     assert 'E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
     collector = 'scripts.sandbox_collection --sha "$E2E_TESTED_SHA"'
     assert collector in text

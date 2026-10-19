@@ -84,7 +84,7 @@ jobs:
     env:
       SANDBOX_CI_SERIALIZED: "1"
       PYTEST_ADDOPTS: ""
-      E2E_EVIDENCE_PROTOCOL: "retry-v2"
+      E2E_EVIDENCE_PROTOCOL: "retry-v3"
       E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
     defaults:
       run:
@@ -169,7 +169,7 @@ jobs:
         id: evidence
         env:
           TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
-        run: python3 -m scripts.sandbox_github evidence --evidence-format retry-v2 --junit sandbox-results/junit.xml --collection sandbox-results/collection.json --sha "$TESTED_SHA"
+        run: python3 -m scripts.sandbox_github evidence --evidence-format retry-v3 --junit sandbox-results/junit.xml --collection sandbox-results/collection.json --sha "$TESTED_SHA"
 
   publish:
     needs: [prepare, pending, live, verify]
