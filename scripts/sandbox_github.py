@@ -108,6 +108,16 @@ class GitHubClient:  # pylint: disable=too-few-public-methods
             raise GitHubFailure('GitHub API request failed') from None
 
 
+def select_protocol(event: object, event_name: str) -> str:
+    """Trusted dispatch input alone opts into v3; automatic pushes retain v2."""
+    if event_name != 'workflow_dispatch':
+        return 'retry-v2'
+    protocol = record(record(event).get('inputs')).get('evidence_protocol', 'retry-v2')
+    if not isinstance(protocol, str) or protocol not in ('retry-v2', 'retry-v3'):
+        raise GitHubFailure('unsupported dispatch evidence protocol')
+    return protocol
+
+
 def select_target(event: object, environment: dict[str, str], client: GitHubClient) -> TestTarget:
     """Authorize original actor and rerunner before selecting an immutable target."""
     for actor in dict.fromkeys((environment.get('GITHUB_ACTOR', ''),
@@ -257,12 +267,13 @@ def main(argv: list[str] | None = None) -> int:
             write_outputs({'complete': 'true', 'passed': str(facts.passed)})
         else:
             event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
+            protocol = select_protocol(event, os.environ['GITHUB_EVENT_NAME'])
             client = GitHubClient(os.environ['GITHUB_REPOSITORY'], os.environ.get('GH_TOKEN', ''))
             target = select_target(event, dict(os.environ), client)
             trusted_sha = (target.sha if os.environ['GITHUB_EVENT_NAME'] == 'pull_request'
                            else commit_sha(os.environ.get('GITHUB_SHA')))
             write_outputs({'head_sha': target.sha, 'pr_number': str(target.pr_number),
-                           'trusted_sha': trusted_sha})
+                           'trusted_sha': trusted_sha, 'evidence_protocol': protocol})
     except GitHubFailure as error:
         print(str(error) + '; no success status', file=sys.stderr)
         return 1

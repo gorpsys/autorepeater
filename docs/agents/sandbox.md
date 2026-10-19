@@ -17,7 +17,12 @@ cleanup; локальный запуск при общей песочнице н
 Дамп/JUnit содержат только безопасные проверенные факты.
 История bootstrap PR #28 сохранена в [истории версий](../history/versioning.md#bootstrap-sandbox-e2e-2026-10-08).
 Ручной запуск через Actions > Sandbox live E2E > Run workflow
-(ref master, pr_number с номером открытого PR).
+(ref master, pr_number с номером открытого PR). Поле evidence_protocol
+по умолчанию retry-v2; retry-v3 выбирается явно для этого полного запуска.
+Trusted prepare проверяет allowlist до live и фиксирует единый output для
+producer и независимого verifier. Неизвестный выбор, включая retry-v1,
+отклоняется; совместимость legacy v1 в Python helpers сохраняется.
+Master push всегда выбирает v2 независимо от полей payload.
 Обычный ручной запуск и автоматический master push одобрения не требуют.
 Live hook до fixture пишет flush-прогресс: attempt N [index/selected_count]
 и node ID. Повторы считают только выбранный subset; прогресс не evidence.
@@ -50,11 +55,13 @@ collection или cleanup не дают success. Passed count — только �
 Подготовленный `retry-v3` сохраняет независимую полную коллекцию и точный SHA.
 Он выбирается только инициатором через E2E_EVIDENCE_PROTOCOL=retry-v3 и trusted
 verifier --evidence-format retry-v3, не по полям недоверенного артефакта.
-Действующий workflow пока остаётся на v2. Master 0492181 отвергает новые поля
-stale и mixed subset после постоянной ошибки, поэтому сначала требуется
-мерж поддержки v3 с полной приёмкой по прежнему v2. Активация в PR #40 —
-отдельный следующий этап после обновления trusted master; она должна менять
-оба выбора формата в trusted workflow. Не проверять evidence кодом PR.
+Поддержка v3 и auth-fix выпущены в master 1b015c6 (5.2.2, PR #42).
+Workflow 5.2.3 подготавливает явный выбор v3; пока activation PR не вмержен,
+dispatcher master продолжает работать по v2. После отдельно разрешённых
+проверок и merge активации запуск PR #40 с ref master и
+evidence_protocol=retry-v3 использует один проверенный выбор на обоих jobs.
+Candidate workflow PR сам по себе не переключает trusted dispatcher master.
+Старый master 0492181 отвергает v3. Не проверять evidence кодом PR.
 V3 повторяет только eligible failed cases даже при постоянных ошибках других
 сценариев. Их результаты сохраняются в итоговом JUnit и запрещают общий success;
 пройденные и постоянно упавшие сценарии не запускаются повторно.
