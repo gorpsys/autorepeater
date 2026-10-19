@@ -17,6 +17,7 @@ from autorepeater.execution_market import ExecutionMarket, _Ledger, _credit_sale
 from autorepeater.fx_data import FxData
 from autorepeater.order_plan import build_order_plan
 from autorepeater.order_plan import OrderIntent
+from autorepeater.strategy_plan import exact_product, exact_sum
 from autorepeater.valuation import SecurityData
 
 
@@ -260,6 +261,88 @@ def test_purchase_failure_logs_owner_bounds_and_remaining_uids(caplog):
     assert "remaining_buy_uids=['GOLD']" in caplog.text
     assert 'terminal_reason=purchase_cash_rejected' in caplog.text
     data.get_destination.assert_not_called()
+
+
+def _declining_plan(change, lot, holding, *, fx_required=False):
+    """Keep original marks beside independently refreshed native books and FX."""
+    broker, fx, books = runtime()
+    currency = 'rub' if change == 'rub-price' else 'cny'
+    rate = D(1) if currency == 'rub' else D(12)
+    native = [D(450) / lot / rate]
+    books.get_security_quote.side_effect = lambda uid: SecurityQuote(
+        currency if uid == 'A' else 'rub', native[0] if uid == 'A' else D(1),
+        native[0] if uid == 'A' else D(1), SecurityQuoteUnit.MONEY_PER_PIECE)
+    value = broker.valuation()
+    own = {**rules('A', currency=currency, lot=lot, buy=0 if fx_required else 100000000),
+           **rules('H')}
+    inputs = broker.funding_inputs('dst', value, own)
+    plan = build_order_plan(
+        leaf(target={'A': D(2 * lot)}, budget='1000', floor='100'),
+        replace(destination({'H': holding}), budget=D(1000),
+                available_cash={'rub': D(999)} if fx_required else {currency: D(999) / rate},
+                fx_snapshot=value.fx),
+        {(): {'H': holding}}, {'A': D(450) / lot, 'H': D(1)}, own, funding=inputs)
+    assert plan.funding.purchases[0].intent.lots == 1
+    if change == 'fx-only':
+        old = value.fx.quotes['cny']
+        fx.get_quote.side_effect = lambda pair: replace(
+            old, bid=D('11.8') if fx_required else D('11.96'),
+            ask=D('11.8') if fx_required else D('11.96'))
+    else:
+        native[0] = (D(449) if currency == 'rub' else D(444) if fx_required
+                     else D('448.8')) / lot / rate
+    return broker, value, plan, native[0], currency
+
+
+@pytest.mark.parametrize('change', ['rub-price', 'cny-price', 'fx-only'])
+@pytest.mark.parametrize('lot', [1, 10])
+@pytest.mark.parametrize('holding', [D(1), D('1e-80')])
+def test_refreshed_decline_cannot_increase_fixed_mark_lots_before_submit(change, lot, holding):
+    """Fresh two-lot affordability cannot enlarge the original one-lot capacity."""
+    broker, value, plan, native, currency = _declining_plan(change, lot, holding)
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
+    data.get_destination.side_effect = AssertionError('no second funding step needed')
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+    ceiling = exact_sum((D(900), holding.copy_negate()))
+
+    def submit(_account, intent):
+        assert exact_product(intent.pieces[()], plan.marks['A']) <= ceiling
+        return receipt(intent, str(exact_product(D(intent.lots * lot), native)), '0', currency)
+
+    executor.submit_order.side_effect = submit
+    result = broker.execute('dst', plan, data, executor, value)
+    assert len(result) == 1
+    executor.submit_order.assert_called_once()
+    assert executor.submit_order.call_args.args[1].lots == 1
+    assert plan.marks == {'A': D(450) / lot, 'H': D(1)}
+    data.get_destination.assert_not_called()
+
+
+@pytest.mark.parametrize('change', ['cny-price', 'fx-only'])
+def test_fx_exchange_funds_only_fixed_capacity_quantity_and_its_reserve(change):
+    """Do not exchange for two lots when the immutable capacity permits just one."""
+    broker, value, plan, native, currency = _declining_plan(change, 1, D(1), fx_required=True)
+    assert currency == 'cny'
+    assert plan.funding.exchanges[0].lots == 46
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
+    data.get_destination.return_value = replace(
+        plan.snapshot, available_cash={'rub': D(447), 'cny': D(46)})
+    data.get_trade_rules.return_value = {
+        **rules('A', currency='cny', buy=2), **rules('H')}
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+
+    def submit(_account, intent):
+        if intent.uid == 'cny-rub':
+            assert intent.lots == 46
+            return receipt(intent, '552')
+        assert intent.uid == 'A' and intent.lots == 1
+        return receipt(intent, str(native), '0', 'cny')
+
+    executor.submit_order.side_effect = submit
+    result = broker.execute('dst', plan, data, executor, value)
+    assert [(item.uid, item.lots_executed) for item in result] == [('cny-rub', 46), ('A', 1)]
+    assert executor.submit_order.call_count == 2
+    assert data.get_destination.call_count == 1
 
 
 def test_transport_uncertainty_never_retries_fx_or_reads_balances():

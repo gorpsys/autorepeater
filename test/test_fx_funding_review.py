@@ -16,7 +16,7 @@ from autorepeater.execution import OrderExecutionError, OrderExecutor
 from autorepeater.execution_data import ExecutionData
 from autorepeater.execution_market import _Ledger, _purchase_cash
 from autorepeater.fx import FxSnapshot
-from autorepeater.fx_funding import FundingInputs, FxPolicy
+from autorepeater.fx_funding import FundingInputs, FxPolicy, build_funding_plan
 from autorepeater.index_config import validate_index_config
 from autorepeater.index_strategy import IndexStrategy
 from autorepeater.order_plan import build_order_plan
@@ -255,6 +255,40 @@ def test_exact_receipt_bound_debits_the_same_owners_without_fabricating_cash():
     assert ledger.cash.total('rub') == 0
     assert all(amount == 0 for amount in ledger.limits.values())
     assert fact.cash == {}
+
+
+@pytest.mark.parametrize('currency', ['rub', 'cny'])
+@pytest.mark.parametrize('constraint', [
+    'fit', 'capacity-dust', 'native-dust', 'money-cap', 'lot-cap', 'api-closed', 'bestprice-closed',
+])
+def test_fixed_mark_sizing_preserves_fractional_owners_and_fresh_native_constraints(
+        currency, constraint):
+    """Fresh99 does not enlarge100-mark capacity or repair a real 1e-80 shortfall."""
+    plan, pieces = exact_owner_case(currency=currency)
+    limits = dict(plan.funding.spending_limits)
+    if constraint == 'capacity-dust':
+        limits[(0,)] = exact_sum((limits[(0,)], D('-1e-80')))
+    cash = plan.funding.cash
+    if constraint == 'native-dust':
+        cash = CashPools({path: {currency: exact_sum((exact_product(amount, D(99)), D('-1e-80')))}
+                          for path, amount in pieces.items()})
+    rule = plan.rules['R']
+    changes = {'money-cap': {'buy_money_amount': D(98)}, 'lot-cap': {'buy_max_lots': 0},
+               'api-closed': {'api_trade_available': False},
+               'bestprice-closed': {'bestprice_order_available': False}}
+    rule = replace(rule, **changes.get(constraint, {}))
+    funding = build_funding_plan(
+        plan.strategy, plan.snapshot, plan.ownership,
+        {'R': exact_product(D(99), plan.snapshot.fx_snapshot.rate(currency))},
+        {'R': rule}, limits,
+        FundingInputs(native_prices={'R': MoneyAmount(currency, D(99))}, cash=cash),
+        capacity_marks=plan.marks)
+    assert bool(funding.purchases) is (constraint == 'fit')
+    if funding.purchases:
+        assert funding.purchases[0].intent.pieces == pieces
+        for path, amount in pieces.items():
+            assert exact_product(amount, plan.marks['R']) <= limits[path]
+            assert funding.security_debits.amount(path, currency) <= cash.amount(path, currency)
 
 
 @pytest.mark.parametrize('status', ['REJECTED', 'PARTIALLYFILL', 'uncertain'])

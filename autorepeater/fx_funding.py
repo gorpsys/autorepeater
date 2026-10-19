@@ -18,7 +18,7 @@ from autorepeater.purchase_plan import (
     take_pieces, validate_intent,
 )
 from autorepeater.strategy_allocation import proportional_split
-from autorepeater.strategy_plan import StrategyPlan, exact_product, exact_sum
+from autorepeater.strategy_plan import StrategyPlan, exact_product, exact_sum, finite_decimal
 
 
 def _freeze_costs(values):
@@ -474,14 +474,19 @@ def _cash_preferences(strategy, ownership, marks, rules, reserves, fx):
 
 
 def build_funding_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot, ownership,
-                       marks, rules, limits, inputs: FundingInputs) -> FundingPlan:
+                       marks, rules, limits, inputs: FundingInputs, *,
+                       capacity_marks: Mapping[str, Decimal] | None = None) -> FundingPlan:
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """Use the existing priority/capacity rule, retaining future-funded demand separately."""
     context = _funding_context(strategy, snapshot, ownership, marks, rules, inputs)
+    capacity_marks = marks if capacity_marks is None else capacity_marks
+    for uid, quantity in strategy.target.quantities.items():
+        if quantity > 0:
+            finite_decimal(capacity_marks.get(uid), 'security capacity mark', positive=True)
     ownership = {path: dict(values) for path, values in ownership.items()}
     quantities = dict(snapshot.quantities)
     money = dict(limits)
-    demands = funding_candidates(strategy, ownership, quantities, marks, rules, money)
+    demands = funding_candidates(strategy, ownership, quantities, capacity_marks, rules, money)
     principal, fees = _purchase_debits(context, demands)
     context = _Context(context.fx, inputs, context.cash, context.reserves, context.headroom,
                        context.prices, rules, CashPools(_combined(principal, fees)))
@@ -489,7 +494,8 @@ def build_funding_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot, owne
     evaluation = ((), context.cash, CashPools({}), CashPools({}))
     if snapshot.limits_ready and not snapshot.active_orders:
         for demand in demands:
-            candidates = funding_candidates(strategy, ownership, quantities, marks, rules, money)
+            candidates = funding_candidates(
+                strategy, ownership, quantities, capacity_marks, rules, money)
             candidate = next((item for item in candidates if item.uid == demand.uid), None)
             if candidate is None:
                 continue
@@ -501,7 +507,8 @@ def build_funding_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot, owne
             for path, pieces in order.pieces.items():
                 ownership[path][order.uid] = exact_sum((
                     ownership[path].get(order.uid, ZERO), pieces))
-                money[path] = difference(money[path], exact_product(pieces, marks[order.uid]))
+                money[path] = difference(money[path], exact_product(
+                    pieces, capacity_marks[order.uid]))
             quantities[order.uid] = exact_sum((quantities.get(order.uid, ZERO),
                                                Decimal(order.lots * order.lot_size)))
     exchanges, projected, debits, fees = evaluation

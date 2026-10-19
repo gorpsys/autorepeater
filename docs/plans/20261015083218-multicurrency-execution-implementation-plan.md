@@ -1455,6 +1455,15 @@ Partial FILL останавливает проход. Исходные target/ru
 новые логи показывают monetary bounds по владельцу и remaining BUY/terminal reason.
 Причина отсутствия GOLD в фактическом live по-прежнему не доказана.
 
+Независимое ревью `07a03e3` обнаружило P1: fresh sizing ещё делил capacity
+на обновлённый mark и мог отправить два лота до отказа fixed-mark guard
+после FILL (900 при capacity 899). Исправление передаёт исходные marks
+в чистый funding planner для demands, каждого кандидата и расхода остатка
+по владельцам; свежие native цены и FX остаются отдельными денежными checks.
+RUB/CNY price decline и FX-only decline, лоты 1/10 и реальный дефицит 1e-80
+проверяются на границе submit. Partial-fill, permissions, money/lot caps,
+свежесть и денежные assertions E2E не ослабляются.
+
 Отдельный activation PR #43 (`28b0967`, 5.2.3) подготовлен поверх master,
 но не активирован этой реализацией. Последующий controlled CNY probe
 сравнит одну заявку на два лота с двумя заявками по одному лоту на двух

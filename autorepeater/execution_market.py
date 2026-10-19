@@ -290,7 +290,8 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
                for uid, rule in self.own.items()}
         return build_funding_plan(
             self.plan.strategy, replace(self.snapshot, fx_snapshot=self.fx),
-            self.ledger.ownership, marks, own, self.ledger.limits, inputs)
+            self.ledger.ownership, marks, own, self.ledger.limits, inputs,
+            capacity_marks=self.plan.marks)
 
     def _exchange(self, exchange):
         intent = OrderIntent(exchange.uid, exchange.side, exchange.lots,
