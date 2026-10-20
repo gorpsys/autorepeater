@@ -110,9 +110,30 @@ def test_expected_balance_components_keep_signed_fx_principal_and_single_fees():
     before = NativeState({}, {'rub': D(30000), 'cny': D(2000)}, {})
     trades = [TradeFact('fx', 'BUY', 1, 1000, 'rub', D(12000), D(10), 'cny'),
               TradeFact('bond', 'SELL', 67, 1, 'cny', D('67264.047'), D('33.6320235'), None)]
-    assert money_components(before, trades) == {
+    components = money_components(before, trades)
+    operations = {code: terms.pop('operations') for code, terms in components.items()}
+    assert components == {
         'rub': {'before': D(30000), 'security_principal': D(0), 'fx_quote': D(-12000),
-                'fx_base': D(0), 'commission': D(-10), 'expected': D(17990)},
+                'fx_base': D(0), 'commission': D(-10), 'expected': D(17990),
+                'raw_expected': D(17990), 'settlement_expected': D(17990),
+                'rounding_adjustment': D(0), 'settlement_status': 'supported',
+                'settlement_error': None},
         'cny': {'before': D(2000), 'security_principal': D('67264.047'),
                 'fx_quote': D(0), 'fx_base': D(1000), 'commission': D('-33.6320235'),
-                'expected': D('70230.4149765')}}
+                'expected': D('70230.4149765'), 'raw_expected': D('70230.4149765'),
+                'settlement_expected': D('70230.4149765'), 'rounding_adjustment': D(0),
+                'settlement_status': 'supported', 'settlement_error': None}}
+    assert operations == {
+        'rub': [{'sequence': 1, 'uid': 'fx', 'side': 'BUY', 'cny_bond': False,
+                 'before': D(30000), 'raw_delta': D(-12010), 'raw_expected': D(17990),
+                 'unrounded_settlement_expected': D(17990), 'settlement_expected': D(17990),
+                 'rounding_adjustment': D(0)}],
+        'cny': [{'sequence': 1, 'uid': 'fx', 'side': 'BUY', 'cny_bond': False,
+                 'before': D(2000), 'raw_delta': D(1000), 'raw_expected': D(3000),
+                 'unrounded_settlement_expected': D(3000), 'settlement_expected': D(3000),
+                 'rounding_adjustment': D(0)},
+                {'sequence': 2, 'uid': 'bond', 'side': 'SELL', 'cny_bond': False,
+                 'before': D(3000), 'raw_delta': D('67230.4149765'),
+                 'raw_expected': D('70230.4149765'),
+                 'unrounded_settlement_expected': D('70230.4149765'),
+                 'settlement_expected': D('70230.4149765'), 'rounding_adjustment': D(0)}]}

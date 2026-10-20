@@ -734,11 +734,11 @@ def test_currency_dump_keeps_native_money_and_commissions(offline_live, tmp_path
 
 
 @pytest.mark.parametrize('snapshot_fails', [False, True])
+@pytest.mark.parametrize('fee_adjustment', [D('.000001'), D('.000000750')])
 def test_failed_money_check_keeps_order_fields_and_poll_deltas(
-        offline_live, tmp_path, monkeypatch, snapshot_fails):
-    """One micro-CNY must still fail while retaining the already-read monetary evidence."""
+        offline_live, tmp_path, monkeypatch, snapshot_fails, fee_adjustment):
+    """Cash mismatch or unsupported precision retains all already-read evidence."""
     live, broker = offline_live
-    session = live[0]
     elapsed = [0]
 
     def sleep(seconds):
@@ -751,14 +751,15 @@ def test_failed_money_check_keeps_order_fields_and_poll_deltas(
         if state.instrument_uid == 'C':
             fee = state.executed_commission
             return replace(state, executed_commission=money(
-                'cny', D(fee.units) + D(fee.nano) / 10**9 + D('.000001')),
+                'cny', D(fee.units) + D(fee.nano) / 10**9 + fee_adjustment),
                 executed_order_price=money('cny', D('1005.699000001')))
         return state
 
-    monkeypatch.setattr(session, 'monotonic', lambda: elapsed[0])
-    monkeypatch.setattr(session, 'sleep', sleep)
+    monkeypatch.setattr(live[0], 'monotonic', lambda: elapsed[0])
+    monkeypatch.setattr(live[0], 'sleep', sleep)
     broker.client.orders.get_order_state.side_effect = order_state
     with pytest.raises(SandboxFailure, match=(
+            '^unsupported sandbox CNY bond precision$' if fee_adjustment == D('.000000750') else
             '^native money disagrees with order totals and single commissions$')):
         scenarios.test_existing_cny_before_lot_rounding(live, tmp_path, monkeypatch, 'partial')
     assert elapsed == [30]
@@ -767,10 +768,10 @@ def test_failed_money_check_keeps_order_fields_and_poll_deltas(
     broker.client.orders.get_order_price.assert_not_called()
     broker.client.operations.get_operations.assert_not_called()
     if snapshot_fails:
-        monkeypatch.setattr(session, 'diagnostic', create_autospec(
-            session.diagnostic, spec_set=True, side_effect=RuntimeError('secret SDK payload')))
+        monkeypatch.setattr(live[0], 'diagnostic', create_autospec(
+            live[0].diagnostic, spec_set=True, side_effect=RuntimeError('secret SDK payload')))
     path = tmp_path / 'failed-money.json'
-    write_failure_dump(session, path)
+    write_failure_dump(live[0], path)
     result = json.loads(path.read_text())
     assert set(result) == {'time', 'scenario', 'configs', 'quotes', 'events', 'accounts'}
     assert 'secret SDK payload' not in path.read_text()
@@ -780,7 +781,7 @@ def test_failed_money_check_keeps_order_fields_and_poll_deltas(
     for event in orders:
         _assert_order_money(event, broker, order_state(order_id=event['order_id']))
     assert {event['trade']['base_currency'] for event in orders} == {None, 'cny'}
-    _assert_settlement_polls(events, orders)
+    _assert_settlement_polls(events, orders, fee_adjustment, fee_adjustment == D('.000000750'))
     assert not any(event['event'] == 'currency_app_pass' for event in events)
     assert broker.client.orders.get_order_state.call_count == 3
 
@@ -803,7 +804,7 @@ def _assert_order_money(event, broker, state):
     assert D(event['trade']['commission']) == D(event['executed_commission']['normalized']['value'])
 
 
-def _assert_settlement_polls(events, orders):
+def _assert_settlement_polls(events, orders, residual, unsupported):
     """The original bounded polling preserves every observation before the monetary failure."""
     polls = [event for event in events if event['event'] == 'currency_settlement_poll']
     assert [event['poll'] for event in polls] == list(range(1, 17))
@@ -811,11 +812,29 @@ def _assert_settlement_polls(events, orders):
         assert event['account_id'] == orders[0]['account_id']
         assert datetime.fromisoformat(event['observed_utc']).tzinfo is not None
         assert all(D(value) == 0 for value in event['blocked'].values())
-        cny = {key: D(value) for key, value in event['money']['cny'].items()}
-        assert cny['residual'] == D('.000001')
+        cny = {key: D(event['money']['cny'][key]) for key in (
+            'before', 'expected', 'raw_expected', 'actual', 'expected_delta', 'actual_delta',
+            'residual', 'raw_residual')}
+        assert cny['residual'] == cny['raw_residual'] == residual
+        assert cny['expected'] == cny['raw_expected']
         assert cny['actual'] - cny['expected'] == cny['residual']
         assert cny['expected_delta'] == cny['expected'] - cny['before']
         assert cny['actual_delta'] == cny['actual'] - cny['before']
+        facts = event['money']['cny']
+        terms = event['components']['cny']
+        if unsupported:
+            assert facts['settlement_status'] == terms['settlement_status'] == 'unsupported'
+            assert (facts['settlement_error'] == terms['settlement_error']
+                    == 'unsupported sandbox CNY bond precision')
+            assert (facts['settlement_expected'] is facts['rounding_adjustment']
+                    is facts['settlement_residual'] is None)
+            assert terms['settlement_expected'] is None
+        else:
+            assert facts['settlement_status'] == terms['settlement_status'] == 'supported'
+            assert facts['settlement_error'] is terms['settlement_error'] is None
+            assert D(facts['settlement_expected']) == cny['expected']
+            assert D(facts['rounding_adjustment']) == 0
+            assert D(facts['settlement_residual']) == residual
         assert D(event['money']['rub']['residual']) == 0
     assert events.index(orders[-1]) < events.index(polls[0])
 

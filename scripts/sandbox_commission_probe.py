@@ -16,7 +16,7 @@ class CommissionObservation:
 
 
 @dataclass(frozen=True)
-class CommissionSample:
+class CommissionSample:  # pylint: disable=too-many-instance-attributes
     """One checked FILL and its account delta; missing history remains explicitly unknown."""
     lots: int
     principal: D
@@ -25,6 +25,12 @@ class CommissionSample:
     history_principal: D | None
     history_fee: D | None
     observation: CommissionObservation | None = None
+    side: str = 'BUY'
+
+    @property
+    def cash_principal(self):
+        """Cash debit is negative for a sale; raw principal always stays positive."""
+        return self.principal if self.side == 'BUY' else -self.principal
 
     @property
     def before_balance(self):
@@ -49,11 +55,11 @@ def _rounding_modes(values, observed):
 
 
 def _balance_models(samples):
-    """Contrast rounding each fee with rounding the cumulative exact account balance."""
+    """Contrast per-fee, sequential cash and cumulative display-only hypotheses."""
     if any(item.before_balance is None or item.after_balance is None for item in samples):
         return []
     result = []
-    for model in ('per-operation-fee', 'display-final-balance'):
+    for model in ('per-operation-fee', 'per-operation-balance', 'display-final-balance'):
         for mode in (ROUND_DOWN, ROUND_HALF_EVEN, ROUND_HALF_UP):
             predicted = []
             balance = samples[0].before_balance
@@ -62,8 +68,10 @@ def _balance_models(samples):
                     balance = item.before_balance
                 fee = (item.reported_fee.quantize(MICRO, rounding=mode)
                        if model == 'per-operation-fee' else item.reported_fee)
-                balance -= item.principal + fee
+                balance -= item.cash_principal + fee
                 predicted.append(balance.quantize(MICRO, rounding=mode))
+                if model == 'per-operation-balance':
+                    balance = predicted[-1]
             residuals = tuple(item.after_balance - value
                               for item, value in zip(samples, predicted))
             result.append({'model': model, 'rounding': mode,
@@ -87,14 +95,17 @@ def _comparison_controls(samples):
 
 def compare_commissions(samples: tuple[CommissionSample, ...]) -> dict:
     """Report tested numeric fits and unresolved alternatives, never a ledger-contract verdict."""
-    if len(samples) != 3 or tuple(item.lots for item in samples) != (2, 1, 1):
+    if (len(samples) != 3 or tuple(item.lots for item in samples) != (2, 1, 1)
+            or len({item.side for item in samples}) != 1
+            or any(item.side not in ('BUY', 'SELL') for item in samples)):
         raise ValueError('invalid commission probe design')
-    charged = tuple(item.debit - item.principal for item in samples)
+    charged = tuple(item.debit - item.cash_principal for item in samples)
     reported = tuple(item.reported_fee for item in samples)
     history = tuple(item.history_fee for item in samples)
-    residuals = tuple(item.debit - item.principal - item.reported_fee for item in samples)
+    residuals = tuple(item.debit - item.cash_principal - item.reported_fee for item in samples)
     history_residuals = tuple(None if item.history_principal is None or item.history_fee is None
-                              else item.debit - item.history_principal - item.history_fee
+                              else item.debit - (item.history_principal if item.side == 'BUY'
+                                                 else -item.history_principal) - item.history_fee
                               for item in samples)
     history_modes = _rounding_modes(reported, history)
     comparable = samples[0].principal == samples[1].principal + samples[2].principal
@@ -111,12 +122,30 @@ def compare_commissions(samples: tuple[CommissionSample, ...]) -> dict:
                       and controls['normalized_raw_fees_match']
                       and balances_match and history_modes)
     models = _balance_models(samples)
+    cash_controls = {
+        'principal_sum_matches': comparable,
+        'raw_fee_sum_matches': reported[0] == reported[1] + reported[2],
+        'balances_match': balances_match,
+        'principal_exact_micro': all(item.principal % MICRO == 0 for item in samples),
+        'combined_fee_exact_micro': reported[0] % MICRO == 0,
+        'single_fees_half_micro': all(value % MICRO == MICRO / 2 for value in reported[1:]),
+    }
+    settlement_verdict = 'inconclusive'
+    if (all(cash_controls.values())
+            and any(item['matches'] and item['model'] != 'display-final-balance' for item in models)
+            and not any(item['matches'] and item['model'] == 'display-final-balance'
+                        for item in models)):
+        settlement_verdict = 'per-operation-rounding-supported'
     return {'verdict': 'inconclusive', 'comparable_principal': comparable,
             'history_principal_matches': principal_matches,
             'reported_residuals': residuals, 'history_residuals': history_residuals,
             'history_rounding_modes': history_modes,
             **controls, 'controlled_inputs': controlled,
             'models': models,
+            'settlement_verdict': settlement_verdict, 'settlement_controls': cash_controls,
+            'split_minus_combined': (None if samples[0].after_balance is None
+                                     or samples[2].after_balance is None else
+                                     samples[2].after_balance - samples[0].after_balance),
             'consistent_models': [item for item in models if controlled and item['matches']],
             'unresolved_alternatives': ['raw_fee_may_not_be_authoritative',
                                         'other_ledger_precision_or_fee_rules'],

@@ -102,6 +102,10 @@ def test_diagnostic_money_deltas_preserve_exact_native_residual(side, original, 
         'expected_delta': expected[code] - original.get(code, D(0)),
         'actual_delta': actual[code] - original.get(code, D(0)),
         'residual': actual[code] - expected[code],
+        'raw_expected': expected[code], 'raw_residual': actual[code] - expected[code],
+        'settlement_expected': expected[code], 'rounding_adjustment': D(0),
+        'settlement_residual': actual[code] - expected[code],
+        'settlement_status': 'supported', 'settlement_error': None,
     } for code in ('rub', 'cny')}
     assert before.money == original and after.money == actual
 

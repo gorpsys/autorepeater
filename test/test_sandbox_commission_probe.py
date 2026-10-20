@@ -159,7 +159,8 @@ def test_overlapping_models_and_unexplained_balances_remain_inconclusive():
         CommissionObservation(D(before), D(after), (D(100),)))
         for lots, before, after in ((2, 1000, 800), (1, 1000, 900), (1, 900, 800)))
     result = compare_commissions(values)
-    assert len({item['model'] for item in result['models'] if item['matches']}) == 2
+    assert {item['model'] for item in result['models'] if item['matches']} == {
+        'per-operation-fee', 'per-operation-balance', 'display-final-balance'}
     assert result['verdict'] == 'inconclusive'
     values = list(actual_samples())
     values[2] = replace(values[2], observation=replace(
@@ -167,3 +168,53 @@ def test_overlapping_models_and_unexplained_balances_remain_inconclusive():
                         debit=values[2].debit + D('.01'))
     result = compare_commissions(tuple(values))
     assert not result['consistent_models']
+
+
+def test_sell_pair_identifies_per_operation_cash_without_claiming_fee_contract():
+    """The measured SELL pair rules out cumulative rounding, not internal fee rules."""
+    values = tuple(CommissionSample(
+        lots, D(principal), D(fee), D(before) - D(after), None, None,
+        CommissionObservation(D(before), D(after), ()), side='SELL')
+        for lots, principal, fee, before, after in (
+            (2, '2045.582', '1.003801', '2949.630308', '4994.208507'),
+            (1, '1022.791', '.501900500', '2949.630308', '3971.919408'),
+            (1, '1022.791', '.501900500', '3971.919408', '4994.208508')))
+    result = compare_commissions(values)
+    assert result['verdict'] == 'inconclusive'
+    assert not result['controlled_inputs']
+    assert result['settlement_verdict'] == 'per-operation-rounding-supported'
+    assert result['split_minus_combined'] == D('.000001')
+    assert not any(model['matches'] for model in result['models']
+                   if model['model'] == 'display-final-balance')
+    assert any(model['matches'] and model['rounding'] == 'ROUND_HALF_UP'
+               for model in result['models'] if model['model'] == 'per-operation-balance')
+
+
+def test_exact_micro_fees_do_not_become_settlement_success_with_missing_fills():
+    """Exact fees without fills are still inconclusive in both verdicts."""
+    values = tuple(CommissionSample(
+        lots, D(100) * lots, D('.1') * lots, D('100.1') * lots, None, None,
+        CommissionObservation(D(before), D(after), ()))
+        for lots, before, after in ((2, '1000', '799.8'), (1, '1000', '899.9'),
+                                    (1, '899.9', '799.8')))
+    result = compare_commissions(values)
+    assert result['verdict'] == result['settlement_verdict'] == 'inconclusive'
+
+
+def test_fee_model_does_not_also_round_the_running_balance():
+    """Fractional principals keep fee rounding distinct from cash rounding."""
+    values = tuple(CommissionSample(
+        lots, D(principal), D(0), D(before) - D(after), None, None,
+        CommissionObservation(D(before), D(after), ()))
+        for lots, principal, before, after in (
+            (2, '.0000006', '10', '9.999999'),
+            (1, '.0000003', '10', '10'),
+            (1, '.0000003', '10', '9.999999')))
+    models = compare_commissions(values)['models']
+    fee = next(item for item in models
+               if item['model'] == 'per-operation-fee' and item['rounding'] == 'ROUND_HALF_UP')
+    cash = next(item for item in models
+                if item['model'] == 'per-operation-balance'
+                and item['rounding'] == 'ROUND_HALF_UP')
+    assert fee['predicted_after'] == (D('9.999999'), D(10), D('9.999999'))
+    assert cash['predicted_after'] == (D('9.999999'), D(10), D(10))

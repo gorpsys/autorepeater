@@ -257,7 +257,9 @@ def _trade_facts(session: SandboxSession, dst: str, instruments: CurrencyCatalog
                 'sandbox total/commission settlement units mismatch')
         trades.append(TradeFact(item.uid, side, broker.lots_executed, item.lot, total.currency,
                                 total.amount, fee.amount,
-                                'cny' if item.uid == instruments.currency.uid else None))
+                                'cny' if item.uid == instruments.currency.uid else None,
+                                cny_bond=(item.instrument_type == InstrumentType.BOND
+                                          and item.currency.lower() == 'cny')))
         session.records.append({
             'event': 'currency_order_money', 'account_id': dst,
             'request_id': response['request_id'], 'order_id': broker.order_id,

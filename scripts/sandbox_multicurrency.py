@@ -1,6 +1,6 @@
 """Independent RUB/CNY sandbox oracles; account deltas are never runtime attribution."""
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 
 from autorepeater.cash_facts import SecurityQuote, SecurityQuoteUnit
 from scripts.sandbox_lifecycle import SandboxFailure
@@ -33,6 +33,7 @@ class TradeFact:  # pylint: disable=too-many-instance-attributes
     total: D
     commission: D
     base_currency: str | None
+    cny_bond: bool = False
 
 
 def native_midpoint(quote: SecurityQuote) -> D:
@@ -80,67 +81,113 @@ def required_fx_lots(purchase: D, reserve: D, available: D, lot: int, *,
         rounding=ROUND_CEILING))
 
 
-def money_components(before: NativeState, trades: list[TradeFact]) -> dict[str, dict[str, D]]:
-    """Signed principal/FX/fee terms explain the existing oracle without rounding."""
+def _settlement_step(balance: D | None, delta: D,
+                     trade: TradeFact) -> tuple[D | None, D | None, str | None]:
+    """Retain raw evidence when the measured CNY model cannot predict settlement."""
+    if balance is None:
+        return None, None, None
+    unrounded = balance + delta
+    if not trade.cny_bond:
+        return unrounded, unrounded, None
+    # Observations cover micro principals/cash and micro or half-micro fees.
+    if not (balance.is_finite() and balance % D('.000001') == 0
+            and trade.total % D('.000001') == 0
+            and trade.commission % D('.000001') in (D(0), D('.0000005'))):
+        return unrounded, None, 'unsupported sandbox CNY bond precision'
+    if unrounded < 0:
+        return unrounded, None, 'CNY bond exceeds owned cash'
+    return unrounded, unrounded.quantize(D('.000001'), rounding=ROUND_HALF_UP), None
+
+
+def money_components(before: NativeState, trades: list[TradeFact]) -> dict[str, dict]:
+    """Model observed Sandbox CNY bonds only, not a general broker settlement contract."""
+    fees_by_currency(trades)
     codes = set(before.money) | {trade.currency for trade in trades} | {
         trade.base_currency for trade in trades if trade.base_currency is not None}
     result = {code: {'before': before.money.get(code, D(0)), 'security_principal': D(0),
-                     'fx_quote': D(0), 'fx_base': D(0), 'commission': D(0)} for code in codes}
-    for trade in trades:
+                     'fx_quote': D(0), 'fx_base': D(0), 'commission': D(0),
+                     'raw_expected': before.money.get(code, D(0)),
+                     'settlement_expected': before.money.get(code, D(0)),
+                     'settlement_error': None,
+                     'rounding_adjustment': D(0), 'operations': []} for code in codes}
+    for sequence, trade in enumerate(trades, 1):
+        require(trade.side in ('BUY', 'SELL')
+                and all(isinstance(value, int) and not isinstance(value, bool) and value > 0
+                        for value in (trade.lots, trade.lot_size))
+                and trade.total.is_finite() and trade.total > 0
+                and isinstance(trade.cny_bond, bool), 'invalid trade facts')
+        require(not trade.cny_bond or (trade.currency == 'cny' and trade.base_currency is None),
+                'invalid CNY bond identity')
         sign = D(1) if trade.side == 'BUY' else D(-1)
         key = 'security_principal' if trade.base_currency is None else 'fx_quote'
         result[trade.currency][key] -= sign * trade.total
         result[trade.currency]['commission'] -= trade.commission
+        changes = {trade.currency: -sign * trade.total - trade.commission}
         if trade.base_currency is not None:
+            require(trade.base_currency != trade.currency, 'invalid FX money identity')
             result[trade.base_currency]['fx_base'] += sign * D(trade.lots * trade.lot_size)
+            changes[trade.base_currency] = sign * D(trade.lots * trade.lot_size)
+        for code, delta in changes.items():
+            terms = result[code]
+            unrounded, settled, error = _settlement_step(terms['settlement_expected'], delta, trade)
+            terms['settlement_error'] = terms['settlement_error'] or error
+            terms['raw_expected'] += delta
+            terms['operations'].append({
+                'sequence': sequence, 'uid': trade.uid, 'side': trade.side,
+                'cny_bond': trade.cny_bond, 'before': terms['settlement_expected'],
+                'raw_delta': delta, 'raw_expected': terms['raw_expected'],
+                'unrounded_settlement_expected': unrounded, 'settlement_expected': settled,
+                'rounding_adjustment': None if settled is None else settled - unrounded})
+            terms['settlement_expected'] = settled
     for terms in result.values():
-        terms['expected'] = sum(terms.values(), D(0))
+        terms['expected'] = terms['raw_expected']
+        terms['settlement_status'] = ('unsupported' if terms['settlement_expected'] is None
+                                      else 'supported')
+        terms['rounding_adjustment'] = (None if terms['settlement_expected'] is None else
+                                        terms['settlement_expected'] - terms['raw_expected'])
     return result
 
 
 def money_deltas(before: NativeState, after: NativeState,
-                 trades: list[TradeFact]) -> dict[str, dict[str, D]]:
-    """Observe the oracle's native deltas without rounding or changing its assertions."""
-    expected = dict(before.money)
-    for trade in trades:
-        sign = D(1) if trade.side == 'BUY' else D(-1)
-        if trade.base_currency is not None:
-            expected[trade.base_currency] = expected.get(trade.base_currency, D(0)) + sign * D(
-                trade.lots * trade.lot_size)
-        expected[trade.currency] = (expected.get(trade.currency, D(0))
-                                    - sign * trade.total - trade.commission)
-    return {code: {
-        'before': before.money.get(code, D(0)), 'expected': expected.get(code, D(0)),
-        'actual': after.money.get(code, D(0)),
-        'expected_delta': expected.get(code, D(0)) - before.money.get(code, D(0)),
-        'actual_delta': after.money.get(code, D(0)) - before.money.get(code, D(0)),
-        'residual': after.money.get(code, D(0)) - expected.get(code, D(0)),
-    } for code in sorted(set(before.money) | set(expected) | set(after.money))}
+                 trades: list[TradeFact]) -> dict[str, dict]:
+    """Preserve raw residuals and expose the separate sequential settlement model."""
+    components = money_components(before, trades)
+    result = {}
+    for code in sorted(set(components) | set(after.money)):
+        terms = components.get(code, {})
+        raw = terms.get('raw_expected', D(0))
+        settled = terms.get('settlement_expected', D(0))
+        initial, actual = before.money.get(code, D(0)), after.money.get(code, D(0))
+        result[code] = {
+            'before': initial, 'expected': raw, 'raw_expected': raw, 'actual': actual,
+            'expected_delta': raw - initial, 'actual_delta': actual - initial,
+            'residual': actual - raw, 'raw_residual': actual - raw,
+            'settlement_expected': settled,
+            'rounding_adjustment': terms.get('rounding_adjustment', D(0)),
+            'settlement_residual': None if settled is None else actual - settled,
+            'settlement_status': terms.get('settlement_status', 'supported'),
+            'settlement_error': terms.get('settlement_error'),
+        }
+    return result
 
 
 def reconcile(before: NativeState, after: NativeState, trades: list[TradeFact]) -> None:
     """Sandbox conservation at nano precision; no slippage comparison with estimates."""
-    quantities, cash = dict(before.quantities), dict(before.money)
+    components = money_components(before, trades)
+    for terms in components.values():
+        require(terms['settlement_expected'] is not None, terms['settlement_error'])
+    quantities = dict(before.quantities)
     for trade in trades:
-        require(trade.side in ('BUY', 'SELL')
-                and all(isinstance(value, int) and not isinstance(value, bool) and value > 0
-                        for value in (trade.lots, trade.lot_size))
-                and trade.total.is_finite() and trade.total > 0, 'invalid trade facts')
         sign = D(1) if trade.side == 'BUY' else D(-1)
         pieces = D(trade.lots * trade.lot_size)
         if trade.base_currency is None:
             quantities[trade.uid] = quantities.get(trade.uid, D(0)) + sign * pieces
-        else:
-            require(trade.base_currency != trade.currency, 'invalid FX money identity')
-            cash[trade.base_currency] = cash.get(trade.base_currency, D(0)) + sign * pieces
-        cash[trade.currency] = (cash.get(trade.currency, D(0))
-                                - sign * trade.total - trade.commission)
-    fees_by_currency(trades)
     require(all(value >= 0 for value in after.quantities.values())
             and {uid: value for uid, value in quantities.items() if value} == after.quantities,
             'security quantities disagree with checked fills')
     require(all(value == 0 for value in after.blocked.values()), 'native money remains blocked')
-    for code in set(cash) | set(after.money):
+    for code in set(components) | set(after.money):
         require(after.money.get(code, D(0)) >= 0 and abs(
-            cash.get(code, D(0)) - after.money.get(code, D(0))) <= D('.000000001'),
+            components.get(code, {}).get('settlement_expected', D(0))
+            - after.money.get(code, D(0))) <= D('.000000001'),
             'native money disagrees with order totals and single commissions')
