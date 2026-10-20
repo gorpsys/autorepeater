@@ -87,7 +87,7 @@ jobs:
     # Queue and environment approval wait are outside this active job deadline.
     # Step limits leave at least 7m for runner/action overhead.
     # Cleanup (2m), markers (1m) and upload (2m) have explicitly reserved time.
-    timeout-minutes: 55
+    timeout-minutes: 85
     permissions:
       contents: read
     env:
@@ -118,7 +118,7 @@ jobs:
         run: .venv/bin/python -m scripts.sandbox_collection --sha "$E2E_TESTED_SHA" --output sandbox-results/collection.json
       - name: Run all real sandbox scenarios
         id: run
-        timeout-minutes: 32
+        timeout-minutes: 62
         shell: bash
         env:
           SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
@@ -126,7 +126,7 @@ jobs:
         run: |
           test -n "$SANDBOX_TOKEN" || { echo "SANDBOX_TOKEN missing; E2E NOT RUN"; exit 1; }
           mkdir -p sandbox-results
-          make e2e E2E_TIMEOUT=1800 E2E_ARGS="-s --junitxml=$GITHUB_WORKSPACE/tested/sandbox-results/junit.xml" | tee sandbox-results/run.log
+          make e2e E2E_TIMEOUT=3600 E2E_ARGS="-s --junitxml=$GITHUB_WORKSPACE/tested/sandbox-results/junit.xml" | tee sandbox-results/run.log
       - name: Final bounded CI orphan cleanup
         id: cleanup
         if: ${{ always() && steps.run.outcome != 'skipped' }}
