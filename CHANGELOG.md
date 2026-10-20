@@ -7,6 +7,11 @@
 
 ## Не выпущено
 
+## [5.2.4](https://github.com/gorpsys/autorepeater/compare/v5.2.3...v5.2.4) - 2026-10-20
+
+- Общий бюджет Sandbox E2E в GitHub увеличен до 60 минут для всех попыток;
+  лимиты шага и задания сохраняют резервы остановки, очистки и артефактов.
+
 ## [5.2.3](https://github.com/gorpsys/autorepeater/compare/v5.2.2...v5.2.3) - 2026-10-19
 
 - Ручной Sandbox E2E получает явный trusted выбор `retry-v2`/`retry-v3`;
