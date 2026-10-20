@@ -15,6 +15,7 @@ from scripts.sandbox_lifecycle import (
 )
 from scripts.sandbox_support import OrderJournal, SandboxSession, write_failure_dump
 from scripts.sandbox_retry_report import AttemptRecorder, attempt_recorder
+from scripts.sandbox_financial import observe_finances
 
 
 class SandboxInterrupted(BaseException):
@@ -166,7 +167,8 @@ def live(request: pytest.FixtureRequest, sandbox: SandboxSession
     if recorder is not None:
         recorder.entered.append(request.node.nodeid)
     try:
-        yield sandbox, journal
+        with observe_finances(sandbox):
+            yield sandbox, journal
     finally:
         sandbox.records.extend(journal.events)
         report = getattr(request.node, 'report_call', None)

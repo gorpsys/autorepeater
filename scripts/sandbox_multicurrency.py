@@ -80,6 +80,24 @@ def required_fx_lots(purchase: D, reserve: D, available: D, lot: int, *,
         rounding=ROUND_CEILING))
 
 
+def money_components(before: NativeState, trades: list[TradeFact]) -> dict[str, dict[str, D]]:
+    """Signed principal/FX/fee terms explain the existing oracle without rounding."""
+    codes = set(before.money) | {trade.currency for trade in trades} | {
+        trade.base_currency for trade in trades if trade.base_currency is not None}
+    result = {code: {'before': before.money.get(code, D(0)), 'security_principal': D(0),
+                     'fx_quote': D(0), 'fx_base': D(0), 'commission': D(0)} for code in codes}
+    for trade in trades:
+        sign = D(1) if trade.side == 'BUY' else D(-1)
+        key = 'security_principal' if trade.base_currency is None else 'fx_quote'
+        result[trade.currency][key] -= sign * trade.total
+        result[trade.currency]['commission'] -= trade.commission
+        if trade.base_currency is not None:
+            result[trade.base_currency]['fx_base'] += sign * D(trade.lots * trade.lot_size)
+    for terms in result.values():
+        terms['expected'] = sum(terms.values(), D(0))
+    return result
+
+
 def money_deltas(before: NativeState, after: NativeState,
                  trades: list[TradeFact]) -> dict[str, dict[str, D]]:
     """Observe the oracle's native deltas without rounding or changing its assertions."""
