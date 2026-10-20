@@ -1,7 +1,7 @@
 """RUB/CNY acceptance through the normal Runner on owned disposable sandbox accounts."""
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from decimal import Decimal as D, ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal as D, ROUND_FLOOR
 import json
 import logging
 from pathlib import Path
@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from t_tech.invest import (
-    InstrumentIdType, MoneyValue, OperationState, OperationType, OrderDirection,
+    InstrumentIdType, OperationState, OperationType, OrderDirection,
 )
 
 from autorepeater import reporting
@@ -608,12 +608,27 @@ def check_isolated_execution_money(result: CurrencyPass) -> None:
         require(debit <= initial, 'actual BUY consumed unproven isolated SELL proceeds')
 
 
-def _probe_history(session, dst, seen, bond, pieces):
+def _probe_setup_operation_ids(operations, setup_uid):
+    """Use the bounded full account history to link even late UID-less FX fees."""
+    if setup_uid is None:
+        return set()
+    buys = {item.id for item in operations if item.instrument_uid == setup_uid
+            and item.operation_type == OperationType.OPERATION_TYPE_BUY}
+    return buys | {item.id for item in operations
+                   if item.operation_type == OperationType.OPERATION_TYPE_BROKER_FEE
+                   and (item.instrument_uid == setup_uid
+                        or (not item.instrument_uid and item.parent_operation_id in buys))}
+
+
+def _probe_history(session, dst, seen, bond, pieces, *, setup_uid=None):
     """Each executed BUY/payment and fee ID is counted once on this disposable account."""
+    # pylint: disable=too-many-arguments,too-many-locals
     response = safe_call(session.client.operations.get_operations, account_id=dst)
     require(len(response.operations) <= 100, 'unexpected commission probe history size')
     require(len({operation.id for operation in response.operations}) == len(response.operations),
             'invalid or duplicate probe operation ID')
+    require(setup_uid != bond.uid, 'probe setup and bond identities overlap')
+    setup_ids = _probe_setup_operation_ids(response.operations, setup_uid)
     consumed, pending, facts, purchases, fees = set(), [], [], [], []
     quantity = 0
     for operation in response.operations:
@@ -622,7 +637,7 @@ def _probe_history(session, dst, seen, bond, pieces):
         require(isinstance(operation.state, OperationState)
                 and isinstance(operation.operation_type, OperationType),
                 'invalid probe history enum')
-        if (operation.id in seen or operation.operation_type not in (
+        if (operation.id in seen or operation.id in setup_ids or operation.operation_type not in (
                     OperationType.OPERATION_TYPE_BUY, OperationType.OPERATION_TYPE_BROKER_FEE)):
             continue
         facts.append({'id': safe_symbol(operation.id, limit=128),
@@ -649,11 +664,15 @@ def _probe_history(session, dst, seen, bond, pieces):
             quantity += operation.quantity
             purchases.append(-payment.amount)
         else:
+            require(operation.instrument_uid in ('', bond.uid),
+                    'invalid commission probe history fee identity')
             fees.append(-payment.amount)
     complete = quantity == pieces and bool(purchases) and bool(fees) and not pending
     session.records.append({'event': 'cny_probe_history', 'account_id': dst,
                             'observed_utc': datetime.now(timezone.utc).isoformat(),
                             'complete': complete, 'operations': facts, 'pending_ids': pending,
+                            'excluded_setup_ids': sorted(safe_symbol(item, limit=128)
+                                                         for item in setup_ids),
                             'observed_principal': sum(purchases, D(0)),
                             'observed_fee': sum(fees, D(0))})
     return consumed, sum(purchases, D(0)) if quantity == pieces and purchases else None, (
@@ -705,7 +724,7 @@ def _probe_step(session, dst, instruments, lots, seen):
     deadline = session.monotonic() + 30
     while True:
         history = _probe_history(session, dst, seen, instruments.bond,
-                                 D(lots * instruments.bond.lot))
+                                 D(lots * instruments.bond.lot), setup_uid=instruments.currency.uid)
         after = native_state(session, dst)
         if history[2] is not None or session.monotonic() >= deadline:
             break
@@ -726,27 +745,46 @@ def _probe_step(session, dst, instruments, lots, seen):
                                 before.money['cny'], after.money['cny'], fill_prices)), history[0]
 
 
-def _fund_cny_probe(session, scenario, funding):
-    """Equal explicit native pay-ins on empty accounts with verified run ownership."""
+def _fund_cny_probe(session, scenario, instruments, fx_lots):
+    """RUB-only funding and checked FX settlement precede all probe measurements."""
     dst = create_account(session, scenario, 'dst')
     empty = native_state(session, dst)
     require(not empty.quantities and all(value == 0 for value in empty.money.values()),
             'commission probe account is not empty')
-    result = safe_call(session.client.sandbox.sandbox_pay_in, account_id=dst,
-                       amount=MoneyValue(currency='cny', units=funding, nano=0))
-    require(MoneyAmount.from_units_nano(result.balance.currency, result.balance.units,
-                                        result.balance.nano) == MoneyAmount('cny', D(funding)),
-            'commission probe pay-in identity or amount mismatch')
-    session.wait_positions(dst, {}, minimum_cash={'cny': D(funding)})
-    funded = native_state(session, dst)
-    require(funded.money.get('cny') == funding and not funded.quantities
-            and funded.money.get('rub', D(0)) == 0, 'commission probe funding mismatch')
+    session.pay_in(dst, D(1000000))
+    session.wait_positions(dst, {}, minimum_cash={'rub': D(1000000)})
+    before = native_state(session, dst)
+    require(before.money.get('rub') == D(1000000) and before.money.get('cny', D(0)) == 0
+            and not before.quantities, 'commission probe RUB funding mismatch')
+    quote = session.data.valuation_sources.fx.get_quote(instruments.pair)
+    quote.validate_fresh(datetime.now(timezone.utc))
+    # This fixture buffer is a budget guard, not a broker commission/price contract.
+    reserved_cost = quote.lot_quote.quote_amount('BUY', fx_lots).amount * D('1.02')
+    rule = session.execution.get_trade_rules(
+        dst, [instruments.currency.uid])[instruments.currency.uid]
+    require(rule.currency.lower() == 'rub' and rule.lot == instruments.pair.lot_size
+            and rule.api_trade_available and rule.bestprice_order_available
+            and rule.buy_max_lots >= fx_lots, 'probe FX lacks own nonmargin trading permission')
+    require(reserved_cost <= min(before.money['rub'], rule.buy_money_amount),
+            'probe FX exceeds owned RUB budget with commission reserve')
+    start = len(session.records)
+    session.buy_setup(dst, instruments.currency, fx_lots, base_currency='cny')
+    response = [item for item in session.records[start:] if item['event'] == 'setup_response'][-1]
+    trade = _trade_facts(session, dst, instruments, [{
+        'request_id': response['request_id'], 'order_id': response['order_id'],
+        'uid': instruments.currency.uid, 'side': 'BUY', 'requested': fx_lots}])[0]
+    require(trade.total > 0 and trade.commission >= 0
+            and trade.total + trade.commission <= min(before.money['rub'], rule.buy_money_amount),
+            'probe FX receipt exceeds owned RUB budget or money cap')
+    funded = _settled_money(session, dst, before, [trade])
+    require(funded.money.get('cny') == D(fx_lots * instruments.pair.lot_size)
+            and not funded.quantities, 'commission probe FX funding mismatch')
     session.records.append({'event': 'cny_probe_funding', 'account_id': dst,
-                            'amount': amount_fact(result.balance)})
+                            'fx_lots': fx_lots, 'trade': asdict(trade), 'state': asdict(funded)})
     return dst
 
 
-def _verify_probe_sequence(session, accounts):
+def _verify_probe_sequence(session, accounts, baselines):
     """A retry, reused request or wrong account cannot masquerade as split execution."""
     steps = [item for item in session.records if item['event'] == 'cny_probe_step']
     require([item['lots'] for item in steps] == [2, 1, 1]
@@ -754,25 +792,44 @@ def _verify_probe_sequence(session, accounts):
             and len({item['request_id'] for item in steps}) == 3
             and len({(item['account_id'], item['order_id']) for item in steps}) == 3,
             'commission probe order sequence or identity mismatch')
+    require(all(step[phase]['money'].get('rub', D(0))
+                == baselines[step['account_id']].money.get('rub', D(0))
+                for step in steps for phase in ('before', 'after'))
+            and all(step['before']['money']['cny'] == baselines[step['account_id']].money['cny']
+                    for step in steps[:2]), 'commission probe baseline changed')
+
+
+def _probe_baselines(session, accounts, funding):
+    """Both preparations must finish before either account enters the comparison."""
+    baselines = {dst: native_state(session, dst) for dst in accounts}
+    require(all(state.money.get('cny') == funding and not state.quantities
+                for state in baselines.values()), 'commission probe unequal initial CNY balances')
+    for dst, state in baselines.items():
+        session.records.append({'event': 'cny_probe_baseline', 'account_id': dst,
+                                'observed_utc': datetime.now(timezone.utc).isoformat(),
+                                'state': asdict(state)})
+    return baselines
 
 
 def test_cny_commission_one_order_vs_split(live: LiveCase) -> None:
-    """Controlled diagnostic: equal native funding, two lots versus one plus one, no FX."""
+    """Controlled bond diagnostic after equal CNY acquisition through settled setup FX."""
     session, _ = live
     instruments = catalog(session)
     sources = session.data.valuation_sources
     session.market = ExecutionMarket(sources.fx, sources.securities,
                                      fx_pair_uids={'cny': instruments.pair.uid})
-    price = native_midpoint(sources.securities.get_security_quote(instruments.bond.uid))
-    funding = int((price * D(instruments.bond.lot * 4)).to_integral_value(rounding=ROUND_CEILING))
+    fx_lots = required_fx_lots(
+        native_midpoint(sources.securities.get_security_quote(instruments.bond.uid))
+        * D(instruments.bond.lot * 4), D(0), D(0), instruments.pair.lot_size)
     accounts = []
     try:
         for scenario in ('cnycombined', 'cnysplit'):
-            accounts.append(_fund_cny_probe(session, scenario, funding))
+            accounts.append(_fund_cny_probe(session, scenario, instruments, fx_lots))
+        baselines = _probe_baselines(session, accounts, D(fx_lots * instruments.pair.lot_size))
         combined, _ = _probe_step(session, accounts[0], instruments, 2, set())
         first, seen = _probe_step(session, accounts[1], instruments, 1, set())
         second, _ = _probe_step(session, accounts[1], instruments, 1, seen)
-        _verify_probe_sequence(session, accounts)
+        _verify_probe_sequence(session, accounts, baselines)
         require(all(native_state(session, dst).quantities == {
             instruments.bond.uid: D(2 * instruments.bond.lot)} for dst in accounts),
             'commission probe final quantities mismatch')

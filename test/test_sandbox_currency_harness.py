@@ -144,7 +144,7 @@ class OfflineBroker:
         """Strict native own limits; zero foreign cash produces zero initial bond cap."""
         account = self.accounts[request.account_id]
         item = self.metadata[request.instrument_id]
-        cost = {'R': D(3000), 'C': D(997), 'F': D(12000)}[item.uid]
+        cost = {'R': D(300), 'C': D(997), 'F': D(12)}[item.uid] * item.lot
         return sdk.GetMaxLotsResponse(currency=item.currency, buy_limits=sdk.BuyLimitsView(
             buy_money_amount=quotation(account['cash'][item.currency]),
             buy_max_lots=int(account['cash'][item.currency] / cost)),
@@ -159,7 +159,7 @@ class OfflineBroker:
         account = self.accounts[kwargs['account_id']]
         item, lots = self.metadata[kwargs['instrument_id']], kwargs['quantity']
         side = 1 if kwargs['direction'] == sdk.OrderDirection.ORDER_DIRECTION_BUY else -1
-        total = D(lots) * {'R': D(3000), 'C': D(997), 'F': D(12000)}[item.uid]
+        total = D(lots * item.lot) * {'R': D(300), 'C': D(997), 'F': D(12)}[item.uid]
         fee = total * D('.001')
         account['cash'][item.currency] -= side * total + fee
         if item.uid == 'F':
@@ -236,6 +236,16 @@ def _wire_commission_probe(broker, model):
         account, lots = kwargs['account_id'], kwargs['quantity']
         before = broker.accounts[account]['cash']['cny']
         response = original(**kwargs)
+        if kwargs['instrument_id'] == 'F':
+            pieces = lots * broker.metadata['F'].lot
+            for kind, payment, quantity in (
+                    (sdk.OperationType.OPERATION_TYPE_BUY, -12 * pieces, pieces),
+                    (sdk.OperationType.OPERATION_TYPE_BROKER_FEE, D('-.012') * pieces, 0)):
+                history.setdefault(account, []).append(sdk.Operation(
+                    id=response.order_id + '-' + kind.name, instrument_uid='F',
+                    operation_type=kind, state=sdk.OperationState.OPERATION_STATE_EXECUTED,
+                    quantity=quantity, payment=money('rub', payment)))
+            return response
         fee = D('.123456' if model == 'equal-fees' else '.1234565') * lots
         history_fee = fee.quantize(D('.000001'), rounding=ROUND_HALF_UP)
         total = D(response.total_order_amount.units) + D(response.total_order_amount.nano)/10**9
@@ -246,10 +256,11 @@ def _wire_commission_probe(broker, model):
         response = replace(response, executed_commission=money('cny', fee))
         broker.orders[response.order_id] = replace(
             broker.orders[response.order_id], executed_commission=response.executed_commission,
-            stages=[sdk.OrderStage(price=money('cny', 997), quantity=lots,
+            stages=[sdk.OrderStage(price=money('cny', 997),
+                                   quantity=lots * broker.metadata['C'].lot,
                                    trade_id=response.order_id + '-fill')])
         for kind, payment, quantity in (
-                (sdk.OperationType.OPERATION_TYPE_BUY, -total, lots),
+                (sdk.OperationType.OPERATION_TYPE_BUY, -total, lots * broker.metadata['C'].lot),
                 (sdk.OperationType.OPERATION_TYPE_BROKER_FEE, -history_fee, 0)):
             history.setdefault(account, []).append(sdk.Operation(
                 id=response.order_id + '-' + kind.name, instrument_uid='C',
@@ -289,14 +300,15 @@ def test_controlled_cny_probe_offline(offline_live, monkeypatch, model, verdict)
     steps = [item for item in live[0].records if item['event'] == 'cny_probe_step']
     assert [item['lots'] for item in steps] == [2, 1, 1]
     orders = broker.client.orders.post_order.call_args_list
-    assert [call.kwargs['quantity'] for call in orders] == [2, 1, 1]
-    assert orders[0].kwargs['account_id'] != orders[1].kwargs['account_id']
-    assert orders[1].kwargs['account_id'] == orders[2].kwargs['account_id']
+    assert [(call.kwargs['instrument_id'], call.kwargs['quantity'])
+            for call in orders] == [('F', 4), ('F', 4), ('C', 2), ('C', 1), ('C', 1)]
+    assert orders[0].kwargs['account_id'] == orders[2].kwargs['account_id']
+    assert orders[1].kwargs['account_id'] == orders[3].kwargs['account_id']
+    assert orders[3].kwargs['account_id'] == orders[4].kwargs['account_id']
     payins = broker.client.sandbox.sandbox_pay_in.call_args_list
     assert len(payins) == 2
     assert [(call.kwargs['amount'].currency, call.kwargs['amount'].units,
-             call.kwargs['amount'].nano) for call in payins] == [('cny', 3988, 0)] * 2
-    assert payins[0].kwargs['amount'].currency == 'cny'
+             call.kwargs['amount'].nano) for call in payins] == [('rub', 1000000, 0)] * 2
     assert not live[0].lifecycle.created and not broker.accounts
     assert broker.client.sandbox.close_sandbox_account.call_count == 2
     broker.client.orders.get_order_price.assert_not_called()
@@ -315,6 +327,212 @@ def test_controlled_cny_probe_offline(offline_live, monkeypatch, model, verdict)
         assert len(histories) == 3 and all(item['complete'] for item in histories)
         assert all(sum(op['type'] == 'OPERATION_TYPE_BROKER_FEE'
                        for op in item['operations']) == 1 for item in histories)
+
+
+@pytest.mark.parametrize('bond_lot,fx_lot,expected_lots', [(1, 1000, 4), (3, 100, 120)])
+def test_probe_fx_preparation_settles_before_equal_baselines(
+        offline_live, monkeypatch, bond_lot, fx_lot, expected_lots):
+    """Different FX prices and a late RUB debit cannot leak into bond measurements."""
+    # pylint: disable=too-many-locals
+    live, broker = offline_live
+    session = live[0]
+    broker.metadata['C'] = replace(broker.metadata['C'], lot=bond_lot)
+    broker.metadata['F'] = replace(broker.metadata['F'], lot=fx_lot)
+    currencies = broker.client.instruments.currencies.return_value
+    currencies.instruments[0] = replace(currencies.instruments[0], lot=fx_lot)
+    _wire_commission_probe(broker, 'cash-rounded')
+    submit = broker.client.orders.post_order.side_effect
+    pending, trace = {}, []
+    elapsed = [0]
+
+    def delayed_submit(**kwargs):
+        account = kwargs['account_id']
+        trace.append(('post', kwargs['instrument_id'], account, kwargs['quantity']))
+        if kwargs['instrument_id'] == 'C':
+            assert not pending
+            baselines = [item for item in session.records if item['event'] == 'cny_probe_baseline']
+            assert len(baselines) == 2
+        before_rub = broker.accounts[account]['cash']['rub']
+        response = submit(**kwargs)
+        if kwargs['instrument_id'] == 'F':
+            extra = D(account)  # Different actual RUB principals at each account's FX fill.
+            response = replace(response, total_order_amount=money(
+                'rub', D(response.total_order_amount.units) + extra))
+            broker.orders[response.order_id] = replace(
+                broker.orders[response.order_id], total_order_amount=response.total_order_amount)
+            pending[account] = broker.accounts[account]['cash']['rub'] - extra
+            broker.accounts[account]['cash']['rub'] = before_rub
+        return response
+
+    def settle(delay):
+        trace.append(('settle', tuple(pending)))
+        elapsed[0] += delay
+        for account, rub in pending.items():
+            broker.accounts[account]['cash']['rub'] = rub
+        pending.clear()
+
+    broker.client.orders.post_order.side_effect = delayed_submit
+    monkeypatch.setattr(session, 'monotonic', lambda: elapsed[0])
+    monkeypatch.setattr(session, 'sleep', settle)
+    scenarios.test_cny_commission_one_order_vs_split(live)
+    orders = broker.client.orders.post_order.call_args_list
+    assert [(call.kwargs['instrument_id'], call.kwargs['quantity']) for call in orders] == [
+        ('F', expected_lots), ('F', expected_lots), ('C', 2), ('C', 1), ('C', 1)]
+    assert all(call.kwargs['direction'] == sdk.OrderDirection.ORDER_DIRECTION_BUY
+               and call.kwargs['order_type'] == sdk.OrderType.ORDER_TYPE_BESTPRICE
+               and set(call.kwargs) == {
+                   'account_id', 'instrument_id', 'quantity', 'direction', 'order_type', 'order_id'}
+               for call in orders)
+    assert trace[:4] == [('post', 'F', '1', expected_lots), ('settle', ('1',)),
+                         ('post', 'F', '2', expected_lots), ('settle', ('2',))]
+    fx_states = [call.kwargs for call in broker.client.orders.get_order_state.call_args_list
+                 if broker.orders[call.kwargs['order_id']].instrument_uid == 'F']
+    assert fx_states == [
+        {'account_id': '1', 'order_id': 'broker0'},
+        {'account_id': '1', 'order_id': 'broker0'},
+        {'account_id': '2', 'order_id': 'broker1'},
+        {'account_id': '2', 'order_id': 'broker1'}]
+    baselines = [item['state'] for item in session.records if item['event'] == 'cny_probe_baseline']
+    assert [item['money']['cny'] for item in baselines] == [D(expected_lots * fx_lot)] * 2
+    assert baselines[0]['money']['rub'] != baselines[1]['money']['rub']
+    steps = [item for item in session.records if item['event'] == 'cny_probe_step']
+    for item in steps:
+        baseline = baselines[int(item['account_id']) - 1]
+        assert (item['before']['money']['rub'] == item['after']['money']['rub']
+                == baseline['money']['rub'])
+        assert item['history_principal'] == D(997 * item['lots'] * bond_lot)
+        assert item['history_fee'] == (D('.246913') if item['lots'] == 2 else D('.123457'))
+    assert not broker.accounts
+
+
+@pytest.mark.parametrize('bond_fee_currency,bond_fee_uid', [
+    ('cny', 'C'), ('rub', 'C'), ('rub', '')])
+def test_late_fx_history_is_excluded_by_identity_without_hiding_bond_fee(
+        offline_live, bond_fee_currency, bond_fee_uid):
+    """Late FX BUY and linked UID-less RUB fee are setup; a bond fee keeps its guards."""
+    # pylint: disable=protected-access
+    live, broker = offline_live
+    buy, fee = sdk.OperationType.OPERATION_TYPE_BUY, sdk.OperationType.OPERATION_TYPE_BROKER_FEE
+    executed, pending = (sdk.OperationState.OPERATION_STATE_EXECUTED,
+                         sdk.OperationState.OPERATION_STATE_PROGRESS)
+    operations = [sdk.Operation(
+        id=identity, instrument_uid=uid, parent_operation_id=parent,
+        operation_type=kind, state=state, quantity=quantity, quantity_rest=0,
+        payment=money(code, payment))
+        for identity, uid, parent, kind, state, quantity, code, payment in (
+            ('fx-buy', 'F', '', buy, executed, 4000, 'rub', -48000),
+            ('fx-fee', '', 'fx-buy', fee, pending, 0, 'rub', -48),
+            ('bond-buy', 'C', '', buy, executed, 1, 'cny', -997),
+            ('bond-fee', bond_fee_uid, 'bond-buy', fee, pending, 0,
+             bond_fee_currency, D('-.123457')))]
+    broker.client.operations.get_operations.return_value = sdk.OperationsResponse(
+        operations=operations)
+    args = (live[0], 'dst', set(), broker.metadata['C'], D(1))
+    seen, principal, commission = scenarios._probe_history(*args, setup_uid='F')
+    assert seen == {'bond-buy'} and principal == 997 and commission is None
+    assert live[0].records[-1]['pending_ids'] == ['bond-fee']
+    for index in (1, 3):
+        operations[index] = replace(operations[index], state=executed)
+    if bond_fee_currency == 'rub':
+        with pytest.raises(SandboxFailure, match='invalid commission probe operation payment'):
+            scenarios._probe_history(*args, setup_uid='F')
+    else:
+        seen, principal, commission = scenarios._probe_history(*args, setup_uid='F')
+        assert (seen == {'bond-buy', 'bond-fee'} and principal == 997
+                and commission == D('.123457'))
+        assert {item['id'] for item in live[0].records[-1]['operations']} == {
+            'bond-buy', 'bond-fee'}
+
+
+@pytest.mark.parametrize('fault', [
+    'pay-in', 'fx-rejected', 'fx-partial', 'own-money', 'own-lots', 'fx-budget', 'settlement'])
+def test_probe_partial_setup_failure_closes_both_owned_accounts(offline_live, monkeypatch, fault):
+    """An uncertain second preparation never starts bond orders or leaves an owned account."""
+    live, broker = offline_live
+    _wire_commission_probe(broker, 'cash-rounded')
+    elapsed = [0]
+    monkeypatch.setattr(live[0], 'monotonic', lambda: elapsed[0])
+    monkeypatch.setattr(live[0], 'sleep', lambda delay: elapsed.__setitem__(0, elapsed[0] + delay))
+    pay_in = broker.client.sandbox.sandbox_pay_in.side_effect
+    submit = broker.client.orders.post_order.side_effect
+    caps = broker.client.orders.get_max_lots.side_effect
+
+    def failing_pay_in(**kwargs):
+        assert kwargs['amount'].currency == 'rub'
+        if kwargs['account_id'] == '2' and fault == 'pay-in':
+            raise SandboxFailure('test second pay-in failure')
+        return pay_in(**kwargs)
+
+    def limits(**kwargs):
+        result = caps(**kwargs)
+        if kwargs['request'].account_id == '2':
+            result = replace(result, buy_limits=replace(
+                result.buy_limits, buy_money_amount=(quotation(48000) if fault == 'own-money'
+                                                     else result.buy_limits.buy_money_amount),
+                buy_max_lots=(0 if fault == 'own-lots' else result.buy_limits.buy_max_lots)))
+        return result
+
+    broker.client.sandbox.sandbox_pay_in.side_effect = failing_pay_in
+    broker.client.orders.post_order.side_effect = lambda **kw: _probe_setup_submit_failure(
+        broker, submit, fault, kw)
+    broker.client.orders.get_max_lots.side_effect = limits
+    with pytest.raises(SandboxFailure):
+        scenarios.test_cny_commission_one_order_vs_split(live)
+    assert all(call.kwargs['instrument_id'] == 'F'
+               for call in broker.client.orders.post_order.call_args_list)
+    if fault in ('own-money', 'own-lots', 'pay-in'):
+        assert broker.client.orders.post_order.call_count == 1
+    assert broker.client.sandbox.close_sandbox_account.call_count == 2
+    assert not broker.accounts and not live[0].lifecycle.created
+    assert live[0].records[-1]['event'] == 'cny_probe_cleanup'
+
+
+def _probe_setup_submit_failure(broker, submit, fault, kwargs):
+    """Inject only the second account's FX failure, retaining the first settled setup."""
+    if kwargs['account_id'] != '2':
+        return submit(**kwargs)
+    if fault == 'fx-rejected':
+        raise SandboxFailure('test second FX failure')
+    response = submit(**kwargs)
+    if fault == 'fx-partial':
+        return replace(response, lots_executed=1)
+    if fault == 'fx-budget':
+        broker.orders[response.order_id] = replace(
+            broker.orders[response.order_id], executed_commission=money('rub', 1000001))
+    if fault == 'settlement':
+        broker.accounts['2']['cash']['rub'] += D('.000000002')
+    return response
+
+
+@pytest.mark.parametrize('fault', ['unequal-cny', 'bond-rub-debit'])
+def test_probe_rejects_changed_control_balances(offline_live, fault):
+    """A mismatched initial CNY amount or even a nano RUB debit invalidates the probe."""
+    live, broker = offline_live
+    _wire_commission_probe(broker, 'cash-rounded')
+    original_state = scenarios.native_state
+    original_submit = broker.client.orders.post_order.side_effect
+
+    def state(session, account):
+        result = original_state(session, account)
+        if (fault == 'unequal-cny' and account == '1' and len(broker.orders) == 2):
+            return replace(result, money={**result.money, 'cny': result.money['cny'] + 1})
+        return result
+
+    def submit(**kwargs):
+        result = original_submit(**kwargs)
+        if fault == 'bond-rub-debit' and kwargs['instrument_id'] == 'C':
+            broker.accounts[kwargs['account_id']]['cash']['rub'] -= D('.000000001')
+        return result
+
+    broker.client.orders.post_order.side_effect = submit
+    with patch.object(scenarios, 'native_state', autospec=True, spec_set=True, side_effect=state):
+        with pytest.raises(SandboxFailure, match=(
+                'unequal initial CNY' if fault == 'unequal-cny' else 'cash changed outside')):
+            scenarios.test_cny_commission_one_order_vs_split(live)
+    if fault == 'unequal-cny':
+        assert all(call.kwargs['instrument_id'] == 'F'
+                   for call in broker.client.orders.post_order.call_args_list)
+    assert not broker.accounts and not live[0].lifecycle.created
 
 
 def test_pending_probe_fee_is_not_consumed_or_complete(offline_live):
@@ -387,6 +605,8 @@ def test_probe_checks_native_fill_prices_without_inventing_them(offline_live, fa
 
     def state(**kwargs):
         response = original(**kwargs)
+        if response.instrument_uid != 'C':
+            return response
         stages = response.stages
         if fault == 'missing':
             stages = []
@@ -426,10 +646,13 @@ def test_controlled_probe_rejects_bad_facts_and_always_closes_owned_accounts(off
     caps = broker.client.orders.get_max_lots.side_effect
     if fault == 'identity':
         broker.client.orders.get_order_state.side_effect = lambda **kw: replace(
-            state(**kw), instrument_uid='wrong')
+            state(**kw), instrument_uid=(
+                'wrong' if state(**kw).instrument_uid == 'C' else 'F'))
     if fault == 'over-budget':
         broker.client.orders.get_order_state.side_effect = lambda **kw: replace(
-            state(**kw), executed_commission=money('cny', 10000))
+            state(**kw), executed_commission=(money('cny', 10000)
+                                              if state(**kw).instrument_uid == 'C'
+                                              else state(**kw).executed_commission))
     if fault == 'duplicate-history':
         broker.client.operations.get_operations.side_effect = lambda **kw: replace(
             history(**kw), operations=history(**kw).operations + history(**kw).operations[:1])
@@ -439,7 +662,8 @@ def test_controlled_probe_rejects_bad_facts_and_always_closes_owned_accounts(off
                 replace(item, payment=money('rub', -997)) for item in history(**kw).operations])
     if fault == 'no-own-lots':
         broker.client.orders.get_max_lots.side_effect = lambda **kw: replace(
-            caps(**kw), buy_limits=replace(caps(**kw).buy_limits, buy_max_lots=0))
+            caps(**kw), buy_limits=replace(caps(**kw).buy_limits, buy_max_lots=(
+                0 if kw['request'].instrument_id == 'C' else caps(**kw).buy_limits.buy_max_lots)))
     if fault == 'cleanup':
         broker.client.sandbox.close_sandbox_account.side_effect = None
     with pytest.raises(SandboxFailure):
