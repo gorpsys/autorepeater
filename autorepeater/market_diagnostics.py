@@ -8,7 +8,7 @@ import re
 from time import monotonic
 
 from autorepeater.logging_config import logger
-from autorepeater.fx_data import ORDER_BOOK_MAX_AGE_SECONDS
+from autorepeater.fx_data import ORDER_BOOK_FUTURE_TOLERANCE, ORDER_BOOK_MAX_AGE_SECONDS
 
 _CONTEXT = ContextVar('market_diagnostic_context', default={})
 _TIMINGS = ContextVar('market_diagnostic_timings', default=None)
@@ -199,7 +199,7 @@ def warn_book_failure(expected_uid: str, received_uid: object,
     if market_category is None and observed_category is None:
         delta = observed - market_time
         age = delta.total_seconds()
-        if age < 0:
+        if delta < -ORDER_BOOK_FUTURE_TOLERANCE:
             reasons.append('market_time_future')
         elif age > ORDER_BOOK_MAX_AGE_SECONDS:
             reasons.append('market_time_stale')

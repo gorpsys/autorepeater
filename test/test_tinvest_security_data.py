@@ -73,6 +73,8 @@ def test_cash_iso_identity_does_not_use_pair_quote_currency(reads):
 
 
 @pytest.mark.parametrize('timestamp', [None, NOW - timedelta(seconds=90, microseconds=1),
+                                       NOW - timedelta(seconds=160),
+                                       NOW + timedelta(milliseconds=100, microseconds=1),
                                        NOW + timedelta(seconds=1), NOW.replace(tzinfo=None)])
 def test_stale_or_unknown_security_book_rejected(reads, timestamp):
     """Receipt time and last trade time cannot substitute for orderbook_ts."""
@@ -80,6 +82,32 @@ def test_stale_or_unknown_security_book_rejected(reads, timestamp):
     client.market_data.get_order_book.return_value.orderbook_ts = timestamp
     with pytest.raises(ValueError):
         data.get_security_quote('uid')
+
+
+@pytest.mark.parametrize('ahead', [timedelta(microseconds=1), timedelta(milliseconds=50),
+                                   timedelta(milliseconds=65), timedelta(microseconds=65426),
+                                   timedelta(milliseconds=100)])
+def test_security_accepts_bounded_market_clock_skew(reads, ahead):
+    """One hundred milliseconds inclusive is a market-clock allowance, not a new mark."""
+    client, data = reads
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW + ahead
+    assert data.get_security_quote('uid').estimate_per_piece().amount == D(90)
+    assert client.market_data.get_order_book.return_value.orderbook_ts == NOW + ahead
+    client.market_data.get_order_book.assert_called_once_with(instrument_id='uid', depth=1)
+    client.market_data.get_last_prices.assert_not_called()
+
+
+def test_security_samples_validation_clock_after_book_response(reads):
+    """RPC time cannot consume the permitted clock skew before receipt."""
+    client, _ = reads
+
+    def clock():
+        client.market_data.get_order_book.assert_called_once_with(instrument_id='uid', depth=1)
+        return NOW
+
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW
+    assert TInvestSecurityData(client, clock=clock).get_security_quote(
+        'uid').estimate_per_piece().amount == D(90)
 
 
 @pytest.mark.parametrize('field, value', [('bids', []), ('asks', []), ('instrument_uid', 'other')])

@@ -120,7 +120,9 @@ def test_sdk_rejects_unknown_identity_or_units(reads, changes):
     ('instrument_uid', 'other'), ('bids', []), ('asks', []), ('orderbook_ts', None),
     ('orderbook_ts', NOW.replace(tzinfo=None)),
     ('orderbook_ts', NOW - timedelta(seconds=90, microseconds=1)),
-    ('orderbook_ts', NOW + timedelta(microseconds=1)),
+    ('orderbook_ts', NOW - timedelta(seconds=160)),
+    ('orderbook_ts', NOW + timedelta(milliseconds=100, microseconds=1)),
+    ('orderbook_ts', NOW + timedelta(seconds=1)),
     ('bids', [sdk.Order(price=quotation(122), quantity=1)]),
     ('asks', [sdk.Order(price=quotation(0), quantity=1)]),
     ('bids', [sdk.Order(price=None, quantity=1)]),
@@ -147,6 +149,35 @@ def test_fx_book_accepts_historical_staleness_and_ninety_second_boundary(reads, 
     assert build_fx_snapshot(adapter, ['cny'], now=NOW).rate('cny') == D(12)
     client.market_data.get_order_book.assert_called_once_with(instrument_id='cny-tom', depth=1)
     client.market_data.get_last_prices.assert_not_called()
+
+
+@pytest.mark.parametrize('ahead', [timedelta(0), timedelta(microseconds=1),
+                                   timedelta(milliseconds=50), timedelta(milliseconds=65),
+                                   timedelta(microseconds=65426), timedelta(milliseconds=100)])
+def test_fx_accepts_bounded_market_clock_skew_without_rewriting_times(reads, ahead):
+    """The adapter and snapshot retain the raw timestamp within the inclusive allowance."""
+    client, adapter = reads
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW + ahead
+    snapshot = build_fx_snapshot(adapter, ['cny'], now=NOW)
+    book = snapshot.quotes['cny']
+    assert (book.market_time, book.received_time) == (NOW + ahead, NOW)
+    assert snapshot.rate('cny') == D(12)
+    book.validate_fresh(NOW)
+    snapshot.validate_fresh(NOW + timedelta(microseconds=1))
+    client.market_data.get_order_book.assert_called_once_with(instrument_id='cny-tom', depth=1)
+    client.market_data.get_last_prices.assert_not_called()
+
+
+def test_fx_samples_validation_clock_after_book_response(reads):
+    """The validation time belongs to the returned quote, not the request start."""
+    client, adapter = reads
+    selected = adapter.list_pairs()[0]
+
+    def clock():
+        client.market_data.get_order_book.assert_called_once_with(instrument_id='cny-tom', depth=1)
+        return NOW
+
+    assert TInvestFxData(client, clock=clock).get_quote(selected).received_time == NOW
 
 
 def test_rules_are_fresh_own_limits_and_explicit_permissions(reads):

@@ -151,7 +151,8 @@ def test_pair_rejects_incomplete_metadata(changes):
     {'bid': D(122)}, {'market_time': None}, {'received_time': None},
     {'market_time': NOW.replace(tzinfo=None)},
     {'received_time': NOW.replace(tzinfo=None)},
-    {'market_time': NOW + timedelta(microseconds=1)},
+    {'market_time': NOW + timedelta(milliseconds=100, microseconds=1)},
+    {'market_time': NOW + timedelta(seconds=1)},
     {'pair': pair(quote_currency='usd')},
 ])
 def test_quote_rejects_invalid_book_or_timestamp(changes):
@@ -160,11 +161,22 @@ def test_quote_rejects_invalid_book_or_timestamp(changes):
         quote(**changes)
 
 
+@pytest.mark.parametrize('ahead', [timedelta(0), timedelta(microseconds=1),
+                                   timedelta(milliseconds=50), timedelta(milliseconds=65),
+                                   timedelta(milliseconds=100)])
+def test_quote_accepts_exact_market_clock_skew_boundary(ahead):
+    """Only market time gets the allowance; the original times remain observable."""
+    book = quote(market_time=NOW + ahead)
+    assert book.market_time == NOW + ahead and book.received_time == NOW
+    assert FxSnapshot({'cny': book}, NOW).rate('cny') == D(12)
+
+
 @pytest.mark.parametrize('age,accepted', [
     (timedelta(seconds=60), True),
     (timedelta(seconds=60, microseconds=164933), True),
     (timedelta(seconds=90), True),
     (timedelta(seconds=90, microseconds=1), False),
+    (timedelta(seconds=160), False),
 ])
 def test_freshness_uses_market_time_and_exact_inclusive_boundary(age, accepted):
     """Receiving stale data now does not make it fresh."""
@@ -194,7 +206,10 @@ def test_snapshot_rejects_conflicting_currency_identity(mapping):
         FxSnapshot(mapping, NOW)
 
 
-@pytest.mark.parametrize('now', [None, NOW.replace(tzinfo=None), NOW - timedelta(seconds=1)])
+@pytest.mark.parametrize('now', [
+    None, NOW.replace(tzinfo=None), NOW - timedelta(microseconds=1),
+    NOW - timedelta(milliseconds=100), NOW - timedelta(seconds=1),
+])
 def test_snapshot_rejects_unknown_clock_or_future_receipt(now):
     """Clock ordering is explicit rather than inferred from a timestamp string."""
     with pytest.raises(ValueError):

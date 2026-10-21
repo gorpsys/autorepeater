@@ -162,7 +162,11 @@ native_price/settlement_currency и rub_price; mark выбирает rub_price,
 отделено от SDK-порта стратегий через SecurityData; TInvestSecurityData
 проверяет UID, единицы и возраст рыночного стакана до 90 секунд включительно.
 FX-котировки, preflight исполнения и диагностика используют тот же общий
-ORDER_BOOK_MAX_AGE_SECONDS; guards будущего/неизвестного времени сохраняются.
+ORDER_BOOK_MAX_AGE_SECONDS. Рыночный timestamp бумаг/FX может опережать локальное
+время получения не более чем на 100 мс включительно (ORDER_BOOK_FUTURE_TOLERANCE);
+большее опережение и неизвестное время отклоняются. Исходные timestamps и
+отрицательный возраст сохраняются без подмены. Допуск не применяется к receipt,
+source или времени заявок; порядок receipt относительно проверки остаётся строгим.
 Движок вызывает begin_snapshot перед каждым пересчётом. SDK-адаптер лениво
 читает полные Shares/Etfs с INSTRUMENT_STATUS_ALL один раз за проход,
 использует порядок FindInstrument и полный api_trade_available_flag,

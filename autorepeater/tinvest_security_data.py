@@ -6,7 +6,9 @@ from t_tech.invest import InstrumentIdType, RequestError
 from t_tech.invest.services import Services
 
 from autorepeater.cash_facts import MoneyAmount, SecurityQuote, SecurityQuoteUnit, currency_code
-from autorepeater.fx_data import ORDER_BOOK_MAX_AGE_SECONDS, market_timestamp
+from autorepeater.fx_data import (
+    ORDER_BOOK_FUTURE_TOLERANCE, ORDER_BOOK_MAX_AGE_SECONDS, market_timestamp,
+)
 from autorepeater.fx_diagnostics import sdk_metadata_facts
 from autorepeater.market_diagnostics import (
     BookTiming, diagnostic_operation, measure_stage, warn_book_failure,
@@ -85,8 +87,8 @@ class TInvestSecurityData:
                           timing=timing)
         market_timestamp(now)
         market_timestamp(book.orderbook_ts)
-        if book.instrument_uid != uid or not timedelta(0) <= now - book.orderbook_ts <= timedelta(
-                seconds=ORDER_BOOK_MAX_AGE_SECONDS):
+        if (book.instrument_uid != uid or not -ORDER_BOOK_FUTURE_TOLERANCE
+                <= now - book.orderbook_ts <= timedelta(seconds=ORDER_BOOK_MAX_AGE_SECONDS)):
             raise ValueError('security book UID mismatch or stale market time')
         quote = SecurityQuote(currency, _level(book.bids, currency), _level(book.asks, currency),
                               unit, nominal, interest)

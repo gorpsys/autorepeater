@@ -9,6 +9,7 @@ from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.strategy_plan import exact_product, exact_sum, finite_decimal
 
 ORDER_BOOK_MAX_AGE_SECONDS = 90
+ORDER_BOOK_FUTURE_TOLERANCE = timedelta(milliseconds=100)
 
 
 def market_timestamp(value: datetime) -> None:
@@ -132,7 +133,7 @@ class FxQuote:
         _ = self.lot_quote
         market_timestamp(self.market_time)
         market_timestamp(self.received_time)
-        if self.market_time > self.received_time:
+        if self.market_time - self.received_time > ORDER_BOOK_FUTURE_TOLERANCE:
             raise ValueError('FX market timestamp is in the future')
 
     @property
@@ -142,7 +143,7 @@ class FxQuote:
                           self.pair.nominal, self.pair.lot_size, self.bid, self.ask)
 
     def validate_fresh(self, now: datetime) -> None:
-        """Inclusive ninety-second market age; no stale or future-data fallback."""
+        """Inclusive ninety-second market age; receipt ordering remains strict."""
         market_timestamp(now)
         if now < self.received_time:
             raise ValueError('FX receipt timestamp is in the future')

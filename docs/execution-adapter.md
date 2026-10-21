@@ -253,8 +253,10 @@ freezes one computed RUB midpoint per native currency unit for the calculation.
 FX division uses precision 28 and HALF_EVEN independently of a caller's
 Decimal precision/rounding; later context changes cannot alter snapshot rates. RUB
 identity requires zero FX requests. Both market and receipt timestamps must
-be timezone-aware, with no future market data/receipts and market age at most
-90 seconds. Empty, crossed, nonpositive, malformed or stale books fail;
+be timezone-aware. Market timestamps may lead the local receipt clock by at most
+100 milliseconds inclusive; greater future offsets fail. Receipt ordering remains
+strict, and market age is at most 90 seconds inclusive. Empty, crossed,
+nonpositive, malformed or stale books fail;
 last_price, its timestamp and an implicit rate of 1 are never fallbacks.
 The caller can recheck freshness before effects and must read new data on
 expiry. A snapshot grants no ownership, spending or trading permission.
@@ -285,7 +287,8 @@ Debug constructs the same native funding plan without submission.
 
 `TInvestSecurityData` reads matching metadata and depth-one security books,
 checks positive two-sided levels and timezone-aware market time up to 90 seconds
-old, and returns native `SecurityQuote` units. Security and direct FX books are
+old or 100 milliseconds ahead, both inclusive, and returns native `SecurityQuote`
+units. Security and direct FX books are
 independent reads. Share/ETF midpoints are money per piece; bond clean percent
 quotes require matching positive native nominal and explicit native ACI, added
 once. Missing units or mismatched currencies fail without guessed conversion.
@@ -295,7 +298,11 @@ On a security book rejection, a bounded warning supplements the original
 ValueError: expected/received UID, market timestamp, observation time in UTC,
 age in seconds and the shared 90-second limit. Separate categories identify
 UID mismatch, missing/invalid/naive timestamps, future data and stale data;
-several applicable categories may coexist. Invalid timestamps are never
+several applicable categories may coexist. `market_time_future` means an offset
+greater than the shared 100-millisecond allowance. Raw timestamps and negative
+ages remain unchanged, including tolerated skew accompanying another rejection.
+The allowance applies only to market quotes, not receipts, source data or orders.
+Invalid timestamps are never
 replaced with observation time. Missing metadata or an invalid API permission
 marker also logs only selected identifiers/category/currency/flag. Missing,
 invalid and unloaded fields have distinct markers, without inferred RUB/False.
