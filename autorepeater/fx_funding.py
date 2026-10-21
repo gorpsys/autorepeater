@@ -341,13 +341,12 @@ def _fx_quote_reserve(context, path):
 def _reverse(context: _Context, principal: CashPools, debits: CashPools, orders,
              balances, exchanges) -> bool:
     # pylint: disable=too-many-arguments,too-many-positional-arguments
-    # Prefer one sufficient direct source before combining partial sources.
+    # Prefer one source covering the RUB reserve too, without adding an exchange for it.
     for currency in sorted(context.fx.quotes):
         intent = _reverse_source(context, currency, principal, debits, orders, balances)
         trial = {path: dict(money) for path, money in balances.items()}
         if (intent is not None and _apply_exchange(trial, intent)
-                and all(debits.amount(path, 'rub') <= trial[path].get('rub', ZERO)
-                        for path in debits.balances)):
+                and _reverse_sufficient(context, principal, debits, trial, intent)):
             balances.update(trial)
             exchanges.append(intent)
             return True
@@ -358,6 +357,20 @@ def _reverse(context: _Context, principal: CashPools, debits: CashPools, orders,
     return True
 
 
+def _reverse_sufficient(context, principal, debits, balances, intent):
+    """One-source coverage includes reserve only for owners with a real RUB deficit."""
+    for path in debits.balances:
+        rub = balances[path].get('rub', ZERO)
+        if debits.amount(path, 'rub') > rub:
+            return False
+        if path in intent.credits:
+            gross = exact_sum((rub, intent.estimated_fees.get(path, {}).get('rub', ZERO)))
+            if exact_sum((principal.amount(path, 'rub'),
+                          context.reserves.amount(path, 'rub'))) > gross:
+                return False
+    return True
+
+
 def _reverse_source(context, currency, principal, debits, orders, balances):
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     quote = context.fx.quotes[currency].lot_quote
@@ -365,10 +378,11 @@ def _reverse_source(context, currency, principal, debits, orders, balances):
     if rule is None or not context.inputs.fx_policy.permits(quote.uid, 'SELL'):
         return None
     fees = context.inputs.fx_fees.get(quote.uid, {})
-    net = difference(quote.quote_amount('SELL', 1).amount, fees.get('rub', ZERO))
+    gross = quote.quote_amount('SELL', 1).amount
+    net = difference(gross, fees.get('rub', ZERO))
     if net <= 0:
         return None
-    needs, capacities = {}, {}
+    needs, capacities, buffers = {}, {}, {}
     for path in debits.balances:
         rub = balances[path].get('rub', ZERO)
         deficit = max(ZERO, difference(debits.amount(path, 'rub'), rub))
@@ -379,17 +393,27 @@ def _reverse_source(context, currency, principal, debits, orders, balances):
         if not surplus:
             continue
         # Bid proceeds, not midpoint, fund RUB; fee units also consume native capacity.
+        reserve_deficit = max(ZERO, difference(exact_sum((
+            principal.amount(path, 'rub'), context.reserves.amount(path, 'rub'))), rub))
+        # Known fees consume the same reserve instead of enlarging the gross buffer.
         required = fx_ratio(exact_product(deficit, Decimal(quote.lot_size)), net)
+        buffered = max(required, fx_ratio(exact_product(
+            reserve_deficit, Decimal(quote.lot_size)), gross))
         capacity = fx_ratio(exact_product(surplus, Decimal(quote.lot_size)), exact_sum((
             Decimal(quote.lot_size), fees.get(currency, ZERO))))
         needs[path] = min(required, capacity)
         capacities[path] = capacity
+        buffers[path] = difference(min(buffered, capacity), needs[path])
     lots = min(allocate_floor(exact_sum(capacities.values()), Decimal(quote.lot_size)),
                rule.sell_max_lots)
     if lots <= 0:
         return None
     # A25-unit balance at lot10 offers at most20, never a rounded-up30-unit sale.
     needs = take_pieces(min(exact_sum(needs.values()), Decimal(lots * quote.lot_size)), needs)
+    spare = difference(Decimal(lots * quote.lot_size), exact_sum(needs.values()))
+    # Shared FX cap pays every owner's actual deficit before any optional reserve.
+    for path, amount in take_pieces(min(exact_sum(buffers.values()), spare), buffers).items():
+        needs[path] = exact_sum((needs.get(path, ZERO), amount))
     return _exchange(context, currency, 'SELL', needs,
                      {path: capacities[path] for path in needs}, orders)
 

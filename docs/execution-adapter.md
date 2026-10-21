@@ -405,7 +405,16 @@ estimated debits/credits, fee estimates, dependent UIDs and shared owner
 `debit_limits`; these ceilings are not additive budgets for successive exchanges.
 Projected money is labelled separately from observed cash and exact receipts.
 
-Reverse FX requires an actual RUB security principal deficit. Known native
+Reverse FX requires an actual RUB security principal deficit. Its amount
+includes the leaf's existing RUB reserve share, less its current RUB,
+before rounding the exchange to lots. Gross principal-plus-reserve and net
+principal-plus-known-fees needs are separate bounds: fees consume the same
+reserve, not a second buffer. Own caps and available foreign cash still limit
+the exchange; its volume never spends protected money. Prefer a single direct
+source that can fund both purchase and reserve; do not add another exchange
+only to restore reserve when the purchase is already funded. Actual
+security deficits have priority over optional reserve within a shared FX cap;
+one owner's buffer cannot displace another owner's funded purchase. Known native
 security needs are retained before selling surplus currency; reserve shortages
 and fees alone do not justify a reverse exchange. Reverse RUB credits and lot
 surplus cannot fund another foreign exchange in the same pass. Fees debit the

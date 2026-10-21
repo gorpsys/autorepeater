@@ -442,18 +442,19 @@ def test_incomplete_fx_cash_never_becomes_exact_receipt_or_isolated_credit():
 
 
 def test_reverse_exchange_finances_only_rub_paper():
-    """Foreign lot surplus stays cash; there is no exchange to restore reserve."""
+    """One necessary exchange funds the paper and reserve; there is no reserve-only FX."""
     broker, value, plan, data, executor, _, _ = setup_plan(
         leaf(target={'R': D(1)}, budget='1200', floor='100'),
         cash={'cny': D(100)}, own=rules('R', buy=0))
     data.get_destination.return_value = replace(
-        plan.snapshot, available_cash={'rub': D(455), 'cny': D(62)})
+        plan.snapshot, available_cash={'rub': D(551), 'cny': D(54)})
     data.get_trade_rules.return_value = rules('R', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(
-        order, '456' if order.uid == 'cny-rub' else '450', '1' if order.side == 'SELL' else '5')
+        order, '552' if order.uid == 'cny-rub' else '450', '1' if order.side == 'SELL' else '5')
     result = broker.execute('dst', plan, data, executor, value)
     assert [(item.uid, item.side) for item in result] == [('cny-rub', 'SELL'), ('R', 'BUY')]
-    assert executor.submit_order.call_args_list[0].args[1].lots == 38
+    assert executor.submit_order.call_args_list[0].args[1].lots == 46
+    assert executor.submit_order.call_count == 2
 
 
 def test_rate_increase_after_fx_does_not_expand_original_security_ceiling():
@@ -591,10 +592,10 @@ def test_reverse_rub_surplus_cannot_fund_new_foreign_demand_in_same_pass():
     plan = build_order_plan(tree, snapshot, {(): {}}, {'R': D(450), 'U': D(9)}, plan.rules,
                             funding=inputs)
     data.get_destination.return_value = replace(
-        snapshot, available_cash={'rub': D(456), 'cny': D(62)})
+        snapshot, available_cash={'rub': D(552), 'cny': D(54)})
     data.get_trade_rules.return_value = {**rules('R', buy=1), **rules('U', currency='usd', buy=0)}
     executor.submit_order.side_effect = lambda account, order: receipt(
-        order, '456' if order.uid == 'cny-rub' else '450')
+        order, '552' if order.uid == 'cny-rub' else '450')
     result = broker.execute('dst', plan, data, executor, value)
     assert [(item.uid, item.side) for item in result] == [('cny-rub', 'SELL'), ('R', 'BUY')]
 

@@ -187,17 +187,124 @@ def test_all_reserve_may_remain_in_cny_and_fee_may_reduce_it():
 
 
 def test_rub_purchase_can_sell_only_necessary_native_cash():
-    """Reverse FX funds a real RUB security; lot excess remains money."""
+    """Necessary reverse FX includes the existing RUB reserve and rounds to lots once."""
     tree = leaf(target={'R': D(1)}, budget='1200', floor='100')
     result = funding(tree, cash={'cny': D(100)}, own=rules('R', buy=0),
                      prices={'R': D(450)}, lot=10).funding
     exchange = result.exchanges[0]
-    assert (exchange.side, exchange.lots) == ('SELL', 4)
-    assert exchange.debits == {(): {'cny': D(40)}}
-    assert exchange.credits == {(): {'rub': D(480)}}
-    assert result.projected_cash.amount((), 'rub') == D(30)
-    assert result.projected_cash.amount((), 'cny') == D(60)
+    assert (exchange.side, exchange.lots) == ('SELL', 5)
+    assert exchange.debits == {(): {'cny': D(50)}}
+    assert exchange.credits == {(): {'rub': D(600)}}
+    assert result.projected_cash.amount((), 'rub') == D(150)
+    assert result.projected_cash.amount((), 'cny') == D(50)
     assert not result.purchases[0].executable_now
+
+
+@pytest.mark.parametrize('reserve', ['120', '180', '240'])
+@pytest.mark.parametrize('rub', ['0', '120'])
+def test_required_reverse_fx_retains_existing_reserve_in_rub(reserve, rub):
+    """A real RUB purchase deficit funds its reserve too, without a second exchange."""
+    principal = D(1200) - D(reserve)
+    cny = D(100) - D(rub) / D(12)
+    result = funding(leaf(target={'R': D(1)}, budget='1200', floor=reserve),
+                     cash={'rub': D(rub), 'cny': cny}, own=rules('R', buy=0),
+                     prices={'R': principal}).funding
+    exchange, = result.exchanges
+    assert (exchange.side, exchange.lots) == ('SELL', int(cny))
+    assert result.projected_cash.amount((), 'rub') == D(reserve)
+    assert result.projected_cash.amount((), 'cny') == 0
+    assert result.spending_limits == {(): principal}
+    assert result.purchases[0].intent.lots == 1
+
+
+def test_reverse_fee_estimates_consume_same_reserve_without_extra_lot():
+    """The 100 RUB buffer covers both commissions; it is not added on top of them."""
+    result = funding(leaf(target={'R': D(1)}, budget='1200', floor='100'),
+                     cash={'cny': D(100)}, own=rules('R', buy=0), prices={'R': D(450)},
+                     inputs=FundingInputs(fx_rules=rules('cny-rub'),
+                                          fees={'R': {'rub': D('.5')}},
+                                          fx_fees={'cny-rub': {'rub': D('.12')}})).funding
+    exchange, = result.exchanges
+    assert exchange.lots == 46
+    assert result.projected_cash.amount((), 'rub') == D('95.98')
+    assert result.projected_cash.amount((), 'cny') == D(54)
+
+
+def test_funded_rub_principal_never_exchanges_currency_only_for_reserve():
+    """Reserve may remain in CNY when RUB already pays for the security itself."""
+    result = funding(leaf(target={'R': D(1)}, budget='1200', floor='120'),
+                     cash={'rub': D(1080), 'cny': D(10)}, own=rules('R'),
+                     prices={'R': D(1080)}).funding
+    assert not result.exchanges
+    assert result.projected_cash.amount((), 'rub') == 0
+    assert result.projected_cash.amount((), 'cny') == D(10)
+    assert result.purchases[0].executable_now
+
+
+def test_shared_reverse_reserve_excludes_unallocated_parent_currency():
+    """One shared exchange funds two leaf buffers, without spending protected CNY."""
+    tree = replace(parent(tuple(leaf((i,), {'R': D('.5')}, budget='600', floor='60')
+                                for i in range(2))), budget=D(2400), cash_floor=D(1320))
+    result = funding(tree, cash={'cny': D(200)}, own=rules('R', buy=0),
+                     prices={'R': D(1080)}, lot=10).funding
+    exchange, = result.exchanges
+    assert exchange.lots == 10
+    assert exchange.base_contributions == {(0,): D(50), (1,): D(50)}
+    assert result.projected_cash.protected == result.cash.protected == {'cny': D(100)}
+    assert result.projected_cash.balances == {
+        (0,): {'cny': D(0), 'rub': D(60)}, (1,): {'cny': D(0), 'rub': D(60)}}
+
+
+def test_rub_security_fee_shortage_alone_does_not_authorize_reverse_exchange():
+    """Even a known RUB fee cannot create FX when RUB already funds security principal."""
+    result = funding(leaf(target={'R': D(1)}, budget='1200', floor='120'),
+                     cash={'rub': D(1080), 'cny': D(10)}, own=rules('R'),
+                     prices={'R': D(1080)},
+                     inputs=FundingInputs(fx_rules=rules('cny-rub'),
+                                          fees={'R': {'rub': D('.54')}})).funding
+    assert result.demands and not result.purchases and not result.exchanges
+
+
+def test_reverse_prefers_one_source_covering_rub_purchase_and_its_reserve():
+    """A CNY source covering only principal cannot hide a single sufficient USD source."""
+    result = funding(leaf(target={'R': D(1)}, budget='1200', floor='120'),
+                     cash={'cny': D(40), 'usd': D(8)}, own=rules('R', buy=0),
+                     prices={'R': D(480)}).funding
+    exchange, = result.exchanges
+    assert (exchange.uid, exchange.side, exchange.lots) == ('usd-rub', 'SELL', 7)
+    assert result.projected_cash.amount((), 'rub') == D(150)
+    assert result.projected_cash.amount((), 'cny') == D(40)
+
+
+def test_unfunded_reserve_does_not_add_exchange_or_block_funded_rub_purchase():
+    """When no single source also covers reserve, do not sell another currency just for it."""
+    result = funding(leaf(target={'R': D(1)}, budget='1200', floor='120'),
+                     cash={'cny': D(40), 'usd': D(1)}, own=rules('R', buy=0),
+                     prices={'R': D(480)}).funding
+    exchange, = result.exchanges
+    assert (exchange.uid, exchange.side, exchange.lots) == ('cny-rub', 'SELL', 40)
+    assert result.purchases[0].intent.lots == 1
+    assert result.projected_cash.amount((), 'rub') == 0
+    assert result.projected_cash.amount((), 'usd') == D(1)
+
+
+def test_shared_fx_cap_funds_principal_before_optional_rub_reserve():
+    """A reserve cannot consume shared FX cap needed for another owner's funded paper."""
+    tree = parent((leaf((0,), {'A': D(1)}, budget='600', floor='588'),
+                   leaf((1,), {'B': D(1)}, budget='1000', floor='12')))
+    fx_rules = rules('cny-rub', 'usd-rub')
+    fx_rules['cny-rub'] = replace(fx_rules['cny-rub'], sell_max_lots=50)
+    inputs = FundingInputs(
+        fx_rules=fx_rules, cash=CashPools({(0,): {'cny': D(50)},
+                                          (1,): {'cny': D(50), 'usd': D(4)}}))
+    result = funding(tree, cash={'cny': D(100), 'usd': D(4)},
+                     own=rules('A', 'B', buy=0), prices={'A': D(12), 'B': D(588)},
+                     inputs=inputs).funding
+    exchange, = result.exchanges
+    assert (exchange.uid, exchange.lots) == ('cny-rub', 50)
+    assert exchange.base_contributions == {(0,): D(1), (1,): D(49)}
+    assert {p.intent.uid for p in result.purchases} == {'A', 'B'}
+    assert result.projected_cash.amount((1,), 'usd') == D(4)
 
 
 def test_no_reverse_exchange_without_rub_security_or_for_rub_fee_alone():
@@ -208,14 +315,14 @@ def test_no_reverse_exchange_without_rub_security_or_for_rub_fee_alone():
 
 
 def test_no_cny_rub_usd_bridge_or_spending_reverse_lot_surplus_on_fx():
-    """A legitimate RUB buy does not grant the leftover30 RUB to a USD route."""
+    """A legitimate RUB buy does not grant its reserve or FX lot surplus to a USD route."""
     tree = leaf(target={'R': D(1), 'U': D(1)}, budget='1200', floor='100')
     result = funding(tree, cash={'cny': D(100)},
                      own={**rules('R', buy=0), **rules('U', currency='usd', buy=0)},
                      prices={'R': D(450), 'U': D(9)}, lot=10).funding
     assert [buy.intent.uid for buy in result.purchases] == ['R']
     assert [(item.uid, item.side) for item in result.exchanges] == [('cny-rub', 'SELL')]
-    assert result.projected_cash.amount((), 'rub') == D(30)
+    assert result.projected_cash.amount((), 'rub') == D(150)
 
 
 def test_native_demand_nets_before_reverse_exchange():
