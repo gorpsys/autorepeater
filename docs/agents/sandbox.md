@@ -59,7 +59,7 @@ verifier --evidence-format retry-v3, не по полям недоверенно
 Activation PR #43 проверен и вмержен в b4044a0 (5.2.3): trusted master
 принимает evidence_protocol=retry-v3 для полного запуска PR #40 с ref master.
 Его default и master push остаются v2. Candidate 5.3.0 сохраняет future default
-v3 для guard 120s и использует тот же validated output в producer и verifier.
+v3 для guard 180s и использует тот же validated output в producer и verifier.
 Candidate workflow PR сам по себе не переключает trusted dispatcher master.
 Старый master 0492181 отвергает v3. Не проверять evidence кодом PR.
 V3 повторяет только eligible failed cases даже при постоянных ошибках других
@@ -67,9 +67,9 @@ V3 повторяет только eligible failed cases даже при пос�
 пройденные и постоянно упавшие сценарии не запускаются повторно.
 Кроме прежних transport timeouts, допустим только market_time_stale:
 исключение из известной загруженной точки валидации, совпадающие UID,
-aware market/observed timestamps и возраст строго больше 120 секунд.
-Текущий producer пишет limit=120; verifier также читает архивные v3-факты
-с limit=90 и пересчитывает их возраст по прежней строгой границе >90s.
+aware market/observed timestamps и возраст строго больше 180 секунд.
+Текущий producer пишет limit=180; verifier также читает архивные v3-факты
+с limit=90/120 и пересчитывает их возраст по соответствующей строгой границе.
 Verifier сам проверяет возраст и идентичность; ValueError по тексту и логи
 не дают retry. Классификатор не импортирует будущие валютные модули приложения.
 Future/missing/naive/invalid timestamps, UID mismatch и assertions не повторяются.
@@ -156,7 +156,7 @@ fx_catalog_skipped содержит до20 metadata с UID/nominal/lot/API flags
 quota waits. Вложенные интервалы включают дочерние и не суммируются как общее
 время приложения. Новых RPC, изменений retry/clock guards и оптимизаций нет.
 По решению пользователя от 21.10.2026 общий лимит возраста стаканов бумаг и FX
-составляет 120 секунд включительно; исторические evidence с лимитами 60s/90s сохраняются.
+составляет 180 секунд включительно; исторические evidence с лимитами 60s/90s/120s сохраняются.
 Рыночный timestamp стаканов бумаг/FX допускает опережение локальных часов до
 100 мс включительно; большее опережение по-прежнему даёт market_time_future.
 Сырые timestamps и отрицательный возраст не корректируются. Receipt/source/order

@@ -8,7 +8,7 @@ from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.strategy_plan import exact_product, exact_sum, finite_decimal
 
-ORDER_BOOK_MAX_AGE_SECONDS = 120
+ORDER_BOOK_MAX_AGE_SECONDS = 180
 ORDER_BOOK_FUTURE_TOLERANCE = timedelta(milliseconds=100)
 
 

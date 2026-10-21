@@ -145,7 +145,7 @@ def fixture_books():
 
 @pytest.mark.parametrize('case', [
     ('other', NOW, 'uid_mismatch', 0, 'security book UID mismatch or stale market time'),
-    ('uid', NOW - timedelta(seconds=120, microseconds=1), 'market_time_stale', 120.000001,
+    ('uid', NOW - timedelta(seconds=180, microseconds=1), 'market_time_stale', 180.000001,
      'security book UID mismatch or stale market time'),
     ('uid', NOW + timedelta(seconds=1), 'market_time_future', -1,
      'security book UID mismatch or stale market time'),
@@ -170,14 +170,14 @@ def test_book_failures_are_distinct_without_changing_exceptions(books, caplog, c
     assert len(records) == 1
     fact = json.loads(records[0].message.removeprefix('Market diagnostic: '))
     assert reason in fact['reasons']
-    assert fact['age_seconds'] == age and fact['freshness_limit_seconds'] == 120
+    assert fact['age_seconds'] == age and fact['freshness_limit_seconds'] == 180
     assert fact['expected_uid'] == 'uid' and fact['received_uid'] == uid
     assert fact['observed_utc'] == NOW.isoformat()
     assert SECRET not in caplog.text
     assert len(client.instruments.method_calls) == len(client.market_data.method_calls) == 1
 
 
-@pytest.mark.parametrize('age', [-0.1, -0.065426, 0, 60, 61, 90, 90.000001, 120])
+@pytest.mark.parametrize('age', [-0.1, -0.065426, 0, 60, 61, 90, 90.000001, 120, 128.014157, 180])
 def test_fresh_book_does_not_log_and_keeps_quote(books, caplog, age):
     """The old boundary and newly permitted ages remain accepted and quiet."""
     client, data = books
@@ -221,7 +221,7 @@ def test_live_book_diagnostic_survives_safe_report_without_leaking(books, capsys
     client, data = books
     book = client.market_data.get_order_book.return_value
     book.instrument_uid = {'credentials': SECRET}
-    book.orderbook_ts = NOW - timedelta(seconds=121)
+    book.orderbook_ts = NOW - timedelta(seconds=181)
     book.credentials = SECRET
     item = SimpleNamespace(nodeid='e2e/test_sandbox.py::test_drift[INDEX-PAIR]')
     live_hooks.pytest_runtest_call(item)

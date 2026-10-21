@@ -26,7 +26,7 @@ def book_failure(caplog):
 
 
 @pytest.mark.parametrize('case', [
-    (121, 0, 121), (121, -2, 119), (149, -1, 148),
+    (181, 0, 181), (181, -2, 179), (209, -1, 208),
 ])
 def test_security_failure_times_request_receipt_and_existing_check(
         books, caplog, monkeypatch, case):
@@ -64,7 +64,7 @@ def test_failure_uid_is_linked_to_loaded_ticker_class_currency(books, caplog):
     item = client.instruments.get_instrument_by.return_value.instrument
     item.ticker, item.class_code, item.currency = 'FULL-SECURITY', 'T', 'cny'
     item.unexpected_credential = 'Bearer simulated-credential-DO-NOT-LOG'
-    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=121)
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=181)
     with pytest.raises(ValueError):
         adapter.get_security_quote('uid')
     fact = book_failure(caplog)
@@ -75,11 +75,11 @@ def test_failure_uid_is_linked_to_loaded_ticker_class_currency(books, caplog):
     assert len(client.instruments.method_calls) == len(client.market_data.method_calls) == 1
 
 
-def test_observational_future_receipt_does_not_affect_120_second_guard(
+def test_observational_future_receipt_does_not_affect_180_second_guard(
         books, caplog, monkeypatch):
     """A changed diagnostic wall clock cannot cause rejection of a fresh book."""
     client, adapter = books
-    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=120)
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=180)
     monkeypatch.setattr(diagnostics, '_utc_now', lambda: NOW + timedelta(days=1))
     assert adapter.get_security_quote('uid').estimate_per_piece().amount > 0
     assert 'security_book_rejected' not in caplog.text
@@ -90,14 +90,14 @@ def test_fx_book_staleness_has_same_request_breakdown(caplog, monkeypatch):
     client, adapter = fixture_reads.__wrapped__()
     pair = adapter.list_pairs()[0]
     now = adapter._clock()  # pylint: disable=protected-access
-    client.market_data.get_order_book.return_value.orderbook_ts = now - timedelta(seconds=121)
+    client.market_data.get_order_book.return_value.orderbook_ts = now - timedelta(seconds=181)
     monkeypatch.setattr(diagnostics, '_utc_now', lambda: now)
     monkeypatch.setattr(diagnostics, 'monotonic', Mock(side_effect=[20., 22., 22.5]))
     with pytest.raises(ValueError, match='stale FX order book'):
         adapter.get_quote(pair)
     fact = book_failure(caplog)
     assert fact['expected_uid'] == pair.uid
-    assert fact['age_at_response_seconds'] == fact['age_at_check_seconds'] == 121
+    assert fact['age_at_response_seconds'] == fact['age_at_check_seconds'] == 181
     assert fact['request_timing']['request_duration_seconds'] == 2
     assert fact['request_timing']['response_to_check_seconds'] == .5
 
@@ -165,7 +165,7 @@ def test_no_e2e_stage_clocks_or_state_for_normal_metadata_reads(books, monkeypat
 def test_book_metadata_missing_labels_stay_missing(books, caplog):
     """The expected UID is known even if its loaded SDK metadata lacks human labels."""
     client, adapter = books
-    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=121)
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=181)
     with pytest.raises(ValueError):
         adapter.get_security_quote('uid')
     metadata = book_failure(caplog)['metadata']

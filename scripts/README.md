@@ -349,9 +349,9 @@ V3 повторяет только failed API timeout и подтверждён�
 даже рядом с постоянными ошибками. Постоянные сценарии сохраняются failed
 в итоговом JUnit и не запускаются повторно; их нельзя скрыть общим success.
 Stale требует исключения из известной загруженной точки валидации, совпадающих
-UID, двух timezone-aware timestamps и возраста строго больше 120 секунд.
-Текущий producer пишет limit=120. Для чтения архивных v3 evidence verifier
-принимает также limit=90, строго пересчитывая возраст >90s; другие лимиты
+UID, двух timezone-aware timestamps и возраста строго больше 180 секунд.
+Текущий producer пишет limit=180. Для чтения архивных v3 evidence verifier
+принимает также limit=90/120, строго пересчитывая возраст по указанному лимиту; другие лимиты
 отклоняются. Это не меняет текущий guard приложения или формат v1/v2.
 Trusted verifier независимо проверяет эти факты. Assertions, произвольный
 ValueError, будущее/отсутствующее время и UID mismatch не дают retry.
@@ -365,13 +365,13 @@ Collection/teardown/cleanup/отмена/deadline
 Activation PR #43 после полной приёмки вмержен в `b4044a0` (5.2.3).
 Trusted master принимает ручной input `evidence_protocol`: `retry-v2` по умолчанию,
 `retry-v3` по явному выбору инициатора. Его master push остаётся v2.
-Candidate 5.3.0 сохраняет default v3 для приложения с guard 120s;
+Candidate 5.3.0 сохраняет default v3 для приложения с guard 180s;
 после его merge default dispatch и master push будут v3, явный v2 доступен.
 Trusted prepare проверяет allowlist
 до live и передаёт единый output в `E2E_EVIDENCE_PROTOCOL` producer и
 `--evidence-format` независимого verifier с прежними `--collection` и `--sha`.
 Неизвестные форматы (включая legacy retry-v1) в dispatch отклоняются.
-Проверка stale v3 текущего checkout требует >120s и limit=120; verifier старого
+Проверка stale v3 текущего checkout требует >180s и limit=180; verifier старого
 master с guard 90s не принимает эти факты. Полный запуск с ref master,
 pr_number=40 и evidence_protocol=retry-v3 использует v3 для точного SHA PR.
 Выбор не берётся из PR checkout или его артефактов; изменение только workflow

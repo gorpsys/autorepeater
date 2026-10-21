@@ -335,7 +335,7 @@ def test_each_sync_invalidates_search_and_full_metadata(client):
     assert not executor.method_calls
 
 
-def test_security_refresh_keeps_independent_full_metadata_and_120s_guard(client):
+def test_security_refresh_keeps_independent_full_metadata_and_180s_guard(client):
     """Book refresh rereads Instrument and market time despite warm Find/catalog data."""
     client.instruments.find_instrument.return_value = search('uid')
     client.instruments.etfs.return_value = sdk.EtfsResponse(instruments=[sdk.Etf(
@@ -347,7 +347,7 @@ def test_security_refresh_keeps_independent_full_metadata_and_120s_guard(client)
     client.market_data.get_order_book.side_effect = [sdk.GetOrderBookResponse(
         instrument_uid='uid', orderbook_ts=NOW - timedelta(seconds=age),
         bids=[sdk.Order(price=sdk.Quotation(99, 0), quantity=1)],
-        asks=[sdk.Order(price=sdk.Quotation(101, 0), quantity=1)]) for age in [0, 120, 121]]
+        asks=[sdk.Order(price=sdk.Quotation(101, 0), quantity=1)]) for age in [0, 180, 181]]
     data = TInvestStrategyData(client)
     data.begin_snapshot()
     data.find_instruments('GOLD')

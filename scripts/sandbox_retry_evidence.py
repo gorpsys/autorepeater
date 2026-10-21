@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 MAX_ATTEMPTS = 4
 MAX_BYTES = 2_000_000
-STALE_BOOK_MAX_AGE_SECONDS = 120
+STALE_BOOK_MAX_AGE_SECONDS = 180
 TRANSPORT_ROOTS = frozenset(('RequestError', 'SandboxFailure', 'DataAccessError',
                              'ExecutionDataError', 'OrderExecutionError'))
 TRANSIENT_STATUSES = frozenset(('DEADLINE_EXCEEDED', 'UNAVAILABLE'))
@@ -140,7 +140,7 @@ def validate_stale_book(value: object) -> dict[str, object]:
         raise RetryFailure('invalid stale book identity')
     limit = integer(fields['freshness_limit_seconds'])
     if (fields['reason'] != 'market_time_stale'
-            or limit not in (90, STALE_BOOK_MAX_AGE_SECONDS)):
+            or limit not in (90, 120, STALE_BOOK_MAX_AGE_SECONDS)):
         raise RetryFailure('invalid stale book reason or freshness limit')
     try:
         stamps = [datetime.fromisoformat(stamp) for stamp in
