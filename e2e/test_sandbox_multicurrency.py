@@ -12,7 +12,7 @@ from t_tech.invest import (
     InstrumentIdType, OperationState, OperationType, OrderDirection,
 )
 
-from autorepeater import reporting
+from autorepeater import execution_market, reporting
 from autorepeater.cash_facts import MoneyAmount, currency_code
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.fx_data import FxPair, FxQuote
@@ -28,6 +28,7 @@ from autorepeater.runner import RunnerParams
 from autorepeater.strategies import prepare_strategy
 from autorepeater.strategy_contract import PreparedStrategy
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType
+from autorepeater.strategy_plan import TradeMode
 from scripts.sandbox_lifecycle import SandboxFailure, safe_call
 from scripts.sandbox_commission_probe import (
     CommissionObservation, CommissionSample, compare_commissions)
@@ -66,6 +67,7 @@ class CurrencyPass:
     after: NativeState
     trades: list[TradeFact]
     intents: list[OrderIntent]
+    buy_caps: dict[str, int]
 
 
 def _selection_failure(session, request, matches, facts, outcome):
@@ -280,27 +282,128 @@ def app_run(live: LiveCase, dst: str, prepared: PreparedStrategy,
     session, journal = live
     before = native_state(session, dst)
     start = len(journal.events)
-    plan, intents = run_observed(dst, prepared)
+    session.records.append({'event': 'currency_app_start'})
+    plan, intents = run_observed(dst, prepared, records=session.records)
     events = journal.events[start:]
     responses = [item for item in events if item['event'] == 'response']
     require(len(responses) == sum(item['event'] == 'submit' for item in events)
             == sum(item['event'] == 'confirm' for item in events), 'unchecked app order')
     trades = _trade_facts(session, dst, instruments, responses)
     after = _settled_money(session, dst, before, trades)
+    caps = _fresh_buy_caps(session.records)
     session.records.append({'event': 'currency_app_pass', 'trades': [asdict(t) for t in trades],
-                            'fees': fees_by_currency(trades)})
+                            'fees': fees_by_currency(trades), 'fresh_buy_caps': caps})
+    _record_plan_targets(session, plan, after)
     check_plan_money(plan)
     require(len(intents) == len(trades), 'missing executed ownership intent')
-    return CurrencyPass(plan, before, after, trades, intents)
+    return CurrencyPass(plan, before, after, trades, intents, caps)
 
 
-def run_observed(dst: str, prepared: PreparedStrategy) -> tuple[OrderPlan, list[OrderIntent]]:
+def _fresh_buy_caps(records: list) -> dict[str, int]:
+    """Read own limits at funded BUY stages, not the selected purchase quantities."""
+    caps = {}
+    for fact in records:
+        if fact.get('event') == 'currency_app_start':
+            caps.clear()
+        if (fact.get('event') == 'currency_execution_funding' and not fact['exchanges']
+                and fact['purchases']):
+            uid = fact['purchases'][0]['uid']
+            caps[uid] = next(rule['buy_max_lots'] for rule in fact['rules'] if rule['uid'] == uid)
+    return caps
+
+
+def _record_plan_targets(session: SandboxSession, plan: OrderPlan, after: NativeState) -> None:
+    """Preserve calculated limits beside actual pieces before any target assertion."""
+    funding = plan.funding
+    session.records.append({
+        'event': 'currency_plan_targets',
+        'budget': str(plan.strategy.budget), 'cash_floor': str(plan.strategy.cash_floor),
+        'initial_cash': {code: str(amount)
+                         for code, amount in plan.snapshot.available_cash.items()},
+        'actual_cash': {code: str(amount) for code, amount in after.money.items()},
+        'protected_cash': {code: str(amount) for code, amount in funding.cash.protected.items()},
+        'securities': [{
+            'uid': uid, 'lot': plan.rules[uid].lot,
+            'currency': plan.rules[uid].currency,
+            'target_quantity': str(quantity),
+            'permitted_quantity': str((quantity / plan.rules[uid].lot).to_integral_value(
+                rounding=ROUND_FLOOR) * plan.rules[uid].lot),
+            'actual_quantity': str(after.quantities.get(uid, D(0))),
+            'mark_rub': str(plan.marks[uid]),
+            'native_price': str(funding.native_prices[uid].amount),
+            'initial_buy_lots': plan.rules[uid].buy_max_lots,
+            'initial_buy_money': str(plan.rules[uid].buy_money_amount),
+        } for uid, quantity in plan.strategy.target.quantities.items()],
+        'owners': [{
+            'path': list(path), 'budget': str(node.budget), 'cash_floor': str(node.cash_floor),
+            'targets': {uid: str(quantity) for uid, quantity in node.target.quantities.items()},
+            'held': {uid: str(quantity) for uid, quantity in plan.ownership[path].items()},
+            'cash': {code: str(amount) for code, amount in funding.cash.balances[path].items()},
+            'reserve': {code: str(amount)
+                        for code, amount in funding.reserve_shares[path].items()},
+        } for path, node in leaves(plan.strategy).items()],
+    })
+
+
+def _funding_fact(execution, funding) -> dict:
+    """Loaded funding and ledger scalars only; never transport or SDK objects."""
+    def pools(values):
+        return [{'path': list(path), 'money': {code: str(amount) for code, amount in money.items()}}
+                for path, money in values.items()]
+
+    return {
+        'event': 'currency_execution_funding',
+        'ledger_cash': pools(execution.ledger.cash.balances),
+        'security_limits_rub': [{'path': list(path), 'amount': str(amount)}
+                                for path, amount in execution.ledger.limits.items()],
+        'rules': [{'uid': uid, 'currency': rule.currency, 'buy_max_lots': rule.buy_max_lots,
+                   'buy_money_amount': str(rule.buy_money_amount)}
+                  for uid, rule in execution.own.items()],
+        'native_prices': {uid: str(price.amount) for uid, price in funding.native_prices.items()},
+        'purchases': [{'uid': purchase.intent.uid, 'lots': purchase.intent.lots,
+                       'lot': purchase.intent.lot_size, 'native_amount': str(
+                           purchase.native_amount.amount)} for purchase in funding.purchases],
+        'exchanges': [
+            {'uid': intent.uid, 'side': intent.side, 'lots': intent.lots,
+             'base_contributions': [{'path': list(path), 'amount': str(amount)}
+                                    for path, amount in intent.base_contributions.items()],
+             'debit_limits': pools(intent.debit_limits),
+             'estimated_debits': pools(intent.debits)} for intent in funding.exchanges],
+    }
+
+
+def run_observed(dst: str, prepared: PreparedStrategy, *, records: list | None = None
+                 ) -> tuple[OrderPlan, list[OrderIntent]]:
     """Observe real execution ownership while calling the original SDK executor unchanged."""
     original = TInvestOrderExecutor.submit_order
+    original_funding = execution_market._ExecutionPass._funding  # pylint: disable=protected-access
+    original_exchange = execution_market._exchange_cash  # pylint: disable=protected-access
+
+    def observe_funding(execution):
+        funding = original_funding(execution)
+        if records is not None:
+            records.append(_funding_fact(execution, funding))
+        return funding
+
+    def observe_exchange(ledger, intent, receipt, fx):
+        outcome = original_exchange(ledger, intent, receipt, fx)
+        if records is not None:
+            amounts = receipt.amounts
+            total = None if amounts is None or amounts.total is None else str(amounts.total.amount)
+            fee = (None if amounts is None or amounts.executed_commission is None
+                   else str(amounts.executed_commission.amount))
+            records.append({'event': 'currency_exchange_attribution', 'accepted': outcome,
+                            'uid': intent.uid, 'receipt_total': total, 'receipt_commission': fee})
+        return outcome
+
     with patch('autorepeater.repeater.reporting.print_rebalance_plan',
                wraps=reporting.print_rebalance_plan) as report, patch.object(
                    TInvestOrderExecutor, 'submit_order', autospec=True,
-                   side_effect=original) as submitted:
+                   side_effect=original) as submitted, patch.object(
+                       execution_market._ExecutionPass, '_funding',  # pylint: disable=protected-access
+                       autospec=True, side_effect=observe_funding), patch(
+                           'autorepeater.execution_market._exchange_cash',
+                           side_effect=observe_exchange):
         _run_application(dst, prepared, empty=False)
     require(report.call_count == 1, 'expected one normal application calculation')
     return report.call_args.args[0], [call.args[2] for call in submitted.call_args_list]
@@ -337,6 +440,22 @@ def _settled_money(session: SandboxSession, dst: str, before: NativeState,
     return after
 
 
+def _expected_reserve(node, plan: OrderPlan) -> dict[str, D]:
+    """Independent reserve oracle: target weights, then halve foreign shares."""
+    weights = {}
+    for uid, quantity in node.target.quantities.items():
+        code = plan.rules[uid].currency.lower()
+        weights[code] = weights.get(code, D(0)) + quantity * plan.marks[uid]
+    total = sum(weights.values(), D(0))
+    expected = {code: node.cash_floor * weight / total
+                for code, weight in weights.items()}
+    for code in list(expected):
+        if code != 'rub':
+            expected[code] /= 2
+            expected['rub'] = expected.get('rub', D(0)) + expected[code]
+    return expected
+
+
 def check_plan_money(plan: OrderPlan) -> None:
     """Check the same saved native/FX snapshot, leaf reserve and exact owner sums."""
     fx, funding = plan.snapshot.fx_snapshot, plan.funding
@@ -345,14 +464,9 @@ def check_plan_money(plan: OrderPlan) -> None:
                 'plan RUB midpoint inconsistent with native/FX snapshot')
     for path, node in leaves(plan.strategy).items():
         amounts = funding.reserve_shares[path]
-        weights = {}
-        for uid, quantity in node.target.quantities.items():
-            code = plan.rules[uid].currency.lower()
-            weights[code] = weights.get(code, D(0)) + quantity * plan.marks[uid]
-        total = sum(weights.values(), D(0))
+        expected = _expected_reserve(node, plan)
         for code, amount in amounts.items():
-            expected = node.cash_floor * weights[code] / total
-            require(abs(amount * fx.rate(code) - expected) <= D('.000000001'),
+            require(abs(amount * fx.rate(code) - expected[code]) <= D('.000000001'),
                     'leaf reserve allocated with wrong currency weights')
         require(cash_value(dict(amounts), {'rub': D(1), **{
             code: fx.rate(code) for code in fx.quotes}}) <= node.cash_floor,
@@ -430,6 +544,11 @@ def assert_targets(result: CurrencyPass) -> None:
     for uid, quantity in result.plan.strategy.target.quantities.items():
         lot = result.plan.rules[uid].lot
         target = (quantity / lot).to_integral_value(rounding=ROUND_FLOOR) * lot
+        if uid in result.buy_caps:
+            target = min(target, result.before.quantities.get(uid, D(0))
+                         + D(result.buy_caps[uid] * lot))
+        if result.plan.strategy.decision.mode == TradeMode.BUY_ONLY:
+            target = max(target, result.before.quantities.get(uid, D(0)))
         require(result.after.quantities.get(uid, D(0)) == target,
                 'permitted target lots not reached')
 
@@ -558,8 +677,11 @@ def test_reverse_exchange_only_for_rub_purchase(
             'expected security SELL -> FX -> RUB BUY')
     assert_targets(result)
     require(result.after.money.get('cny', D(0)) > 0, 'reverse FX liquidated all residual currency')
-    require(not app_run(live, dst, prepare_strategy('INDEX', 'RUB'), instruments).trades,
-            'RUB no-op converts residual CNY to restore reserve')
+    repeated = app_run(live, dst, prepare_strategy('INDEX', 'RUB'), instruments)
+    require(all(trade.uid == instruments.rub.uid and trade.base_currency is None
+                for trade in repeated.trades),
+            'RUB repeat converts residual CNY to restore reserve')
+    assert_targets(repeated)
 
 
 def test_isolated_sale_does_not_fund_sibling(

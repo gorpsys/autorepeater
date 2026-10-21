@@ -390,7 +390,13 @@ attributes them. No persistent ledger or receipt cash fabrication is introduced.
 
 Reserve shares use each leaf's target RUB values by settlement currency;
 conversion of an allowance rounds down at Decimal precision28 so recurring
-division cannot increase the reserve. Only a principal/fee funding shortage
+division cannot increase the reserve. Half of every foreign share stays in RUB for the FX fee;
+the other half is held in the security's settlement currency. The total reserve
+does not grow, and RUB-security shares are unchanged. The foreign share's RUB
+half limits FX principal, while the same money remains available for commission.
+Its retention follows the owner's existing RUB proportion; existing foreign cash
+is not sold merely to relocate reserve. The RUB-security reserve is not deducted
+again from FX funding. Only a principal/fee funding shortage
 initiates forward FX. Its amount includes the existing share once per owner and
 currency, subtracts permitted native money first, then rounds to FX lots. Enough
 money for principal plus commission needs no reserve restock. Ask finances BUY;

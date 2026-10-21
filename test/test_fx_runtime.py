@@ -166,8 +166,8 @@ def test_configured_runner_selects_exact_fx_uid(sdk_runtime, reverse, available)
     plan = launch(client, params=application.RunnerParams(
         False, fx_pair_uids={'CNY': 'cny-rub'}))
     assert plan.marks == {'C': D(720)}
-    assert [(order.uid, order.lots) for order in plan.funding.exchanges] == [('cny-rub', 69)]
-    assert state.cash == {'rub': D(171), 'cny': D(8)}
+    assert [(order.uid, order.lots) for order in plan.funding.exchanges] == [('cny-rub', 65)]
+    assert state.cash == {'rub': D(219), 'cny': D(4)}
     assert state.held == 1
     assert [call.kwargs['instrument_id'] for call in client.orders.post_order.call_args_list
             ] == ['cny-rub', 'C']
@@ -245,10 +245,10 @@ def test_public_runtime_bond_fx_then_native_buy_without_history_or_price(sdk_run
     plan = launch(client)
     assert plan.marks == {'C': D(720)}
     assert plan.snapshot.budget == D(1000)
-    assert [(order.uid, order.lots) for order in plan.funding.exchanges] == [('cny-rub', 69)]
+    assert [(order.uid, order.lots) for order in plan.funding.exchanges] == [('cny-rub', 65)]
     assert [call.kwargs['instrument_id'] for call in client.orders.post_order.call_args_list] == [
         'cny-rub', 'C']
-    assert state.cash == {'rub': D(171), 'cny': D(8)}
+    assert state.cash == {'rub': D(219), 'cny': D(4)}
     assert state.held == 1
     assert len(state.requests) == len(set(state.requests)) == 2
     assert state.events.index(('status', 'cny-rub')) < state.events.index(('submit', 'cny-rub'))
@@ -309,7 +309,7 @@ def test_public_runtime_incomplete_money_preserves_fill_but_defers_paper(sdk_run
     launch(client)
     client.orders.post_order.assert_called_once()
     assert state.held == 0
-    assert state.cash == {'rub': D(171), 'cny': D(69)}
+    assert state.cash == {'rub': D(219), 'cny': D(65)}
     assert client.operations.get_positions.call_count == 2
 
 

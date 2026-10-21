@@ -12,6 +12,7 @@ from autorepeater.account_config import AccountConfig
 from autorepeater.account_strategy import AccountStrategy, PreparedAccountSource
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.strategy_contract import PreparedStrategy
+from autorepeater.strategy_plan import exact_sum
 
 __all__ = ['fixture_sdk_runtime']
 
@@ -47,13 +48,13 @@ def test_next_pass_after_fx_success_reuses_currency_and_never_repeats_exchange(s
     client.orders.get_max_lots.side_effect = blocked_after_fx
     first = launch(client)
     assert first.funding.exchanges
-    assert state.held == 0 and state.cash == {'rub': D(171), 'cny': D(69)}
+    assert state.held == 0 and state.cash == {'rub': D(219), 'cny': D(65)}
     assert [call.kwargs['instrument_id'] for call in client.orders.post_order.call_args_list] == [
         'cny-rub']
     client.orders.get_max_lots.side_effect = caps
     second = launch(client)
     assert not second.funding.exchanges
-    assert state.held == 1 and state.cash == {'rub': D(171), 'cny': D(8)}
+    assert state.held == 1 and state.cash == {'rub': D(219), 'cny': D(4)}
     third = launch(client)
     assert not third.funding.demands and not third.funding.exchanges
     assert [call.kwargs['instrument_id'] for call in client.orders.post_order.call_args_list] == [
@@ -69,7 +70,7 @@ def test_next_pass_after_fx_success_reuses_currency_and_never_repeats_exchange(s
 @pytest.mark.parametrize('debug', [True, False])
 def test_nested_shared_uid_account_sources_readonly_and_unallocated_cash_preserved(
         sdk_runtime, debug, caplog):
-    """One shared FX preserves isolation; its fee can defer the conditional shared BUY."""
+    """One shared FX preserves isolation and RUB room for each owner's fee."""
     client, state = sdk_runtime
     state.cash['rub'] = D(4000)
     portfolio = client.operations.get_portfolio.side_effect
@@ -95,10 +96,15 @@ def test_nested_shared_uid_account_sources_readonly_and_unallocated_cash_preserv
     assert plan.funding.cash.protected == {'rub': D(2000), 'cny': D(0)}
     assert plan.funding.spending_limits == {(0, 0): D(900), (0, 1): D(900)}
     exchange, = plan.funding.exchanges
-    assert (exchange.uid, exchange.lots) == ('cny-rub', 137)
-    assert exchange.base_contributions == {
-        (0, 0): D('83.333333333333333333333333333'),
-        (0, 1): D('53.666666666666666666666666667')}
+    assert (exchange.uid, exchange.lots) == ('cny-rub', 129)
+    assert set(exchange.base_contributions) == {(0, 0), (0, 1)}
+    assert exact_sum(exchange.base_contributions.values()) == D(129)
+    assert exchange.base_contributions[(0, 0)] >= exact_sum((
+        D(75), plan.funding.reserve_shares[(0, 0)]['cny']))
+    assert exchange.base_contributions[(0, 1)] >= exact_sum((
+        D(45), plan.funding.reserve_shares[(0, 1)]['cny']))
+    assert exchange.debits[(0, 0)]['rub'] <= D(950)
+    assert exchange.debits[(0, 1)]['rub'] <= D(950)
     purchase, = plan.funding.purchases
     assert purchase.intent.pieces == {(0, 0): D('1.25'), (0, 1): D('.75')}
     assert len(observed_sources) == 2
@@ -115,14 +121,14 @@ def test_nested_shared_uid_account_sources_readonly_and_unallocated_cash_preserv
         client.orders.post_order.assert_not_called()
         client.orders.get_order_state.assert_not_called()
     else:
-        assert state.cash == {'rub': D(2355), 'cny': D(137)} and state.held == 0
+        assert state.cash == {'rub': D(2451), 'cny': D(8)} and state.held == 2
         assert [call.kwargs['instrument_id'] for call in client.orders.post_order.call_args_list
-                ] == ['cny-rub']
+                ] == ['cny-rub', 'C']
         assert all(call.kwargs['account_id'] == 'dst'
                    for call in client.orders.post_order.call_args_list)
         assert all('price' not in call.kwargs for call in client.orders.post_order.call_args_list)
-        assert any('FX debit exceeds owner limit' in message
-                   for message in caplog.messages)
+        assert not any('FX debit exceeds owner limit' in message
+                       for message in caplog.messages)
     client.orders.get_order_price.assert_not_called()
     client.operations.get_operations.assert_not_called()
     client.operations.get_operations_by_cursor.assert_not_called()

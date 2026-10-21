@@ -342,6 +342,27 @@ def test_order_journal_records_safe_rpc_failures_and_quota_waits():
     assert 'private' not in json.dumps(journal.events)
 
 
+def test_order_journal_retains_structured_native_terminal_reason():
+    """Record only the known diagnostic template and its bounded scalar arguments."""
+    journal = sandbox_support.OrderJournal()
+    template = ('Native execution end: terminal_reason=%s remaining_buy_uids=%s '
+                'omitted_count=%d')
+    record = logging.LogRecord('tinkoffBot', logging.INFO, '', 0, template,
+                               ('no_funded_purchase', ['uid'], 0), None)
+    journal.emit(record)
+    assert len(journal.events) == 1
+    event = journal.events[0]
+    assert {key: value for key, value in event.items() if key != 'time'} == {
+        'event': 'native_execution_end', 'terminal_reason': 'no_funded_purchase',
+        'remaining_buy_uids': ['uid'], 'omitted_count': 0}
+    for args in (('private value', ['uid'], 0),
+                 ('no_funded_purchase', ['Bearer private'], 0),
+                 ('no_funded_purchase', ['uid'], True)):
+        journal.emit(logging.LogRecord('tinkoffBot', logging.INFO, '', 0, template, args, None))
+    assert len(journal.events) == 1
+    assert 'private' not in json.dumps(journal.events)
+
+
 def test_allowlisted_dump_reconstructs_cash_positions_and_operations(
         session, monkeypatch, tmp_path):
     """Explicit DTO fields retain nanos and trade evidence without raw SDK objects."""

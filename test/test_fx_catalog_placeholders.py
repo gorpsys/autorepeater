@@ -180,10 +180,10 @@ def test_normal_runner_preserves_funding_and_receipts_with_placeholder(runtime, 
     plan = launch(client)
     assert plan.marks == {'C': D(720)}
     assert plan.snapshot.budget == D(1000) and plan.strategy.cash_floor == D(100)
-    assert [(intent.uid, intent.lots) for intent in plan.funding.exchanges] == [('cny-rub', 69)]
+    assert [(intent.uid, intent.lots) for intent in plan.funding.exchanges] == [('cny-rub', 65)]
     assert [item.kwargs['instrument_id'] for item in client.orders.post_order.call_args_list] == [
         'cny-rub', 'C']
-    assert state.cash == {'rub': D(171), 'cny': D(8)} and state.held == 1
+    assert state.cash == {'rub': D(219), 'cny': D(4)} and state.held == 1
     assert len(state.requests) == len(set(state.requests)) == 2
     client.instruments.currencies.assert_called_once_with(
         instrument_status=sdk.InstrumentStatus.INSTRUMENT_STATUS_ALL)

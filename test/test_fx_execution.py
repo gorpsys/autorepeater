@@ -92,16 +92,16 @@ def setup_plan(tree=None, cash=None, own=None, **options):
 def test_fx_fill_refreshes_real_native_caps_before_dependent_buy():
     """Initial cap0 is conditional; FILL alone cannot authorize the paper."""
     broker, value, plan, data, executor, _, _ = setup_plan()
-    fresh = replace(plan.snapshot, available_cash={'rub': D(171), 'cny': D(69)})
+    fresh = replace(plan.snapshot, available_cash={'rub': D(219), 'cny': D(65)})
     data.get_destination.return_value = fresh
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(
-        order, '828' if order.uid == 'cny-rub' else '60',
+        order, '780' if order.uid == 'cny-rub' else '60',
         '1' if order.uid == 'cny-rub' else '.5',
         'rub' if order.uid == 'cny-rub' else 'cny')
     result = broker.execute('dst', plan, data, executor, value)
     assert [item.uid for item in result] == ['cny-rub', 'C']
-    assert [args.args[1].lots for args in executor.submit_order.call_args_list] == [69, 1]
+    assert [args.args[1].lots for args in executor.submit_order.call_args_list] == [65, 1]
     assert all(not item.cash for item in result)
     data.get_destination.assert_called_with('dst', valuation=value)
     data.get_trade_rules.assert_called_with('dst', ['C'])
@@ -323,24 +323,24 @@ def test_fx_exchange_funds_only_fixed_capacity_quantity_and_its_reserve(change):
     """Do not exchange for two lots when the immutable capacity permits just one."""
     broker, value, plan, native, currency = _declining_plan(change, 1, D(1), fx_required=True)
     assert currency == 'cny'
-    assert plan.funding.exchanges[0].lots == 46
+    assert plan.funding.exchanges[0].lots == 42
     data = create_autospec(ExecutionData, instance=True, spec_set=True)
     data.get_destination.return_value = replace(
-        plan.snapshot, available_cash={'rub': D(447), 'cny': D(46)})
+        plan.snapshot, available_cash={'rub': D(495), 'cny': D(42)})
     data.get_trade_rules.return_value = {
         **rules('A', currency='cny', buy=2), **rules('H')}
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
 
     def submit(_account, intent):
         if intent.uid == 'cny-rub':
-            assert intent.lots == 46
-            return receipt(intent, '552')
+            assert intent.lots == 42
+            return receipt(intent, '504')
         assert intent.uid == 'A' and intent.lots == 1
         return receipt(intent, str(native), '0', 'cny')
 
     executor.submit_order.side_effect = submit
     result = broker.execute('dst', plan, data, executor, value)
-    assert [(item.uid, item.lots_executed) for item in result] == [('cny-rub', 46), ('A', 1)]
+    assert [(item.uid, item.lots_executed) for item in result] == [('cny-rub', 42), ('A', 1)]
     assert executor.submit_order.call_count == 2
     assert data.get_destination.call_count == 1
 
@@ -516,7 +516,7 @@ def test_confirmed_security_sell_then_fx_then_buy_uses_fresh_balances():
     result = broker.execute('dst', plan, data, executor, value)
     assert [(item.uid, item.side) for item in result] == [
         ('R', 'SELL'), ('cny-rub', 'BUY'), ('C', 'BUY')]
-    assert executor.submit_order.call_args_list[1].args[1].lots == 73
+    assert executor.submit_order.call_args_list[1].args[1].lots == 67
     assert data.get_trade_rules.call_count == 2
 
 
@@ -762,15 +762,15 @@ def test_shared_fx_has_exact_owner_units_and_single_dependent_order():
     broker, value, plan, data, executor, _, _ = setup_plan(
         tree, owners={(0,): {}, (1,): {}}, own=rules('C', currency='cny', buy=0))
     data.get_destination.return_value = replace(
-        plan.snapshot, available_cash={'rub': D(171), 'cny': D(69)})
+        plan.snapshot, available_cash={'rub': D(219), 'cny': D(65)})
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(
-        order, '828' if order.uid == 'cny-rub' else '60', '1',
+        order, '780' if order.uid == 'cny-rub' else '60', '1',
         'rub' if order.uid == 'cny-rub' else 'cny')
     result = broker.execute('dst', plan, data, executor, value)
     assert [item.uid for item in result] == ['cny-rub', 'C']
     exchange, purchase = [call.args[1] for call in executor.submit_order.call_args_list]
-    assert exchange.pieces == {(0,): D('34.5'), (1,): D('34.5')}
+    assert exchange.pieces == {(0,): D('32.5'), (1,): D('32.5')}
     assert purchase.pieces == {(0,): D('.5'), (1,): D('.5')}
     assert plan.ownership == {(0,): {}, (1,): {}}
 

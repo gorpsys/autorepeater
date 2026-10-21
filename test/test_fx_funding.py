@@ -5,6 +5,7 @@ from decimal import Decimal as D
 from test.test_order_plan import destination, leaf, parent, rules
 
 import pytest
+from autorepeater import fx_funding
 from autorepeater.cash_facts import MoneyAmount, SecurityQuote, SecurityQuoteUnit
 from autorepeater.cash_pools import (
     CashPools, CashProceeds, cash_headroom, credit_cash_pools, initial_cash_pools,
@@ -65,10 +66,61 @@ def test_zero_current_native_cap_retains_conditional_buy_and_actual_pools():
     assert not purchase.executable_now
     assert purchase.fx_dependencies == ('cny-rub',)
     exchange = result.funding.exchanges[0]
-    assert (exchange.uid, exchange.side, exchange.lots) == ('cny-rub', 'BUY', 69)
-    assert exchange.base_contributions == {(): D(69)}
-    assert exchange.debits[()]['rub'] == D(828)
+    assert (exchange.uid, exchange.side, exchange.lots) == ('cny-rub', 'BUY', 65)
+    assert exchange.base_contributions == {(): D(65)}
+    assert exchange.debits[()]['rub'] == D(780)
     assert exchange.debit_limits[()]['rub'] == D(1000)
+
+
+def test_foreign_reserve_keeps_half_in_rub_without_increasing_total():
+    """Both the RUB FX fee and the native security fee use one existing reserve."""
+    result = funding().funding
+    assert result.reserve_shares[()]['rub'] == D(50)
+    assert result.reserve_shares[()]['cny'] == D('4.166666666666666666666666666')
+    assert result.projected_cash.amount((), 'rub') >= 50
+
+
+def test_shared_fx_leaves_each_owner_room_for_observed_commission():
+    """Live regression: one shared lot must not fill an owner's whole RUB budget."""
+    tree = parent(tuple(leaf((i,), {'C': D(27)}, budget='400000', floor='60000')
+                        for i in range(2)))
+    tree = replace(tree, budget=D(1000000), cash_floor=D(320000))
+    pair = FxPair('cny-rub', 'cny', 'rub', D(1), 1000, True, True, True)
+    fx = FxSnapshot({'cny': FxQuote(pair, D('12.2695'), D('12.2695'), NOW, NOW)}, NOW)
+    native = D('1023.887')
+    snapshot = replace(destination(), budget=tree.budget,
+                       available_cash={'rub': tree.budget}, fx_snapshot=fx)
+    plan = build_order_plan(
+        tree, snapshot, {(0,): {}, (1,): {}}, {'C': native * fx.rate('cny')},
+        rules('C', currency='cny', buy=0), funding=FundingInputs(
+            native_prices={'C': MoneyAmount('cny', native)},
+            fx_rules=rules('cny-rub', lot=1000)))
+    exchange, = plan.funding.exchanges
+    assert plan.funding.cash.protected == {'rub': D(200000)}
+    for path, money in exchange.debits.items():
+        principal = money['rub']
+        assert principal + principal * D('.0005') <= exchange.debit_limits[path]['rub']
+        assert plan.funding.projected_cash.amount(path, 'rub') >= D(30000)
+
+
+def test_exact_fx_capacity_correction_preserves_other_owners(monkeypatch):
+    """A rounded capacity correction cannot replace the other owners' principal pools."""
+    # pylint: disable=protected-access
+    cash = CashPools({(0,): {'rub': D(12)}, (1,): {'rub': D(12)}})
+    principal = CashPools({(0,): {'cny': D(1)}, (1,): {'cny': D(1)}})
+    context = fx_funding._Context(
+        market(), FundingInputs(fx_rules=rules('cny-rub')), cash,
+        CashPools({(0,): {}, (1,): {}}), {}, {}, {}, CashPools({}))
+    monkeypatch.setattr(fx_funding, '_base_affordable',
+                        lambda *_args, **_kwargs: D(1).next_minus())
+    balances = {path: dict(money) for path, money in cash.balances.items()}
+    exchanges = []
+    assert fx_funding._forward(context, principal, principal, (), balances, exchanges)
+    assert len(exchanges) == 1
+    exchange = exchanges[0]
+    assert exchange.base_contributions == {(0,): D(1), (1,): D(1)}
+    assert balances == {(0,): {'rub': D(0), 'cny': D(1)},
+                        (1,): {'rub': D(0), 'cny': D(1)}}
 
 
 @pytest.mark.parametrize('amount', ['60.5', '69', '80'])
@@ -111,14 +163,14 @@ def test_reserve_once_per_owner_currency_for_two_securities():
 
 
 def test_mixed_leaf_reserve_split_by_target_rub_value():
-    """RUB450 and CNY450 divide 100 RUB as 50 RUB and 50/12 CNY."""
+    """RUB keeps50 plus half the foreign50; the other25 remains a CNY allowance."""
     tree = leaf(target={'R': D(1), 'C': D(1)}, budget='1000', floor='100')
     result = funding(tree, own={**rules('R'), **rules('C', currency='cny', buy=0)},
                      prices={'R': D(450), 'C': D(450)}).funding
-    assert result.reserve_shares[()]['rub'] == D(50)
-    assert result.reserve_shares[()]['cny'] == D('4.166666666666666666666666666')
+    assert result.reserve_shares[()]['rub'] == D(75)
+    assert result.reserve_shares[()]['cny'] == D('2.083333333333333333333333333')
     assert len(result.exchanges) == 1
-    assert result.exchanges[0].lots == 42
+    assert result.exchanges[0].lots == 40
     assert [buy.intent.uid for buy in result.purchases] == ['C', 'R']
 
 
@@ -131,8 +183,7 @@ def test_all_reserve_may_remain_in_cny_and_fee_may_reduce_it():
     assert not result.funding.exchanges
     assert result.funding.purchases
     assert result.funding.projected_cash.amount((), 'rub') == 0
-    assert result.funding.projected_cash.amount((), 'cny') < (
-        result.funding.reserve_shares[()]['cny'])
+    assert result.funding.projected_cash.amount((), 'cny') * 12 < D(100)
 
 
 def test_rub_purchase_can_sell_only_necessary_native_cash():
@@ -201,7 +252,8 @@ def test_composite_unallocated_cash_excluded_from_leaf_reserve_and_fx(nested):
     result = funding(tree, cash={'rub': D(1880), 'cny': D(10)},
                      inputs=FundingInputs(fx_rules=rules('cny-rub', lot=10),
                                           fees={'C': {'cny': D(1)}}), lot=10).funding
-    assert result.reserve_shares[path]['cny'] == D('8.333333333333333333333333333')
+    assert result.reserve_shares[path]['rub'] == D(50)
+    assert result.reserve_shares[path]['cny'] == D('4.166666666666666666666666666')
     assert result.exchanges[0].lots == 6
     assert result.cash.protected['rub'] == D(1000)
     assert result.projected_cash.protected == result.cash.protected
@@ -234,7 +286,7 @@ def test_owner_cash_cannot_finance_another_buy_only_sibling():
 
 @pytest.mark.parametrize('changes', [{'api_trade_available': False},
                                      {'bestprice_order_available': False}, {'buy_max_lots': 0},
-                                     {'buy_money_amount': D(800)}])
+                                     {'buy_money_amount': D(779)}])
 def test_fx_own_permissions_and_caps_still_constrain_funding(changes):
     """No future own FX cap is fabricated to finance a security."""
     fx_rules = {'cny-rub': replace(rules('cny-rub')['cny-rub'], **changes)}
@@ -247,10 +299,10 @@ def test_fx_fee_and_security_fee_are_estimates_paid_by_original_owner():
     result = funding(inputs=FundingInputs(fx_rules=rules('cny-rub'),
                                           fees={'C': {'cny': D(1)}},
                                           fx_fees={'cny-rub': {'rub': D('.1')}})).funding
-    assert result.exchanges[0].debits[()]['rub'] == D('834.9')
+    assert result.exchanges[0].debits[()]['rub'] == D('786.5')
     assert result.security_debits.amount((), 'cny') == D(61)
-    assert result.projected_cash.amount((), 'rub') == D('165.1')
-    assert result.exchanges[0].estimated_fees == {(): {'rub': D('6.9')}}
+    assert result.projected_cash.amount((), 'rub') == D('213.5')
+    assert result.exchanges[0].estimated_fees == {(): {'rub': D('6.5')}}
     assert result.estimated_security_fees.amount((), 'cny') == D(1)
 
 
@@ -462,8 +514,8 @@ def test_fee_exhausting_fx_lot_credit_cannot_finance_a_security(side, fee):
 
 
 def test_fx_fee_also_respects_current_own_money_cap():
-    """A828 RUB quote plus6.9 fee exceeds an own cap of830, with enough account cash."""
-    own = {'cny-rub': replace(rules('cny-rub')['cny-rub'], buy_money_amount=D(830))}
+    """A780 RUB quote plus6.5 fee exceeds an own cap of785, with enough account cash."""
+    own = {'cny-rub': replace(rules('cny-rub')['cny-rub'], buy_money_amount=D(785))}
     inputs = FundingInputs(fx_rules=own, fx_fees={'cny-rub': {'rub': D('.1')}})
     assert not funding(inputs=inputs).funding.purchases
 
@@ -562,7 +614,8 @@ def test_zero_target_does_not_take_a_currency_reserve_share():
                               {**rules('X'), **rules('C', currency='cny', buy=0)},
                               funding=FundingInputs(native_prices={'C': MoneyAmount('cny', D(60))},
                                                     fx_rules=rules('cny-rub'))).funding
-    assert result.reserve_shares[()] == {'cny': D('8.333333333333333333333333333')}
+    assert result.reserve_shares[()] == {
+        'rub': D(50), 'cny': D('4.166666666666666666666666666')}
     assert [item.intent.uid for item in result.purchases] == ['C']
 
 

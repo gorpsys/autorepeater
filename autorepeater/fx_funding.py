@@ -117,7 +117,7 @@ class FundingPlan:  # pylint: disable=too-many-instance-attributes
 
 def reserve_shares(strategy: StrategyPlan, marks: Mapping[str, Decimal],
                    rules: Mapping[str, TradeRules], fx: FxSnapshot) -> CashPools:
-    """Split only each leaf's existing reserve by target RUB value, once per currency."""
+    """Split each leaf's reserve by target value, retaining half of foreign shares in RUB."""
     result = {}
     for path, node in leaves(strategy).items():
         weights = {}
@@ -128,10 +128,14 @@ def reserve_shares(strategy: StrategyPlan, marks: Mapping[str, Decimal],
                 currency = currency_code(rules[uid].currency)
                 weights[currency] = exact_sum((weights.get(currency, ZERO), exact_product(
                     quantity, marks[uid])))
-        currencies = sorted(weights)
-        parts = proportional_split(node.cash_floor, [weights[code] for code in currencies])
-        result[path] = {code: native_allowance(part, code, fx)
-                        for code, part in zip(currencies, parts)}
+        amounts = {}
+        for code, part in zip(sorted(weights), proportional_split(
+                node.cash_floor, [weights[code] for code in sorted(weights)])):
+            if code != 'rub':
+                part = exact_product(part, Decimal('.5'))
+                amounts['rub'] = exact_sum((amounts.get('rub', ZERO), part))
+            amounts[code] = exact_sum((amounts.get(code, ZERO), native_allowance(part, code, fx)))
+        result[path] = amounts
     return CashPools(result)
 
 
@@ -293,11 +297,15 @@ def _forward(context: _Context, principal: CashPools, debits: CashPools, orders,
                 principal.amount(path, currency), context.reserves.amount(path, currency))), cash))
             # Original RUB only: reverse FX credits can never finance another currency.
             rub = max(ZERO, difference(balances[path].get('rub', ZERO), debits.amount(path, 'rub')))
-            capacities[path] = _base_affordable(quote, rub, context.inputs.fx_fees)
+            reserve = _fx_quote_reserve(context, path)
+            capacities[path] = _base_affordable(quote, rub, context.inputs.fx_fees, reserve=reserve)
             if needs[path] > capacities[path]:
                 cost = exact_sum((quote.quote_amount('BUY', 1).amount,
                                   context.inputs.fx_fees.get(quote.uid, {}).get('rub', ZERO)))
-                if exact_product(needs[path], cost) > exact_product(rub, Decimal(quote.lot_size)):
+                lot_principal = quote.quote_amount('BUY', 1).amount
+                if (exact_product(needs[path], cost) > exact_product(rub, Decimal(quote.lot_size))
+                        or exact_product(needs[path], lot_principal) > exact_product(
+                            max(ZERO, difference(rub, reserve)), Decimal(quote.lot_size))):
                     return False
                 # Correct only our divided allowance using an exact dimensional bound.
                 capacities[path] = needs[path]
@@ -309,11 +317,25 @@ def _forward(context: _Context, principal: CashPools, debits: CashPools, orders,
     return True
 
 
-def _base_affordable(quote: FxLotQuote, rub: Decimal, fees) -> Decimal:
-    """A combined lot may have fractional owner contributions; debit checks remain exact."""
-    cost = exact_sum((quote.quote_amount('BUY', 1).amount,
-                      fees.get(quote.uid, {}).get('rub', ZERO)))
-    return fx_ratio(exact_product(rub, Decimal(quote.lot_size)), cost)
+def _base_affordable(quote: FxLotQuote, rub: Decimal, fees, *, reserve: Decimal = ZERO) -> Decimal:
+    """Keep quote-currency reserve out of principal; estimated fees may consume that reserve."""
+    principal = quote.quote_amount('BUY', 1).amount
+    cost = exact_sum((principal, fees.get(quote.uid, {}).get('rub', ZERO)))
+    size = Decimal(quote.lot_size)
+    return min(fx_ratio(exact_product(max(ZERO, difference(rub, reserve)), size), principal),
+               fx_ratio(exact_product(rub, size), cost))
+
+
+def _fx_quote_reserve(context, path):
+    """Retain the foreign reserve's RUB half from existing RUB, without selling native cash."""
+    foreign_half = exact_sum(context.fx.to_rub(MoneyAmount(code, amount)).amount
+                             for code, amount in context.reserves.balances[path].items()
+                             if code != 'rub')
+    balances = context.cash.balances[path]
+    total = exact_sum(context.fx.to_rub(MoneyAmount(code, amount)).amount
+                      for code, amount in balances.items())
+    return (fx_ratio(exact_product(foreign_half, balances.get('rub', ZERO)), total)
+            if total else ZERO)
 
 
 def _reverse(context: _Context, principal: CashPools, debits: CashPools, orders,
@@ -535,7 +557,8 @@ def _fundable_pieces(context, candidate):
             quote = context.fx.quotes[price.currency].lot_quote
             if quote.uid in context.inputs.fx_rules:
                 amount = exact_sum((amount, _base_affordable(
-                    quote, context.cash.amount(path, 'rub'), context.inputs.fx_fees)))
+                    quote, context.cash.amount(path, 'rub'), context.inputs.fx_fees,
+                    reserve=_fx_quote_reserve(context, path))))
         else:
             for currency, observation in context.fx.quotes.items():
                 if observation.pair.uid in context.inputs.fx_rules:

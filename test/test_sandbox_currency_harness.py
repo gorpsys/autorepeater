@@ -225,6 +225,70 @@ def test_new_existing_currency_scenarios_offline(offline_live, tmp_path, monkeyp
     scenarios.test_existing_cny_before_lot_rounding(live, tmp_path, monkeypatch, kind)
 
 
+def test_currency_pass_records_exact_targets_and_owner_budgets(
+        offline_live, tmp_path, monkeypatch):
+    """A missing-target failure must retain its original plan without another RPC."""
+    live, _ = offline_live
+    session, journal = live
+    instruments = scenarios.catalog(session)
+    scenarios.configure(live, tmp_path, monkeypatch, instruments)
+    dst = scenarios.funded_account(session, 'targetfacts')
+    result = scenarios.app_run(
+        live, dst, scenarios.prepare_strategy('COMPOSITE', 'OWNERS'), instruments)
+    fact, = [event for event in session.records if event['event'] == 'currency_plan_targets']
+    assert fact['budget'] == str(result.plan.strategy.budget)
+    assert fact['protected_cash'] == {
+        code: str(amount) for code, amount in result.plan.funding.cash.protected.items()}
+    assert D(fact['protected_cash']['rub']) == 200000
+    security, = fact['securities']
+    assert security['uid'] == 'C'
+    assert security['actual_quantity'] == str(result.after.quantities['C'])
+    assert D(security['permitted_quantity']) == result.after.quantities['C']
+    assert security['target_quantity'] == str(result.plan.strategy.target.quantities['C'])
+    assert {tuple(owner['path']) for owner in fact['owners']} == {(0,), (1,)}
+    assert any(event['event'] == 'native_execution_end' for event in journal.events)
+    stages = [event for event in session.records if event['event'] == 'currency_execution_funding']
+    assert stages and stages[0]['exchanges'][0]['uid'] == 'F'
+    assert stages[0]['purchases'][0]['uid'] == 'C'
+    assert stages[0]['rules'] == [
+        {'uid': 'C', 'currency': 'cny', 'buy_max_lots': 0, 'buy_money_amount': '0'}]
+    assert any(event['event'] == 'currency_exchange_attribution' and event['accepted']
+               for event in session.records)
+    json.dumps(fact)
+
+
+def test_target_assertion_obeys_fresh_own_cap_without_accepting_arbitrary_shortfall(
+        offline_live, tmp_path, monkeypatch):
+    """A broker cap below the main target permits exactly that cap, not fewer lots."""
+    live, broker = offline_live
+    original = broker.caps
+
+    def capped(*, request):
+        response = original(request=request)
+        if request.instrument_id == 'C':
+            response.buy_limits.buy_max_lots = min(2, response.buy_limits.buy_max_lots)
+        return response
+
+    broker.client.orders.get_max_lots.side_effect = capped
+    instruments = scenarios.catalog(live[0])
+    scenarios.configure(live, tmp_path, monkeypatch, instruments)
+    dst = scenarios.funded_account(live[0], 'owncap')
+    result = scenarios.app_run(
+        live, dst, scenarios.prepare_strategy('INDEX', 'CNY'), instruments)
+    assert result.after.quantities['C'] == D(2)
+    scenarios.assert_targets(result)
+    with pytest.raises(SandboxFailure, match='permitted target lots'):
+        scenarios.assert_targets(replace(result, after=replace(
+            result.after, quantities={'C': D(1)})))
+    held = result.plan.strategy.target.quantities['C'] + D(1)
+    repeated = replace(result, before=replace(result.before, quantities={'C': held}),
+                       after=replace(result.after, quantities={'C': held}), buy_caps={})
+    scenarios.assert_targets(repeated)
+    with pytest.raises(SandboxFailure, match='permitted target lots'):
+        scenarios.assert_targets(replace(repeated, after=replace(
+            repeated.after, quantities={'C': held - D(1)})))
+
+
 def _wire_commission_probe(broker, model):
     """Raw 7dp fees with 6dp history/positions distinguish numeric balance models."""
     from decimal import ROUND_HALF_UP  # pylint: disable=import-outside-toplevel

@@ -75,6 +75,10 @@ class OrderJournal(logging.Handler):
         self.events: list[dict[str, object]] = []
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.msg == ('Native execution end: terminal_reason=%s remaining_buy_uids=%s '
+                          'omitted_count=%d'):
+            self._native_end(record)
+            return
         message = record.getMessage()
         api_event = _api_event(message)
         if api_event is not None:
@@ -93,6 +97,29 @@ class OrderJournal(logging.Handler):
             event = 'submit' if message.startswith('Submitting') else 'confirm'
             self.events.append({'event': event,
                                 'time': record.created, 'message': message})
+
+    def _native_end(self, record: logging.LogRecord) -> None:
+        if not isinstance(record.args, tuple) or len(record.args) != 3:
+            return
+        reason, remaining, omitted = record.args
+        reasons = {
+            'preflight_or_sales_rejected', 'no_funded_purchase',
+            'submission_or_refresh_failed', 'readiness_positions_cash_or_preflight',
+            'fx_cash_attribution_unavailable', 'fx_settlement_unconfirmed',
+            'purchase_cash_rejected', 'purchase_settlement_unconfirmed',
+            'no_further_funded_purchase',
+        }
+        if not isinstance(reason, str) or reason not in reasons:
+            return
+        if (not isinstance(remaining, list) or len(remaining) > 20
+                or not all(isinstance(uid, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', uid)
+                           for uid in remaining)):
+            return
+        if not isinstance(omitted, int) or isinstance(omitted, bool) or omitted < 0:
+            return
+        self.events.append({'event': 'native_execution_end', 'time': record.created,
+                            'terminal_reason': reason, 'remaining_buy_uids': list(remaining),
+                            'omitted_count': omitted})
 
 
 class SandboxSession:  # pylint: disable=too-many-instance-attributes
