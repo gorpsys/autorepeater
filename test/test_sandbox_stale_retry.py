@@ -52,7 +52,7 @@ class FxGuard:  # pylint: disable=too-few-public-methods
 
     def __init__(self) -> None:
         self.pair = SimpleNamespace(uid='uid')
-        self.market_time = NOW - timedelta(seconds=91)
+        self.market_time = NOW - timedelta(seconds=121)
         self.received_time = NOW
 
     def validate_fresh(self, now):
@@ -82,11 +82,11 @@ def fixture_reads():
     return SimpleNamespace(market_data=market), SecurityGuard(market)
 
 
-def stale_fact():
+def stale_fact(age=121):
     """The verifier recomputes stale age rather than trusting a retry verdict."""
     return {'reason': 'market_time_stale', 'expected_uid': 'uid', 'received_uid': 'uid',
-            'market_time': (NOW - timedelta(seconds=91)).isoformat(),
-            'observed_utc': NOW.isoformat(), 'freshness_limit_seconds': 90}
+            'market_time': (NOW - timedelta(seconds=age)).isoformat(),
+            'observed_utc': NOW.isoformat(), 'freshness_limit_seconds': 120}
 
 
 def v3_attempt(nodes=(NODE,), failed=(NODE,)):
@@ -115,8 +115,9 @@ def trusted_master_verifier(monkeypatch):
 
 
 @pytest.mark.parametrize('age,uid,eligible', [
-    (91, 'uid', True), (90, 'uid', False), (-1, 'uid', False),
-    (91, 'other', False), (None, 'uid', False), ('naive', 'uid', False),
+    (121, 'uid', True), (120.000001, 'uid', True), (120, 'uid', False),
+    (90.000001, 'uid', False), (90, 'uid', False), (-1, 'uid', False),
+    (121, 'other', False), (None, 'uid', False), ('naive', 'uid', False),
 ])
 def test_security_stale_requires_actual_validation_and_identity(reads, age, uid, eligible):
     """A known adapter exception and exact raw timestamp facts are both required."""
@@ -131,7 +132,7 @@ def test_security_stale_requires_actual_validation_and_identity(reads, age, uid,
         fact = reporting.stale_book_facts(error)
     else:
         fact = None
-    assert fact == (stale_fact() if eligible else None)
+    assert fact == (stale_fact(age) if eligible else None)
     client.market_data.get_order_book.assert_called_once_with(instrument_id='uid', depth=1)
 
 
@@ -139,7 +140,7 @@ def test_security_stale_requires_actual_validation_and_identity(reads, age, uid,
 def test_stale_provenance_does_not_authorize_arbitrary_wrappers(reads, wrapper):
     """Only existing transport wrappers may carry a genuine validation exception."""
     client, data = reads
-    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=91)
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=121)
     with pytest.raises(ValueError) as caught:
         data.get_security_quote('uid')
     error = caught.value
@@ -283,7 +284,7 @@ def test_recorder_roundtrip_and_bootstrap_schema(reads, tmp_path, monkeypatch, p
     monkeypatch.setenv('E2E_EVIDENCE_PROTOCOL', protocol)
     monkeypatch.setenv('E2E_TESTED_SHA', SHA)
     client, data = reads
-    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=91)
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=121)
     with pytest.raises(ValueError) as caught:
         data.get_security_quote('uid')
     recorder = reporting.AttemptRecorder(tmp_path / 'report.json')
@@ -305,7 +306,7 @@ def test_recorder_roundtrip_and_bootstrap_schema(reads, tmp_path, monkeypatch, p
     pytest.param({'market_time': NOW.replace(tzinfo=None).isoformat()}, {}, id='naive'),
     pytest.param({'received_uid': 'other'}, {}, id='uid'),
     pytest.param({'reason': 'market_time_future'}, {}, id='reason'),
-    pytest.param({'freshness_limit_seconds': 120}, {}, id='limit'),
+    pytest.param({'freshness_limit_seconds': 60}, {}, id='limit'),
     pytest.param({'freshness_limit_seconds': True}, {}, id='bool-limit'),
     pytest.param({'private': 'private'}, {}, id='extra'),
     pytest.param({}, {'transport_chain': ['other', 'ValueError']}, id='assertion'),
@@ -384,6 +385,25 @@ def test_unvalidated_stale_dataclass_cannot_gain_retry_permission():
     phase = replace(report.phases[1], stale_book={**stale_fact(), 'market_time': NOW.isoformat()})
     report = replace(report, phases=(report.phases[0], phase, report.phases[2]))
     assert not evidence.retry_nodes(report, protocol='retry-v3')
+
+
+@pytest.mark.parametrize('limit', [90, 120])
+def test_v3_verifier_preserves_archived_limit_and_rechecks_exact_boundary(tmp_path, limit):
+    """Archived 90s evidence and current 120s evidence keep their own strict clocks."""
+    fact = {**stale_fact(limit), 'freshness_limit_seconds': limit}
+    with pytest.raises(evidence.RetryFailure, match='timestamps'):
+        evidence.validate_stale_book(fact)
+    fact['market_time'] = (NOW - timedelta(seconds=limit, microseconds=1)).isoformat()
+    first = v3_attempt()
+    first = replace(first, phases=tuple(
+        replace(phase, stale_book=fact) if phase.outcome == 'failed' else phase
+        for phase in first.phases))
+    store_v3(tmp_path, 1, first)
+    store_v3(tmp_path, 2, v3_attempt(failed=()))
+    expected = evidence.SuiteCollection(SHA, (NODE,))
+    states = evidence.inspect_history(tmp_path, expected=expected, protocol='retry-v3')
+    evidence.write_final_junit(states, tmp_path / 'junit.xml')
+    assert evidence.verify_history(tmp_path, expected=expected, protocol='retry-v3') == 1
 
 
 @pytest.mark.parametrize('category', ['stale', 'UNAVAILABLE', 'DEADLINE_EXCEEDED'])

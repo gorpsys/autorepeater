@@ -16,7 +16,7 @@ from autorepeater.strategy_data import DataAccessError
 from scripts.sandbox_lifecycle import SandboxFailure
 from scripts.sandbox_retry_evidence import (
     AttemptReport, PhaseFact, TRANSPORT_ROOTS, TRANSIENT_STATUSES,
-    PROTOCOLS, RetryFailure, checked_sha, validate_stale_book,
+    PROTOCOLS, STALE_BOOK_MAX_AGE_SECONDS, RetryFailure, checked_sha, validate_stale_book,
 )
 
 KNOWN_ERRORS = (
@@ -61,7 +61,7 @@ def _stale_validation_facts(error: ValueError) -> dict[str, object] | None:
             return validate_stale_book({
                 'reason': 'market_time_stale', 'expected_uid': uid, 'received_uid': received,
                 'market_time': stamp.isoformat(), 'observed_utc': now.isoformat(),
-                'freshness_limit_seconds': 90})
+                'freshness_limit_seconds': STALE_BOOK_MAX_AGE_SECONDS})
     except (KeyError, TypeError, AttributeError, RetryFailure):
         pass
     return None

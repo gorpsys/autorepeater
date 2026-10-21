@@ -175,7 +175,9 @@ def test_quote_accepts_exact_market_clock_skew_boundary(ahead):
     (timedelta(seconds=60), True),
     (timedelta(seconds=60, microseconds=164933), True),
     (timedelta(seconds=90), True),
-    (timedelta(seconds=90, microseconds=1), False),
+    (timedelta(seconds=90, microseconds=1), True),
+    (timedelta(seconds=120), True),
+    (timedelta(seconds=120, microseconds=1), False),
     (timedelta(seconds=160), False),
 ])
 def test_freshness_uses_market_time_and_exact_inclusive_boundary(age, accepted):
@@ -191,9 +193,9 @@ def test_freshness_uses_market_time_and_exact_inclusive_boundary(age, accepted):
 def test_snapshot_rechecks_age_without_mutating_original():
     """Execution can detect expiry and request a new snapshot, never reuse stale marks."""
     snapshot = FxSnapshot({'cny': quote()}, NOW)
-    snapshot.validate_fresh(NOW + timedelta(seconds=88))
+    snapshot.validate_fresh(NOW + timedelta(seconds=118))
     with pytest.raises(ValueError, match='stale'):
-        snapshot.validate_fresh(NOW + timedelta(seconds=89))
+        snapshot.validate_fresh(NOW + timedelta(seconds=119))
     assert snapshot.rate('cny') == D(12)
 
 
@@ -232,7 +234,7 @@ def test_builder_checks_quote_identity_and_revalidates_before_return():
     data.get_quote.return_value = quote(pair=pair(uid='other'))
     with pytest.raises(ValueError, match='identity'):
         build_fx_snapshot(data, ['cny'], now=NOW)
-    data.get_quote.return_value = quote(market_time=NOW - timedelta(seconds=90, microseconds=1))
+    data.get_quote.return_value = quote(market_time=NOW - timedelta(seconds=120, microseconds=1))
     with pytest.raises(ValueError, match='stale'):
         build_fx_snapshot(data, ['cny'], now=NOW)
 
@@ -266,7 +268,7 @@ def test_trade_requires_fresh_broker_facts_and_direction_permission(side):
     cash['rub' if side == 'BUY' else 'cny'] -= D('0.000000001')
     assert not book.can_trade(side, 2, rules(), state(cash), now=NOW)
     with pytest.raises(ValueError, match='stale'):
-        book.can_trade(side, 1, rules(), state(cash), now=NOW + timedelta(seconds=91))
+        book.can_trade(side, 1, rules(), state(cash), now=NOW + timedelta(seconds=121))
 
 
 def test_buy_own_money_limit_is_not_reserve_or_margin():

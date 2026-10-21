@@ -255,7 +255,7 @@ Decimal precision/rounding; later context changes cannot alter snapshot rates. R
 identity requires zero FX requests. Both market and receipt timestamps must
 be timezone-aware. Market timestamps may lead the local receipt clock by at most
 100 milliseconds inclusive; greater future offsets fail. Receipt ordering remains
-strict, and market age is at most 90 seconds inclusive. Empty, crossed,
+strict, and market age is at most 120 seconds inclusive. Empty, crossed,
 nonpositive, malformed or stale books fail;
 last_price, its timestamp and an implicit rate of 1 are never fallbacks.
 The caller can recheck freshness before effects and must read new data on
@@ -286,7 +286,7 @@ read-only loading, fixing each midpoint once before the financial tree is built.
 Debug constructs the same native funding plan without submission.
 
 `TInvestSecurityData` reads matching metadata and depth-one security books,
-checks positive two-sided levels and timezone-aware market time up to 90 seconds
+checks positive two-sided levels and timezone-aware market time up to 120 seconds
 old or 100 milliseconds ahead, both inclusive, and returns native `SecurityQuote`
 units. Security and direct FX books are
 independent reads. Share/ETF midpoints are money per piece; bond clean percent
@@ -296,7 +296,7 @@ Neither GetOrderPrice, operation history nor an order-price parameter is used.
 
 On a security book rejection, a bounded warning supplements the original
 ValueError: expected/received UID, market timestamp, observation time in UTC,
-age in seconds and the shared 90-second limit. Separate categories identify
+age in seconds and the shared 120-second limit. Separate categories identify
 UID mismatch, missing/invalid/naive timestamps, future data and stale data;
 several applicable categories may coexist. `market_time_future` means an offset
 greater than the shared 100-millisecond allowance. Raw timestamps and negative
@@ -314,7 +314,7 @@ Book rejection facts also retain ticker/class/currency from the already loaded
 instrument, or an explicit missing label. Observational monotonic and UTC clocks
 record request start, response and check, request duration and response-to-check
 delay. Receipt age uses observational UTC; check age retains the original
-validation clock. Neither clock replaces market time or changes the 90s guard.
+validation clock. Neither clock replaces market time or changes the 120s guard.
 E2E aggregates named metadata/catalog/book operations and separates RPC attempts
 from quota waits; nested stage totals are inclusive. Successful payloads are not
 streamed and no extra lookups, retries or clock calls for validation are added.

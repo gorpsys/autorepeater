@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 
 MAX_ATTEMPTS = 4
 MAX_BYTES = 2_000_000
+STALE_BOOK_MAX_AGE_SECONDS = 120
 TRANSPORT_ROOTS = frozenset(('RequestError', 'SandboxFailure', 'DataAccessError',
                              'ExecutionDataError', 'OrderExecutionError'))
 TRANSIENT_STATUSES = frozenset(('DEADLINE_EXCEEDED', 'UNAVAILABLE'))
@@ -130,21 +131,22 @@ def nodeids(value: object) -> tuple[str, ...]:
 
 
 def validate_stale_book(value: object) -> dict[str, object]:
-    """Recompute the exact 90-second guard from explicit identity and aware clocks."""
+    """Recompute current or archived guard age from explicit identity and aware clocks."""
     fields = object_fields(value, {'reason', 'expected_uid', 'received_uid', 'market_time',
                                    'observed_utc', 'freshness_limit_seconds'})
     uid = fields['expected_uid']
     if (not isinstance(uid, str) or re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', uid) is None
             or uid != fields['received_uid'] or uid in ('missing', 'invalid')):
         raise RetryFailure('invalid stale book identity')
+    limit = integer(fields['freshness_limit_seconds'])
     if (fields['reason'] != 'market_time_stale'
-            or integer(fields['freshness_limit_seconds']) != 90):
+            or limit not in (90, STALE_BOOK_MAX_AGE_SECONDS)):
         raise RetryFailure('invalid stale book reason or freshness limit')
     try:
         stamps = [datetime.fromisoformat(stamp) for stamp in
                   (fields['market_time'], fields['observed_utc']) if isinstance(stamp, str)]
         if (len(stamps) != 2 or any(stamp.utcoffset() is None for stamp in stamps)
-                or stamps[1] - stamps[0] <= timedelta(seconds=90)):
+                or stamps[1] - stamps[0] <= timedelta(seconds=limit)):
             raise ValueError
     except (ValueError, OverflowError):
         raise RetryFailure('invalid stale book timestamps') from None

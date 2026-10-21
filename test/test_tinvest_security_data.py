@@ -41,7 +41,7 @@ def fixture_reads():
     return client, TInvestSecurityData(client, clock=lambda: NOW)
 
 
-@pytest.mark.parametrize('age', [0, 60, 60.164933, 90])
+@pytest.mark.parametrize('age', [0, 60, 60.164933, 90, 90.000001, 120])
 def test_security_midpoint_ignores_last_trade_and_execution_price(reads, age):
     """Depth-one book of the security is distinct from the FX book."""
     client, data = reads
@@ -72,7 +72,7 @@ def test_cash_iso_identity_does_not_use_pair_quote_currency(reads):
     client.market_data.get_order_book.assert_not_called()
 
 
-@pytest.mark.parametrize('timestamp', [None, NOW - timedelta(seconds=90, microseconds=1),
+@pytest.mark.parametrize('timestamp', [None, NOW - timedelta(seconds=120, microseconds=1),
                                        NOW - timedelta(seconds=160),
                                        NOW + timedelta(milliseconds=100, microseconds=1),
                                        NOW + timedelta(seconds=1), NOW.replace(tzinfo=None)])

@@ -238,6 +238,29 @@ make e2e E2E_ARGS="-s"
 и GitHub-прогоны одновременно с общим sandbox-токеном: их блокировки
 и пространства имён независимы.
 
+Полный локальный прогон текущего checkout использует явный `retry-v3` и
+независимую коллекцию точного SHA. Сначала закоммитьте исходники: collector
+отклоняет dirty source и новые неотслеживаемые файлы исходников. `PYTHON`
+должен указывать на подготовленный интерпретатор, `SANDBOX_TOKEN_FILE` —
+на отдельный sandbox-token file. Коллекция выполняется до token helper.
+
+```bash
+export E2E_TESTED_SHA="$(git rev-parse HEAD)"
+export E2E_ARTIFACT_DIR="$(mktemp -d /tmp/autorepeater-full-v3-XXXXXX)"
+export E2E_EVIDENCE_PROTOCOL=retry-v3
+export PYTEST_ADDOPTS= PYTEST_PLUGINS= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+"$PYTHON" -m scripts.sandbox_collection --sha "$E2E_TESTED_SHA" \
+  --output "$E2E_ARTIFACT_DIR/collection.json" &&
+make e2e PYTHON="$PYTHON" SANDBOX_TOKEN_FILE="$SANDBOX_TOKEN_FILE" \
+  E2E_TIMEOUT=3600 E2E_ARGS="-s"
+```
+
+Без `-k`, `-m` и node ID: первая попытка содержит всю независимую коллекцию,
+повторы — только допустимые failed cases. Общий deadline попыток — 3600 секунд,
+не отдельные 60 минут на каждую попытку. Итоговый exit code супервизора обязателен;
+исходные `attempts/NN/report.json`, JUnit, дампы и cleanup сохраняются.
+Локальные результаты не заменяют независимую проверку в CI.
+
 При `DEADLINE_EXCEEDED` или `UNAVAILABLE` допускаются до трёх дополнительных
 попыток только упавших сценариев, с паузой 10 секунд. Все попытки входят
 в общий тайм-аут. Каждая запускает свежий pytest и создаёт новые счета;
@@ -326,7 +349,10 @@ V3 повторяет только failed API timeout и подтверждён�
 даже рядом с постоянными ошибками. Постоянные сценарии сохраняются failed
 в итоговом JUnit и не запускаются повторно; их нельзя скрыть общим success.
 Stale требует исключения из известной загруженной точки валидации, совпадающих
-UID, двух timezone-aware timestamps и возраста строго больше 90 секунд.
+UID, двух timezone-aware timestamps и возраста строго больше 120 секунд.
+Текущий producer пишет limit=120. Для чтения архивных v3 evidence verifier
+принимает также limit=90, строго пересчитывая возраст >90s; другие лимиты
+отклоняются. Это не меняет текущий guard приложения или формат v1/v2.
 Trusted verifier независимо проверяет эти факты. Assertions, произвольный
 ValueError, будущее/отсутствующее время и UID mismatch не дают retry.
 Auth запрещает любые повторы. Цикл или непрочитанный остаток после восьми
@@ -339,13 +365,14 @@ Collection/teardown/cleanup/отмена/deadline
 Activation PR #43 после полной приёмки вмержен в `b4044a0` (5.2.3).
 Trusted master принимает ручной input `evidence_protocol`: `retry-v2` по умолчанию,
 `retry-v3` по явному выбору инициатора. Его master push остаётся v2.
-Candidate 5.3.0 сохраняет default v3 для приложения с guard 90s;
+Candidate 5.3.0 сохраняет default v3 для приложения с guard 120s;
 после его merge default dispatch и master push будут v3, явный v2 доступен.
 Trusted prepare проверяет allowlist
 до live и передаёт единый output в `E2E_EVIDENCE_PROTOCOL` producer и
 `--evidence-format` независимого verifier с прежними `--collection` и `--sha`.
 Неизвестные форматы (включая legacy retry-v1) в dispatch отклоняются.
-Проверка stale v3 остаётся >90s. Полный запуск с ref master,
+Проверка stale v3 текущего checkout требует >120s и limit=120; verifier старого
+master с guard 90s не принимает эти факты. Полный запуск с ref master,
 pr_number=40 и evidence_protocol=retry-v3 использует v3 для точного SHA PR.
 Выбор не берётся из PR checkout или его артефактов; изменение только workflow
 PR #40 не активирует trusted master.

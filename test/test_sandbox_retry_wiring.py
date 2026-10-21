@@ -37,7 +37,7 @@ def fixture_security():
 @pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3'])
 @pytest.mark.parametrize('boundary', ['security', 'fx'])
 @pytest.mark.parametrize('clock,eligible', [
-    ('stale', True), ('just-stale', True), ('exact-limit', False),
+    ('stale', True), ('just-stale', True), ('exact-limit', False), ('old-limit', False),
     ('future', False), ('missing', False), ('naive', False),
 ])
 def test_actual_validator_to_original_report(
@@ -45,9 +45,10 @@ def test_actual_validator_to_original_report(
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Only proven stale rejections gain retry permission, and only under v3."""
     stamp = {
-        'stale': NOW - timedelta(seconds=91),
-        'just-stale': NOW - timedelta(seconds=90, microseconds=1),
-        'exact-limit': NOW - timedelta(seconds=90),
+        'stale': NOW - timedelta(seconds=121),
+        'just-stale': NOW - timedelta(seconds=120, microseconds=1),
+        'exact-limit': NOW - timedelta(seconds=120),
+        'old-limit': NOW - timedelta(seconds=90, microseconds=1),
         'future': NOW + timedelta(seconds=1),
         'missing': None,
         'naive': NOW.replace(tzinfo=None),
@@ -77,7 +78,7 @@ def test_actual_validator_to_original_report(
     recorder.finish(status)
     report = evidence.read_report(recorder.path, protocol=protocol)
     evidence.validate_report(report, status)
-    assert status == (0 if clock == 'exact-limit' else 1)
+    assert status == (0 if clock in ('exact-limit', 'old-limit') else 1)
     assert evidence.retry_nodes(report, protocol=protocol) == (
         (NODE,) if eligible and protocol == 'retry-v3' else ())
     fact = report.phases[1].stale_book
@@ -86,7 +87,7 @@ def test_actual_validator_to_original_report(
         assert fact == {
             'reason': 'market_time_stale', 'expected_uid': 'uid', 'received_uid': 'uid',
             'market_time': stamp.isoformat(), 'observed_utc': NOW.isoformat(),
-            'freshness_limit_seconds': 90,
+            'freshness_limit_seconds': 120,
         }
     assert client.market_data.mock_calls == (
         [call.get_order_book(instrument_id='uid', depth=1)] if boundary == 'security' else [])

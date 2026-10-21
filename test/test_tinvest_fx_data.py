@@ -119,7 +119,7 @@ def test_sdk_rejects_unknown_identity_or_units(reads, changes):
 @pytest.mark.parametrize('field,value', [
     ('instrument_uid', 'other'), ('bids', []), ('asks', []), ('orderbook_ts', None),
     ('orderbook_ts', NOW.replace(tzinfo=None)),
-    ('orderbook_ts', NOW - timedelta(seconds=90, microseconds=1)),
+    ('orderbook_ts', NOW - timedelta(seconds=120, microseconds=1)),
     ('orderbook_ts', NOW - timedelta(seconds=160)),
     ('orderbook_ts', NOW + timedelta(milliseconds=100, microseconds=1)),
     ('orderbook_ts', NOW + timedelta(seconds=1)),
@@ -141,8 +141,8 @@ def test_bad_book_never_falls_back_to_fresh_last_trade_or_one(reads, field, valu
     client.market_data.get_last_prices.assert_not_called()
 
 
-@pytest.mark.parametrize('age', [60, 60.121750, 90])
-def test_fx_book_accepts_historical_staleness_and_ninety_second_boundary(reads, age):
+@pytest.mark.parametrize('age', [60, 60.121750, 90, 90.000001, 120])
+def test_fx_book_accepts_historical_staleness_and_120_second_boundary(reads, age):
     """The FX adapter and immutable snapshot use the same inclusive market-age policy."""
     client, adapter = reads
     client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=age)
