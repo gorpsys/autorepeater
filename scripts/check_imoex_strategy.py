@@ -137,7 +137,9 @@ def main(argv: Sequence[str] | None = None, *,
     report = {
         'snapshot_started_at': started, 'snapshot_received_at': received,
         'config': asdict(strategy.config),
-        'snapshot': {ticker: asdict(quote) for ticker, quote in snapshot.items()},
+        'snapshot': {ticker: {'uid': quote.uid, 'price': quote.price, 'lot': quote.lot,
+                              'currency': quote.currency, 'time': quote.time}
+                     for ticker, quote in snapshot.items()},
         'comparisons': [compare_target(strategy.config, snapshot, scenario, threshold)
                         for scenario in scenarios for threshold in args.thresholds],
     }

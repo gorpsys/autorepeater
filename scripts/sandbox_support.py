@@ -17,6 +17,7 @@ from t_tech.invest import (
 from t_tech.invest.services import Services
 
 from autorepeater.execution_data import ExecutionSnapshot
+from autorepeater.execution_market import ExecutionMarket
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType
 from autorepeater.tinvest_execution_data import TInvestExecutionData
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
@@ -74,6 +75,10 @@ class OrderJournal(logging.Handler):
         self.events: list[dict[str, object]] = []
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.msg == ('Native execution end: terminal_reason=%s remaining_buy_uids=%s '
+                          'omitted_count=%d'):
+            self._native_end(record)
+            return
         message = record.getMessage()
         api_event = _api_event(message)
         if api_event is not None:
@@ -92,6 +97,29 @@ class OrderJournal(logging.Handler):
             event = 'submit' if message.startswith('Submitting') else 'confirm'
             self.events.append({'event': event,
                                 'time': record.created, 'message': message})
+
+    def _native_end(self, record: logging.LogRecord) -> None:
+        if not isinstance(record.args, tuple) or len(record.args) != 3:
+            return
+        reason, remaining, omitted = record.args
+        reasons = {
+            'preflight_or_sales_rejected', 'no_funded_purchase',
+            'submission_or_refresh_failed', 'readiness_positions_cash_or_preflight',
+            'fx_cash_attribution_unavailable', 'fx_settlement_unconfirmed',
+            'purchase_cash_rejected', 'purchase_settlement_unconfirmed',
+            'no_further_funded_purchase',
+        }
+        if not isinstance(reason, str) or reason not in reasons:
+            return
+        if (not isinstance(remaining, list) or len(remaining) > 20
+                or not all(isinstance(uid, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', uid)
+                           for uid in remaining)):
+            return
+        if not isinstance(omitted, int) or isinstance(omitted, bool) or omitted < 0:
+            return
+        self.events.append({'event': 'native_execution_end', 'time': record.created,
+                            'terminal_reason': reason, 'remaining_buy_uids': list(remaining),
+                            'omitted_count': omitted})
 
 
 class SandboxSession:  # pylint: disable=too-many-instance-attributes
@@ -114,6 +142,7 @@ class SandboxSession:  # pylint: disable=too-many-instance-attributes
         self.quotes: dict[str, QuoteEvidence] = {}
         self.records: list[dict[str, object]] = []
         self.scenario: str = 'unknown'
+        self.market: ExecutionMarket | None = None
 
     def instrument(self, ticker: str) -> InstrumentInfo:
         """Setup resolves the same exact share/ETF ticker and full API permission."""
@@ -139,7 +168,10 @@ class SandboxSession:  # pylint: disable=too-many-instance-attributes
 
     def state(self, account_id: str) -> ExecutionSnapshot:
         """Fresh availability includes own cash, physical positions and active orders."""
-        return safe_call(self.execution.get_destination, account_id=account_id)
+        if self.market is None:
+            return safe_call(self.execution.get_destination, account_id=account_id)
+        return safe_call(self.execution.get_destination, account_id=account_id,
+                         valuation=self.market.valuation())
 
     def pay_in(self, account_id: str, amount: D) -> None:
         """Pay-in has no idempotency key; never automatically repeat an uncertain mutation."""
@@ -154,22 +186,27 @@ class SandboxSession:  # pylint: disable=too-many-instance-attributes
         self.records.append({'event': 'pay_in', 'account_id': account_id,
                              'amount': format(amount, 'f'), 'time': time.time()})
 
-    def wait_positions(self, account_id: str, quantities: dict[str, D]) -> ExecutionSnapshot:
+    def wait_positions(self, account_id: str, quantities: dict[str, D], *,
+                       minimum_cash: dict[str, D] | None = None) -> ExecutionSnapshot:
         """Setup waits for a fresh exact physical snapshot before entering the app."""
         deadline = self.monotonic() + 30
         while True:
             state = self.state(account_id)
-            if state.limits_ready and not state.active_orders and state.quantities == quantities:
+            if (state.limits_ready and not state.active_orders and state.quantities == quantities
+                    and all(state.available_cash.get(code, D(0)) >= amount
+                            for code, amount in (minimum_cash or {}).items())):
                 return state
             if self.monotonic() >= deadline:
                 raise SandboxFailure('fresh positions did not settle within 30 seconds')
             self.sleep(2)
 
-    def buy_setup(self, account_id: str, instrument: InstrumentInfo, lots: int) -> None:
+    def buy_setup(self, account_id: str, instrument: InstrumentInfo, lots: int, *,
+                  base_currency: str | None = None) -> None:
         """One stable request, checked real broker FILL, then fresh physical positions."""
         if isinstance(lots, bool) or not isinstance(lots, int) or lots <= 0:
             raise ValueError('setup requires positive integer lots')
-        before = self.state(account_id).quantities
+        snapshot = self.state(account_id)
+        before = snapshot.quantities
         request_id = str(self.order_id_factory())
         self.records.append({'event': 'setup_submit', 'request_id': request_id,
                              'account_id': account_id, 'uid': instrument.uid, 'lots': lots,
@@ -198,6 +235,10 @@ class SandboxSession:  # pylint: disable=too-many-instance-attributes
         if state.execution_report_status != FILL:
             raise SandboxFailure('setup broker state is not FILL')
         expected = dict(before)
+        if base_currency is not None:
+            minimum = snapshot.available_cash.get(base_currency, D(0)) + lots * instrument.lot
+            self.wait_positions(account_id, expected, minimum_cash={base_currency: minimum})
+            return
         expected[instrument.uid] = expected.get(instrument.uid, D(0)) + lots * instrument.lot
         self.wait_positions(account_id, expected)
 

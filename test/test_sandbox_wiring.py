@@ -1,6 +1,7 @@
 """Explicit sandbox selection at the application boundary, without SDK connections."""
 import inspect
 from dataclasses import fields
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, call, create_autospec, patch
 
@@ -130,12 +131,40 @@ def test_sandbox_wiring_requires_explicit_bool(wiring, value):
     wiring.sandbox.assert_not_called()
 
 
-def test_sandbox_wiring_keeps_debug_only_params():
-    """Transport selection is keyword-only and does not become a financial parameter."""
-    assert [field.name for field in fields(application.RunnerParams)] == ['debug']
+def test_sandbox_wiring_keeps_transport_outside_params():
+    """Transport remains keyword-only; route selection has a backward-compatible default."""
+    assert [field.name for field in fields(application.RunnerParams)] == ['debug', 'fx_pair_uids']
+    assert application.RunnerParams(False).fx_pair_uids == {}
     parameter = inspect.signature(application.Runner).parameters['sandbox']
     assert parameter.kind == inspect.Parameter.KEYWORD_ONLY
     assert parameter.default is False
+
+
+@pytest.mark.parametrize('raw', ['', 'not-json', 'null', '[]', '1',
+                                 '{"rub":"pair"}', '{"cn":"pair"}',
+                                 '{"cny":""}', '{"cny":false}', '{"cny":"bad uid"}',
+                                 '{"cny":"pair-A","cny":"pair-B"}',
+                                 '{"CNY":"one","cny":"two"}'])
+def test_invalid_route_configuration_fails_before_client(wiring, monkeypatch, raw):
+    """Malformed selections cannot become an implicit choice or reach the SDK."""
+    monkeypatch.setenv('FX_PAIR_UIDS', raw)
+    with pytest.raises(ValueError):
+        application.Runner('synthetic', wiring.prepared, 'dst')
+    wiring.production.assert_not_called()
+    wiring.sandbox.assert_not_called()
+
+
+def test_explicit_route_params_override_environment_and_copy_mapping(wiring, monkeypatch):
+    """Explicit params replace inherited selection and do not retain mutable caller state."""
+    monkeypatch.setenv('FX_PAIR_UIDS', 'invalid-json')
+    choices = {'CNY': 'chosen'}
+    params = application.RunnerParams(False, fx_pair_uids=choices)
+    choices['CNY'] = 'other'
+    runner = application.Runner('synthetic', wiring.prepared, 'dst', params)
+    assert runner.params.fx_pair_uids == {'cny': 'chosen'}
+    empty = application.Runner('synthetic', wiring.prepared, 'dst', application.RunnerParams(False))
+    assert empty.params.fx_pair_uids == {}
+    wiring.production.assert_not_called()
 
 
 @pytest.mark.parametrize('source_id', ['0004', '2a78f51a-42c0-4a3e-8f95-b9ef692d2da1'])
@@ -171,6 +200,12 @@ def test_sandbox_wiring_finite_public_sync(wiring, source_id):
         instrument=sdk.Instrument(uid='uid', ticker='TEST', name='Synthetic',
                                   instrument_type='share', class_code='ANY', lot=1,
                                   currency='rub', api_trade_available_flag=True))
+    services.instruments.currency_by.return_value = sdk.CurrencyResponse(instrument=sdk.Currency(
+        uid='cash', iso_currency_name='RUB'))
+    services.market_data.get_order_book.return_value = sdk.GetOrderBookResponse(
+        instrument_uid='uid', orderbook_ts=datetime.now(timezone.utc),
+        bids=[sdk.Order(price=sdk.Quotation(units=10, nano=0), quantity=100)],
+        asks=[sdk.Order(price=sdk.Quotation(units=10, nano=0), quantity=100)])
     services.market_data.get_trading_status.return_value = sdk.GetTradingStatusResponse(
         instrument_uid='uid', api_trade_available_flag=True, bestprice_order_available_flag=True)
     services.orders.get_max_lots.return_value = sdk.GetMaxLotsResponse(
@@ -189,8 +224,14 @@ def test_sandbox_wiring_finite_public_sync(wiring, source_id):
         call.get_portfolio(account_id=source_id), call.get_portfolio(account_id='dst'),
         call.get_positions(account_id='dst')]
     assert services.instruments.mock_calls == [
+        call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid'),
+        call.currency_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='cash'),
+        call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid'),
         call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid')]
-    assert services.market_data.mock_calls == [call.get_trading_status(instrument_id='uid')]
+    assert services.market_data.mock_calls == [
+        call.get_order_book(instrument_id='uid', depth=1),
+        call.get_trading_status(instrument_id='uid'),
+        call.get_order_book(instrument_id='uid', depth=1)]
     assert services.orders.mock_calls == [
         call.get_orders(account_id='dst'),
         call.get_max_lots(request=ANY),

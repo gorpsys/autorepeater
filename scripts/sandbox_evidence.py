@@ -1,5 +1,6 @@
 """Typed, allowlisted sandbox evidence; dictionaries are only JSON at the boundary."""
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,9 +80,11 @@ class IdentifierEvidence:  # pylint: disable=too-many-instance-attributes
     legacy_numeric: bool
 
 
-def evidence_json(value: object) -> dict[str, object]:
+def evidence_json(value: object) -> dict[str, object] | str:
     """Serialize our DTOs only; never fall back to str/repr of arbitrary SDK data."""
     if isinstance(value, (MoneyEvidence, QuoteEvidence, OrderEvidence, TradeEvidence,
                           OperationEvidence, AccountEvidence, IdentifierEvidence)):
         return asdict(value)
+    if isinstance(value, Decimal) and value.is_finite():
+        return format(value, 'f')
     raise TypeError('unsupported sandbox evidence type')

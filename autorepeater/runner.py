@@ -1,5 +1,8 @@
 """Application runner and SDK client wiring."""
 import dataclasses
+import json
+import os
+from collections.abc import Mapping
 
 from t_tech.invest import Client
 from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
@@ -16,12 +19,35 @@ from autorepeater.strategy_contract import PreparedStrategy
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
 from autorepeater.tinvest_execution_data import TInvestExecutionData
 from autorepeater.order_execution import TInvestOrderExecutor
+from autorepeater.execution_market import ExecutionMarket
+from autorepeater.fx import validate_pair_uids
+
+
+def _unique_pair_uids(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject repeated JSON keys before decoding can discard a conflicting route."""
+    selected = {}
+    for currency, uid in pairs:
+        if currency in selected:
+            raise ValueError('duplicate FX pair selection currency')
+        selected[currency] = uid
+    return selected
 
 
 @dataclasses.dataclass
 class RunnerParams:
     """params for init Runner class"""
     debug: bool
+    fx_pair_uids: Mapping[str, str] = dataclasses.field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.fx_pair_uids = validate_pair_uids(self.fx_pair_uids)
+
+    @classmethod
+    def from_environment(cls, *, debug: bool = False) -> 'RunnerParams':
+        """Load launch-wide routes once, before creating any SDK client."""
+        selected = json.loads(os.environ.get('FX_PAIR_UIDS', '{}'),
+                              object_pairs_hook=_unique_pair_uids)
+        return cls(debug=debug, fx_pair_uids=selected)
 
 
 class Runner:
@@ -37,7 +63,7 @@ class Runner:
             raise TypeError('sandbox must be bool')
         self.token = token
         self.sandbox = sandbox
-        self.params = params if params is not None else RunnerParams(debug=False)
+        self.params = params if params is not None else RunnerParams.from_environment()
         self.strategy = create_strategy(prepared_strategy)
         self.dst = dst
         configure_local_logging()
@@ -71,7 +97,11 @@ class Runner:
     def _create_repeater(self, client: Services) -> AutoRepeater:
         """Apply the same risk parameters in both launch modes."""
         data = TInvestStrategyData(client)
+        sources = getattr(data, 'valuation_sources', None)
+        market = (ExecutionMarket(sources.fx, sources.securities,
+                                  fx_pair_uids=self.params.fx_pair_uids)
+                  if sources is not None else None)
         autorepeater = AutoRepeater(self.strategy, data, TInvestExecutionData(client, data),
-                                    TInvestOrderExecutor(client))
+                                    TInvestOrderExecutor(client), market=market)
         autorepeater.set_debug(self.params.debug)
         return autorepeater

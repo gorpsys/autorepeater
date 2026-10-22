@@ -240,7 +240,7 @@ def test_dispatch_protocol_default_and_selection_are_owned_by_prepare() -> None:
     assert 'evidence_protocol:' in inputs
     protocol_input = inputs.split('      evidence_protocol:', 1)[1]
     assert 'required: false' in protocol_input
-    assert 'default: retry-v2' in inputs
+    assert 'default: retry-v3' in inputs
     assert 'type: choice' in inputs
     assert '- retry-v2' in inputs and '- retry-v3' in inputs
     assert '- retry-v1' not in inputs

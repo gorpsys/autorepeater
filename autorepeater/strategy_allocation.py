@@ -121,7 +121,7 @@ def build_marks(positions, profiles):
         validate_profile(profile)
         for uid, price in profile.prices.items():
             marks[uid] = max(marks.get(uid, price), price)
-    marks.update((entry.uid, entry.current_price) for entry in positions)
+    marks.update((entry.uid, entry.mark) for entry in positions)
     return marks
 
 

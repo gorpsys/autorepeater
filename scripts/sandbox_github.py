@@ -109,10 +109,10 @@ class GitHubClient:  # pylint: disable=too-few-public-methods
 
 
 def select_protocol(event: object, event_name: str) -> str:
-    """Trusted dispatch input alone opts into v3; automatic pushes retain v2."""
+    """Trusted selection defaults to v3 for the 90-second application contract."""
     if event_name != 'workflow_dispatch':
-        return 'retry-v2'
-    protocol = record(record(event).get('inputs')).get('evidence_protocol', 'retry-v2')
+        return 'retry-v3'
+    protocol = record(record(event).get('inputs')).get('evidence_protocol', 'retry-v3')
     if not isinstance(protocol, str) or protocol not in ('retry-v2', 'retry-v3'):
         raise GitHubFailure('unsupported dispatch evidence protocol')
     return protocol

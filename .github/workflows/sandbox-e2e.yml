@@ -12,7 +12,7 @@ on:
         description: Trusted evidence protocol for this complete PR run
         required: false
         type: choice
-        default: retry-v2
+        default: retry-v3
         options:
           - retry-v2
           - retry-v3

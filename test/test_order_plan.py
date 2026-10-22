@@ -220,3 +220,24 @@ def test_nonzero_current_position_requires_positive_mark():
     with pytest.raises(ValueError, match='positive mark required for destination'):
         build_order_plan(leaf(), destination({'Z': D(1)}), {(): {'Z': D(1)}},
                          {'X': D(1), 'Z': D(0)}, rules('X', 'Z'))
+
+
+def test_fee_paid_from_reserve_does_not_hold_floor_again():
+    """A pure second calculation admits 450 after a 450+5 debit from 1000."""
+    tree = leaf(target={'A': D(1), 'B': D(1)}, budget='1000', floor='100')
+    own = {uid: replace(rule, buy_money_amount=D(545))
+           for uid, rule in rules('A', 'B').items()}
+    result = build_order_plan(tree, destination({'A': D(1)}, cash='545'),
+                              {(): {'A': D(1)}}, {'A': D(450), 'B': D(450)}, own)
+    assert [(item.uid, item.lots) for item in result.buys] == [('B', 1)]
+    assert result.money == {(): D(450)}
+
+
+@pytest.mark.parametrize('cash,cap,expected', [
+    ('449', '545', 0), ('545', '449', 0), ('455', '455', 1)])
+def test_floor_fix_keeps_real_cash_and_own_money_caps(cash, cap, expected):
+    """Removing the repeated floor cannot manufacture available money."""
+    tree = leaf(target={'X': D(1)}, budget='500', floor='50')
+    result = build_order_plan(tree, destination(cash=cash), {(): {}}, {'X': D(450)},
+                              {'X': replace(rules('X')['X'], buy_money_amount=D(cap))})
+    assert sum(item.lots for item in result.buys) == expected

@@ -191,7 +191,7 @@ def test_prepare_dispatch_checks_both_initiator_and_rerunner(
         'collaborators/owner/permission', 'collaborators/rerunner/permission', 'pulls/27']
     assert output.read_text(encoding='utf-8') == (
         f'head_sha={SHA}\npr_number=27\ntrusted_sha={"b" * 40}\n'
-        f'evidence_protocol={protocol or "retry-v2"}\n')
+        f'evidence_protocol={protocol or "retry-v3"}\n')
 
 
 @pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3'])
@@ -200,8 +200,8 @@ def test_dispatch_protocol_is_explicit_trusted_input(protocol):
     assert subject.select_protocol(
         {'inputs': {'evidence_protocol': protocol}}, 'workflow_dispatch') == protocol
     assert subject.select_protocol(
-        {'inputs': {'evidence_protocol': protocol}}, 'push') == 'retry-v2'
-    assert subject.select_protocol({'inputs': {}}, 'workflow_dispatch') == 'retry-v2'
+        {'inputs': {'evidence_protocol': protocol}}, 'push') == 'retry-v3'
+    assert subject.select_protocol({'inputs': {}}, 'workflow_dispatch') == 'retry-v3'
 
 
 @pytest.mark.parametrize('protocol', [
