@@ -1234,6 +1234,50 @@
       "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
     },
     {
+      "name": "pip",
+      "version": "26.2.2",
+      "kind": "python",
+      "scopes": [
+        "development"
+      ],
+      "requires": [],
+      "source": {
+        "url": "https://github.com/pypa/pip",
+        "tag": "26.2.2",
+        "commit": "b3b696fe2122f2339d782517559bfade2cb6b879",
+        "github": "exact",
+        "evidence": [
+          "2026-10-22: annotated release tag resolves to commit b3b696fe2122f2339d782517559bfade2cb6b879",
+          "https://raw.githubusercontent.com/pypa/pip/b3b696fe2122f2339d782517559bfade2cb6b879/src/pip/__init__.py SHA256 4ba3dbbe728e0a53a2d5da9dfdb1fdfe3db050e4978ed667ea1ff9b4a0681cd8",
+          "PyPI and OSV report no known advisories for pip 26.2.2; replaces vulnerable ensurepip bootstrap version 24.0 in managed development environments"
+        ]
+      },
+      "license": {
+        "expression": "MIT",
+        "status": "allowed",
+        "evidence": [
+          "https://raw.githubusercontent.com/pypa/pip/b3b696fe2122f2339d782517559bfade2cb6b879/LICENSE.txt SHA256 634300a669d49aeae65b12c6c48c924c51a4cdf3d1ff086dc3456dc8bcaa2104"
+        ],
+        "obligations": [
+          "Retain upstream licence and the bundled dependency licence files; pip is a development installer, not part of the cloud runtime payload"
+        ],
+        "fulfilled": true
+      },
+      "artifacts": [
+        {
+          "filename": "pip-26.2.2-py3-none-any.whl",
+          "path": "vendor/pip/pip-26.2.2-py3-none-any.whl",
+          "sha256": "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70",
+          "size": 1819850,
+          "tag": "py3-none-any",
+          "role": "wheel",
+          "url": "https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl"
+        }
+      ],
+      "storage": "excluded",
+      "reason": "Exact version source on GitHub; no ready wheel is needed; do not store this binary in Git."
+    },
+    {
       "name": "platformdirs",
       "version": "4.12.3",
       "kind": "python",
