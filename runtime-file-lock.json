@@ -359,6 +359,59 @@
             },
             "name": "requests"
         },
+        "42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b": {
+            "files": {
+                "certifi-2026.10.19.dist-info/METADATA": {
+                    "sha256": "a5c0be3a42daeef0edfaf58e6ea5b7550f3e4e8eb35420f72e902df9bcf00f5c",
+                    "size": 2526
+                },
+                "certifi-2026.10.19.dist-info/RECORD": {
+                    "sha256": "523b5d397037027a10e2b02a5b6c152449281698c65c75641920959a78087982",
+                    "size": 950
+                },
+                "certifi-2026.10.19.dist-info/WHEEL": {
+                    "sha256": "6beb9d2f69b857fe989fc6feb8acd66f5d918d1c70c0ca3aa21605336e2da5a6",
+                    "size": 91
+                },
+                "certifi-2026.10.19.dist-info/licenses/LICENSE": {
+                    "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7",
+                    "size": 989
+                },
+                "certifi-2026.10.19.dist-info/top_level.txt": {
+                    "sha256": "28cbb8bd409fb232eb90f6d235d81d7a44bea552730402453bffe723c345ebe5",
+                    "size": 8
+                },
+                "certifi/__init__.py": {
+                    "sha256": "f8ccfc10235998c7edd340f2f305b5f3d71aed978aea82a02af30d7877bee902",
+                    "size": 94
+                },
+                "certifi/__main__.py": {
+                    "sha256": "c410688fdd394d45812d118034e71fee88ba7beddd30fe1c1281bd3b232cd758",
+                    "size": 243
+                },
+                "certifi/cacert.pem": {
+                    "sha256": "50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785",
+                    "size": 238856
+                },
+                "certifi/core.py": {
+                    "sha256": "5c55f2727746e697f7edac9e17c377d8752e0da7ecca191531b3b80403d61dad",
+                    "size": 3394
+                },
+                "certifi/py.typed": {
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    "size": 0
+                },
+                "certifi/tests/__init__.py": {
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    "size": 0
+                },
+                "certifi/tests/test_certify.py": {
+                    "sha256": "7c179d1edf37f7e912b133663735fb46c6338d5d0e5f8915d11c3bc287d227b8",
+                    "size": 467
+                }
+            },
+            "name": "certifi"
+        },
         "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274": {
             "files": {
                 "six-1.17.0.dist-info/LICENSE": {
@@ -2030,59 +2083,6 @@
                 }
             },
             "name": "setuptools"
-        },
-        "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775": {
-            "files": {
-                "certifi-2026.7.22.dist-info/METADATA": {
-                    "sha256": "ef5af1638fbb23676ac3c5777dfcfc2cd9c348fe4172ed5ba3d277655b248090",
-                    "size": 2474
-                },
-                "certifi-2026.7.22.dist-info/RECORD": {
-                    "sha256": "ffbaaaa116c13b3c0337a451c316aab71c19aec40b67f4fc971e4685565bddc5",
-                    "size": 945
-                },
-                "certifi-2026.7.22.dist-info/WHEEL": {
-                    "sha256": "2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0",
-                    "size": 91
-                },
-                "certifi-2026.7.22.dist-info/licenses/LICENSE": {
-                    "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7",
-                    "size": 989
-                },
-                "certifi-2026.7.22.dist-info/top_level.txt": {
-                    "sha256": "28cbb8bd409fb232eb90f6d235d81d7a44bea552730402453bffe723c345ebe5",
-                    "size": 8
-                },
-                "certifi/__init__.py": {
-                    "sha256": "7a52e5f4205f9b3d12a31898ceaa7e3f6837d19cc230700bcae1a9d91d1486c1",
-                    "size": 94
-                },
-                "certifi/__main__.py": {
-                    "sha256": "c410688fdd394d45812d118034e71fee88ba7beddd30fe1c1281bd3b232cd758",
-                    "size": 243
-                },
-                "certifi/cacert.pem": {
-                    "sha256": "9cc2a774b5198dcff14d9be1e66091f538975d867ce029a96bce15a55dfd730f",
-                    "size": 240216
-                },
-                "certifi/core.py": {
-                    "sha256": "5c55f2727746e697f7edac9e17c377d8752e0da7ecca191531b3b80403d61dad",
-                    "size": 3394
-                },
-                "certifi/py.typed": {
-                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                    "size": 0
-                },
-                "certifi/tests/__init__.py": {
-                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                    "size": 0
-                },
-                "certifi/tests/test_certify.py": {
-                    "sha256": "7c179d1edf37f7e912b133663735fb46c6338d5d0e5f8915d11c3bc287d227b8",
-                    "size": 467
-                }
-            },
-            "name": "certifi"
         },
         "77179e006c476e69bf8e8ce866640091ec42e1beb80b213c3900006ecfba6901": {
             "files": {
@@ -5025,6 +5025,6 @@
             "name": "antlr4-python3-runtime"
         }
     },
-    "lock_sha256": "e7418637e952ec3101bdc666252f192a762bbcf31eefcfc712bbedf21e66a3a7",
+    "lock_sha256": "bd9e0e90b38c6f5160db9c9de95e0dba539b1b0c3d645b6044d13b0537e07f50",
     "schema_version": 1
 }
