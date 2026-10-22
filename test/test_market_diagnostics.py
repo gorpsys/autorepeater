@@ -147,9 +147,9 @@ def fixture_books():
     ('other', NOW, 'uid_mismatch', 0, 'security book UID mismatch or stale market time'),
     ('uid', NOW - timedelta(seconds=180, microseconds=1), 'market_time_stale', 180.000001,
      'security book UID mismatch or stale market time'),
-    ('uid', NOW + timedelta(seconds=1), 'market_time_future', -1,
+    ('uid', NOW + timedelta(seconds=2), 'market_time_future', -2,
      'security book UID mismatch or stale market time'),
-    ('uid', NOW + timedelta(milliseconds=100, microseconds=1), 'market_time_future', -0.100001,
+    ('uid', NOW + timedelta(seconds=1, microseconds=1), 'market_time_future', -1.000001,
      'security book UID mismatch or stale market time'),
     ('uid', None, 'market_time_missing', 'missing', 'FX timestamp must be timezone-aware'),
     ('uid', NOW.replace(tzinfo=None), 'market_time_naive', 'unavailable',
@@ -177,7 +177,8 @@ def test_book_failures_are_distinct_without_changing_exceptions(books, caplog, c
     assert len(client.instruments.method_calls) == len(client.market_data.method_calls) == 1
 
 
-@pytest.mark.parametrize('age', [-0.1, -0.065426, 0, 60, 61, 90, 90.000001, 120, 128.014157, 180])
+@pytest.mark.parametrize('age', [-1, -0.578215, -0.1, -0.065426, 0, 60, 61, 90, 90.000001,
+                                 120, 128.014157, 180])
 def test_fresh_book_does_not_log_and_keeps_quote(books, caplog, age):
     """The old boundary and newly permitted ages remain accepted and quiet."""
     client, data = books
@@ -186,19 +187,20 @@ def test_fresh_book_does_not_log_and_keeps_quote(books, caplog, age):
     assert 'Market diagnostic:' not in caplog.text
 
 
-def test_tolerated_market_skew_keeps_raw_diagnostic_age(books, caplog):
+@pytest.mark.parametrize('ahead', [timedelta(milliseconds=100), timedelta(seconds=1)])
+def test_tolerated_market_skew_keeps_raw_diagnostic_age(books, caplog, ahead):
     """A UID failure preserves negative age without falsely classifying accepted skew."""
     client, data = books
     book = client.market_data.get_order_book.return_value
     book.instrument_uid = 'other'
-    book.orderbook_ts = NOW + timedelta(milliseconds=100)
+    book.orderbook_ts = NOW + ahead
     with pytest.raises(ValueError, match='UID mismatch'):
         data.get_security_quote('uid')
     record, = [record for record in caplog.records
                if record.message.startswith('Market diagnostic: ')]
     fact = json.loads(record.message.removeprefix('Market diagnostic: '))
     assert fact['reasons'] == ['uid_mismatch']
-    assert fact['age_seconds'] == fact['age_at_check_seconds'] == -0.1
+    assert fact['age_seconds'] == fact['age_at_check_seconds'] == -ahead.total_seconds()
     assert fact['market_time'] == book.orderbook_ts.isoformat()
     assert fact['observed_utc'] == NOW.isoformat()
 

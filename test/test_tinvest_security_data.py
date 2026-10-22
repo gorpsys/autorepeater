@@ -74,8 +74,8 @@ def test_cash_iso_identity_does_not_use_pair_quote_currency(reads):
 
 @pytest.mark.parametrize('timestamp', [None, NOW - timedelta(seconds=180, microseconds=1),
                                        NOW - timedelta(seconds=240),
-                                       NOW + timedelta(milliseconds=100, microseconds=1),
-                                       NOW + timedelta(seconds=1), NOW.replace(tzinfo=None)])
+                                       NOW + timedelta(seconds=1, microseconds=1),
+                                       NOW + timedelta(seconds=2), NOW.replace(tzinfo=None)])
 def test_stale_or_unknown_security_book_rejected(reads, timestamp):
     """Receipt time and last trade time cannot substitute for orderbook_ts."""
     client, data = reads
@@ -86,9 +86,10 @@ def test_stale_or_unknown_security_book_rejected(reads, timestamp):
 
 @pytest.mark.parametrize('ahead', [timedelta(microseconds=1), timedelta(milliseconds=50),
                                    timedelta(milliseconds=65), timedelta(microseconds=65426),
-                                   timedelta(milliseconds=100)])
+                                   timedelta(milliseconds=100), timedelta(microseconds=578215),
+                                   timedelta(seconds=1)])
 def test_security_accepts_bounded_market_clock_skew(reads, ahead):
-    """One hundred milliseconds inclusive is a market-clock allowance, not a new mark."""
+    """One second inclusive is a market-clock allowance, not a new mark."""
     client, data = reads
     client.market_data.get_order_book.return_value.orderbook_ts = NOW + ahead
     assert data.get_security_quote('uid').estimate_per_piece().amount == D(90)

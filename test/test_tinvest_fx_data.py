@@ -121,8 +121,8 @@ def test_sdk_rejects_unknown_identity_or_units(reads, changes):
     ('orderbook_ts', NOW.replace(tzinfo=None)),
     ('orderbook_ts', NOW - timedelta(seconds=180, microseconds=1)),
     ('orderbook_ts', NOW - timedelta(seconds=240)),
-    ('orderbook_ts', NOW + timedelta(milliseconds=100, microseconds=1)),
-    ('orderbook_ts', NOW + timedelta(seconds=1)),
+    ('orderbook_ts', NOW + timedelta(seconds=1, microseconds=1)),
+    ('orderbook_ts', NOW + timedelta(seconds=2)),
     ('bids', [sdk.Order(price=quotation(122), quantity=1)]),
     ('asks', [sdk.Order(price=quotation(0), quantity=1)]),
     ('bids', [sdk.Order(price=None, quantity=1)]),
@@ -153,7 +153,8 @@ def test_fx_book_accepts_historical_staleness_and_120_second_boundary(reads, age
 
 @pytest.mark.parametrize('ahead', [timedelta(0), timedelta(microseconds=1),
                                    timedelta(milliseconds=50), timedelta(milliseconds=65),
-                                   timedelta(microseconds=65426), timedelta(milliseconds=100)])
+                                   timedelta(microseconds=65426), timedelta(milliseconds=100),
+                                   timedelta(microseconds=578215), timedelta(seconds=1)])
 def test_fx_accepts_bounded_market_clock_skew_without_rewriting_times(reads, ahead):
     """The adapter and snapshot retain the raw timestamp within the inclusive allowance."""
     client, adapter = reads

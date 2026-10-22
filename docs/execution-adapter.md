@@ -254,7 +254,7 @@ FX division uses precision 28 and HALF_EVEN independently of a caller's
 Decimal precision/rounding; later context changes cannot alter snapshot rates. RUB
 identity requires zero FX requests. Both market and receipt timestamps must
 be timezone-aware. Market timestamps may lead the local receipt clock by at most
-100 milliseconds inclusive; greater future offsets fail. Receipt ordering remains
+1 second inclusive; greater future offsets fail. Receipt ordering remains
 strict, and market age is at most 180 seconds inclusive. Empty, crossed,
 nonpositive, malformed or stale books fail;
 last_price, its timestamp and an implicit rate of 1 are never fallbacks.
@@ -287,7 +287,7 @@ Debug constructs the same native funding plan without submission.
 
 `TInvestSecurityData` reads matching metadata and depth-one security books,
 checks positive two-sided levels and timezone-aware market time up to 180 seconds
-old or 100 milliseconds ahead, both inclusive, and returns native `SecurityQuote`
+old or 1 second ahead, both inclusive, and returns native `SecurityQuote`
 units. Security and direct FX books are
 independent reads. Share/ETF midpoints are money per piece; bond clean percent
 quotes require matching positive native nominal and explicit native ACI, added

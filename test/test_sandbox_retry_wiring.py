@@ -39,7 +39,7 @@ def fixture_security():
 @pytest.mark.parametrize('clock,eligible', [
     ('stale', True), ('just-stale', True), ('exact-limit', False), ('old-limit', False),
     ('previous-limit', False), ('observed-case', False),
-    ('future', False), ('missing', False), ('naive', False),
+    ('exact-future-limit', False), ('future', False), ('missing', False), ('naive', False),
 ])
 def test_actual_validator_to_original_report(
         security, tmp_path, monkeypatch, protocol, boundary, clock, eligible):
@@ -52,7 +52,8 @@ def test_actual_validator_to_original_report(
         'old-limit': NOW - timedelta(seconds=90, microseconds=1),
         'previous-limit': NOW - timedelta(seconds=120, microseconds=1),
         'observed-case': NOW - timedelta(seconds=128, microseconds=14157),
-        'future': NOW + timedelta(seconds=1),
+        'exact-future-limit': NOW + timedelta(seconds=1),
+        'future': NOW + timedelta(seconds=1, microseconds=1),
         'missing': None,
         'naive': NOW.replace(tzinfo=None),
     }[clock]
@@ -82,7 +83,7 @@ def test_actual_validator_to_original_report(
     report = evidence.read_report(recorder.path, protocol=protocol)
     evidence.validate_report(report, status)
     assert status == (0 if clock in (
-        'exact-limit', 'old-limit', 'previous-limit', 'observed-case') else 1)
+        'exact-limit', 'old-limit', 'previous-limit', 'observed-case', 'exact-future-limit') else 1)
     assert evidence.retry_nodes(report, protocol=protocol) == (
         (NODE,) if eligible and protocol == 'retry-v3' else ())
     fact = report.phases[1].stale_book

@@ -151,8 +151,8 @@ def test_pair_rejects_incomplete_metadata(changes):
     {'bid': D(122)}, {'market_time': None}, {'received_time': None},
     {'market_time': NOW.replace(tzinfo=None)},
     {'received_time': NOW.replace(tzinfo=None)},
-    {'market_time': NOW + timedelta(milliseconds=100, microseconds=1)},
-    {'market_time': NOW + timedelta(seconds=1)},
+    {'market_time': NOW + timedelta(seconds=1, microseconds=1)},
+    {'market_time': NOW + timedelta(seconds=2)},
     {'pair': pair(quote_currency='usd')},
 ])
 def test_quote_rejects_invalid_book_or_timestamp(changes):
@@ -163,7 +163,8 @@ def test_quote_rejects_invalid_book_or_timestamp(changes):
 
 @pytest.mark.parametrize('ahead', [timedelta(0), timedelta(microseconds=1),
                                    timedelta(milliseconds=50), timedelta(milliseconds=65),
-                                   timedelta(milliseconds=100)])
+                                   timedelta(milliseconds=100), timedelta(microseconds=578215),
+                                   timedelta(seconds=1)])
 def test_quote_accepts_exact_market_clock_skew_boundary(ahead):
     """Only market time gets the allowance; the original times remain observable."""
     book = quote(market_time=NOW + ahead)
