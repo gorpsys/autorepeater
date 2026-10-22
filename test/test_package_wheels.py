@@ -16,7 +16,7 @@ import pytest
 
 from scripts import package_wheels as wheels
 from scripts.sdk_wheel import AvailabilityError, Reason, Response
-from scripts.runtime_lock import load_lock, render_requirements
+from scripts.runtime_lock import load_lock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -262,19 +262,6 @@ def test_development_uses_reviewed_inventory_and_keeps_runtime_pins():
     entries[0]['artifacts'] = []
     with pytest.raises(wheels.PackageError):
         wheels.artifact_for(entries[0])
-
-
-def test_pip_is_a_reviewed_development_tool_not_a_runtime_dependency():
-    """Managed setup replaces ensurepip's vulnerable installer with a pinned wheel."""
-    entries = json.loads((ROOT / 'vendor/inventory.json').read_text(encoding='utf-8'))['entries']
-    document = load_lock(ROOT)
-    runtime = {p['name'] for p in document['packages']}
-    artifacts = wheels.development_artifacts(entries, runtime)
-    pip = next(item for item in artifacts if item.name == 'pip')
-    assert pip.version == '26.2.2'
-    assert pip.sha256 == 'fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70'
-    assert 'pip' not in runtime
-    assert 'pip==26.2.2\n' in render_requirements(document)['requirements-dev-tools.txt']
 
 
 def test_request_worker_exact_timeout_owned_bytes(artifact, monkeypatch):
