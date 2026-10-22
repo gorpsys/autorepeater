@@ -22,6 +22,8 @@ files = [
     "scripts/sandbox_retry.py",
     "scripts/sandbox_retry_evidence.py",
     "scripts/sandbox_retry_report.py",
+    "scripts/retry_results.py",
+    "scripts/retry_settings.py",
     "scripts/deploy_support.py",
     "scripts/deploy_gate.py",
     "scripts/release_version.py",
