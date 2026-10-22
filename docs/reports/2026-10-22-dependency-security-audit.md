@@ -4,6 +4,10 @@
 из них 24 входят в runtime, остальные 24 нужны для разработки или установки.
 Версии взяты из `runtime-lock.json`, `vendor/inventory.json` и фактически
 установленного окружения после `scripts.install_dependencies --development`.
+Также проверены 31 встроенный компонент: 18 в pip, 12 в setuptools
+и один в isort. Совпадающие пары имя/версия объединены; вместе с двумя
+прежними версиями проверены 78 уникальных пар. OSV обработал все 78,
+PyPI вернул данные для 77; исключение SDK разобрано ниже.
 
 ## Источники и метод
 
@@ -108,8 +112,8 @@ PyPI вернул сведения для 47; исключение SDK опис�
 сверенных с CycloneDX SBOM `pip/_vendor/bom.cdx.json`. Они не видны в
 `pip list`; одноимённая установленная отдельно библиотека не заменяет
 встроенную копию. После объединения одинаковых пар имя/версия проверено
-66 пар: текущие distributions, встроенные компоненты и две прежние версии.
-OSV ответил по всем 66; PyPI по 65, кроме SDK.
+66 пар до добавления встроенных зависимостей setuptools/isort:
+текущие distributions, встроенные компоненты pip и две прежние версии.
 
 | Компонент в pip 26.2.2 | Запись | Применимость / решение |
 | --- | --- | --- |
@@ -134,6 +138,37 @@ OSV ответил по всем 66; PyPI по 65, кроме SDK.
 управляемая установка после скачивания wheel-файлов работает с `--no-index`.
 Эти ограничения уменьшают поверхность атаки, но не объявляются исправлением
 advisory встроенной urllib3.
+
+## Встроенные библиотеки setuptools и isort
+
+Проверка `RECORD` всех установленных distributions выявила встроенный код
+ещё в setuptools и isort. Версии setuptools получены из вложенных
+`*.dist-info/METADATA`, версия tomli в isort сверена по `__version__`.
+В итоговой проверке 14:54 UTC для этих компонентов advisory не найдено:
+
+| Владелец | Компонент | Версия |
+| --- | --- | --- |
+| setuptools | autocommand | 2.2.2 |
+| setuptools | backports.tarfile | 1.2.0 |
+| setuptools | importlib-metadata | 8.7.1 |
+| setuptools | jaraco.context | 6.1.0 |
+| setuptools | jaraco.functools | 4.4.0 |
+| setuptools | jaraco.text | 4.0.0 |
+| setuptools | more-itertools | 10.8.0 |
+| setuptools | packaging | 26.0 |
+| setuptools | platformdirs | 4.4.0 |
+| setuptools | tomli | 2.4.0 |
+| setuptools | wheel | 0.46.3 |
+| setuptools | zipp | 3.23.0 |
+| isort | tomli | 2.4.1 |
+
+## Проверки изменений
+
+Управляемая установка обновлённого dev-набора прошла. Новый регрессионный
+тест прошёл цикл RED -> GREEN; профильный набор: 314 passed.
+`make lint`, `make check-runtime-lock`, `git diff --check` прошли.
+Полный `make coverage`: 5450 passed, общее покрытие 99.45%, diff 100%.
+Live E2E и production handler при этой проверке не запускались.
 
 ## Границы проверки
 
