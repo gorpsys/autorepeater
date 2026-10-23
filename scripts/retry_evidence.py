@@ -6,7 +6,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from scripts.retry_results import PhaseResult, checked_nodeid, result_states, retry_nodes
-from scripts.retry_settings import RunSettings
+from scripts.retry_settings import RunSettings, unique_fields
 
 MAX_BYTES = 2_000_000
 
@@ -48,10 +48,10 @@ class AttemptEvidence:  # pylint: disable=too-many-instance-attributes
     phases: tuple[PhaseResult, ...]
     entered: tuple[str, ...]
     cleaned: tuple[str, ...]
+    sha: str | None
     session_cleanup: bool
     collection_errors: int
     exit_status: int
-    sha: str | None
 
 
 def read_bytes(path: Path) -> bytes:
@@ -71,7 +71,7 @@ def read_bytes(path: Path) -> bytes:
 def read_json(path: Path) -> object:
     """Invalid JSON and Unicode are failures, not missing facts with defaults."""
     try:
-        return json.loads(read_bytes(path))
+        return json.loads(read_bytes(path), object_pairs_hook=unique_fields)
     except (ValueError, UnicodeError):
         raise ValueError('invalid test evidence JSON') from None
 
@@ -117,10 +117,11 @@ def read_result(path: Path) -> AttemptEvidence:
             or not isinstance(cleanup, bool)):
         raise ValueError('invalid original test results')
     return AttemptEvidence(
-        nodeids(fields['selected']), tuple(phase_result(phase) for phase in phases),
-        nodeids(fields['entered']), nodeids(fields['cleaned']), cleanup,
-        integer(fields['collection_errors']), integer(fields['exit_status']),
-        None if sha is None else checked_sha(sha))
+        selected=nodeids(fields['selected']), phases=tuple(phase_result(phase) for phase in phases),
+        entered=nodeids(fields['entered']), cleaned=nodeids(fields['cleaned']),
+        sha=None if sha is None else checked_sha(sha), session_cleanup=cleanup,
+        collection_errors=integer(fields['collection_errors']),
+        exit_status=integer(fields['exit_status']))
 
 
 def validate_result(report: AttemptEvidence, returncode: int) -> dict[str, str]:
@@ -171,11 +172,13 @@ def xml_states(path: Path, selected: tuple[str, ...]) -> dict[str, str]:
         raise ValueError('ambiguous JUnit test identity')
     states = {}
     for case in root.iter('testcase'):
+        if case.find('skipped') is not None:
+            raise ValueError('skipped original test cannot pass or retry')
         node = expected.get((case.get('classname', ''), case.get('name', '')))
         if node is None or node in states:
             raise ValueError('unknown or duplicate JUnit test')
-        states[node] = 'failed' if any(case.find(tag) is not None
-                                      for tag in ('failure', 'error', 'skipped')) else 'passed'
+        states[node] = ('failed' if any(case.find(tag) is not None
+                                        for tag in ('failure', 'error')) else 'passed')
     return states
 
 

@@ -4,6 +4,8 @@ import re
 
 import pytest
 
+from scripts.retry_settings import RunSettings
+
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/sandbox-e2e.yml'
 
@@ -55,10 +57,11 @@ def test_live_is_read_only_pinned_and_bounded() -> None:
     assert 'contents: read' in text
     assert 'ref: ${{ needs.prepare.outputs.head_sha }}' in text
     assert 'persist-credentials: false' in text
-    assert 'timeout-minutes: 85' in text
+    assert 'timeout-minutes: ${{ fromJSON(needs.prepare.outputs.job_minutes) }}' in text
     assert 'SANDBOX_CI_SERIALIZED: "1"' in text
     assert 'SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}' in text
-    assert 'make e2e' in text and 'E2E_TIMEOUT=3600' in text
+    assert 'make e2e' in text and 'E2E_TIMEOUT=3600' not in text
+    assert 'E2E_RUN_SETTINGS: ${{ needs.prepare.outputs.run_settings }}' in text
     assert 'PYTEST_ADDOPTS: ""' in text
     assert '--junitxml=' in text
     assert 'scripts.sandbox_lifecycle cleanup --namespace ci' in text
@@ -129,25 +132,26 @@ def test_incomplete_publication_fails_workflow_after_publishing_failure() -> Non
 def test_live_step_deadlines_reserve_cleanup_artifact_and_overhead_time() -> None:
     """One hour of retries retains nested shutdown, cleanup and overhead budgets."""
     text = job('live')
-    deadline = int(re.findall(r'^    timeout-minutes: ([0-9]+)$', text, re.MULTILINE)[0])
+    settings = RunSettings(timeout_seconds=3600)
+    assert 'timeout-minutes: ${{ fromJSON(needs.prepare.outputs.job_minutes) }}' in text
     steps = re.split(r'^      - ', text.split('    steps:\n', 1)[1], flags=re.MULTILINE)[1:]
-    deadlines = [re.findall(r'^        timeout-minutes: ([0-9]+)$', step, re.MULTILINE)
+    deadlines = [re.findall(r'^        timeout-minutes: (.+)$', step, re.MULTILINE)
                  for step in steps]
     assert all(len(values) == 1 for values in deadlines)
-    minutes = [int(values[0]) for values in deadlines]
     run_step, cleanup_step, marker_step, upload_step = steps[4:]
     assert 'id: run\n' in run_step
-    timeout = re.findall(r'\bE2E_TIMEOUT=([0-9]+)\b', run_step)
-    assert timeout == ['3600']
-    assert minutes[:4] == [2, 2, 6, 1]
-    assert minutes[4] == int(timeout[0]) // 60 + 2 == 62
-    assert minutes[5:] == [2, 1, 2]
+    assert [int(values[0]) for values in deadlines[:4]] == [2, 2, 6, 1]
+    assert 'fromJSON(needs.prepare.outputs.run_step_minutes)' in deadlines[4][0]
+    assert settings.run_step_minutes == 62
+    assert 'fromJSON(needs.prepare.outputs.cleanup_minutes)' in deadlines[5][0]
+    assert [int(values[0]) for values in deadlines[6:]] == [1, 2]
     assert 'id: cleanup\n' in cleanup_step
-    assert 'timeout 90s' in cleanup_step
+    assert 'timeout "${CLEANUP_SECONDS}s"' in cleanup_step
     assert 'test -f sandbox-results/retry.json' in marker_step
     assert 'uses: actions/upload-artifact@v4' in upload_step
-    assert deadline == 85
-    assert deadline - sum(minutes) == 7
+    assert settings.job_minutes == 85
+    assert settings.job_minutes - (11 + settings.run_step_minutes
+                                   + settings.orphan_cleanup_minutes + 1 + 2) >= 6
     assert 'Queue and environment approval wait are outside this active job deadline.' in text
 
 
@@ -240,9 +244,10 @@ def test_dispatch_protocol_default_and_selection_are_owned_by_prepare() -> None:
     assert 'evidence_protocol:' in inputs
     protocol_input = inputs.split('      evidence_protocol:', 1)[1]
     assert 'required: false' in protocol_input
-    assert 'default: retry-v3' in inputs
+    assert 'default: retry-v4' in inputs
     assert 'type: choice' in inputs
     assert '- retry-v2' in inputs and '- retry-v3' in inputs
+    assert '- retry-v4' in inputs and 'run_settings:' in inputs
     assert '- retry-v1' not in inputs
     assert 'evidence_protocol: ${{ steps.target.outputs.evidence_protocol }}' in job('prepare')
     assert 'inputs.evidence_protocol' not in job('live') + job('verify')

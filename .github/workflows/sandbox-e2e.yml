@@ -12,10 +12,16 @@ on:
         description: Trusted evidence protocol for this complete PR run
         required: false
         type: choice
-        default: retry-v3
+        default: retry-v4
         options:
           - retry-v2
           - retry-v3
+          - retry-v4
+      run_settings:
+        description: JSON run budgets (timeout_seconds, max_attempts, retry_delay_seconds)
+        required: false
+        type: string
+        default: '{}'
   push:
     branches: [master]
 
@@ -43,6 +49,11 @@ jobs:
       trusted_sha: ${{ steps.target.outputs.trusted_sha }}
       pr_number: ${{ steps.target.outputs.pr_number }}
       evidence_protocol: ${{ steps.target.outputs.evidence_protocol }}
+      run_settings: ${{ steps.target.outputs.run_settings }}
+      run_step_minutes: ${{ steps.target.outputs.run_step_minutes }}
+      job_minutes: ${{ steps.target.outputs.job_minutes }}
+      cleanup_minutes: ${{ steps.target.outputs.cleanup_minutes }}
+      cleanup_seconds: ${{ steps.target.outputs.cleanup_seconds }}
     steps:
       - name: Checkout trusted preparation only
         uses: actions/checkout@v4
@@ -85,9 +96,8 @@ jobs:
     if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.pending.result == 'success' }}
     runs-on: ubuntu-latest
     # Queue and environment approval wait are outside this active job deadline.
-    # Step limits leave at least 7m for runner/action overhead.
-    # Cleanup (2m), markers (1m) and upload (2m) have explicitly reserved time.
-    timeout-minutes: 85
+    # The authorized run snapshot reserves termination, cleanup and workflow overhead.
+    timeout-minutes: ${{ fromJSON(needs.prepare.outputs.job_minutes) }}
     permissions:
       contents: read
     env:
@@ -95,6 +105,7 @@ jobs:
       PYTEST_ADDOPTS: ""
       E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}
       E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
+      E2E_RUN_SETTINGS: ${{ needs.prepare.outputs.run_settings }}
     defaults:
       run:
         working-directory: tested
@@ -118,7 +129,7 @@ jobs:
         run: .venv/bin/python -m scripts.sandbox_collection --sha "$E2E_TESTED_SHA" --output sandbox-results/collection.json
       - name: Run all real sandbox scenarios
         id: run
-        timeout-minutes: 62
+        timeout-minutes: ${{ fromJSON(needs.prepare.outputs.run_step_minutes) }}
         shell: bash
         env:
           SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
@@ -126,14 +137,15 @@ jobs:
         run: |
           test -n "$SANDBOX_TOKEN" || { echo "SANDBOX_TOKEN missing; E2E NOT RUN"; exit 1; }
           mkdir -p sandbox-results
-          make e2e E2E_TIMEOUT=3600 E2E_ARGS="-s --junitxml=$GITHUB_WORKSPACE/tested/sandbox-results/junit.xml" | tee sandbox-results/run.log
+          make e2e E2E_ARGS="-s --junitxml=$GITHUB_WORKSPACE/tested/sandbox-results/junit.xml" | tee sandbox-results/run.log
       - name: Final bounded CI orphan cleanup
         id: cleanup
         if: ${{ always() && steps.run.outcome != 'skipped' }}
-        timeout-minutes: 2
+        timeout-minutes: ${{ fromJSON(needs.prepare.outputs.cleanup_minutes) }}
         env:
           SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
-        run: timeout 90s .venv/bin/python -m scripts.sandbox_lifecycle cleanup --namespace ci
+          CLEANUP_SECONDS: ${{ needs.prepare.outputs.cleanup_seconds }}
+        run: timeout "${CLEANUP_SECONDS}s" .venv/bin/python -m scripts.sandbox_lifecycle cleanup --namespace ci
       - name: Require original versioned retry evidence
         if: ${{ always() && steps.run.outcome != 'skipped' }}
         timeout-minutes: 1
@@ -179,6 +191,7 @@ jobs:
         env:
           TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
           E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}
+          E2E_RUN_SETTINGS: ${{ needs.prepare.outputs.run_settings }}
         run: python3 -m scripts.sandbox_github evidence --evidence-format "$E2E_EVIDENCE_PROTOCOL" --junit sandbox-results/junit.xml --collection sandbox-results/collection.json --sha "$TESTED_SHA"
 
   publish:

@@ -23,7 +23,7 @@ class RunSettings:  # pylint: disable=too-many-instance-attributes
     termination_kill_seconds: int = 5
     cleanup_timeout_seconds: int = 60
     orphan_cleanup_timeout_seconds: int = 90
-    workflow_overhead_seconds: int = 1380
+    workflow_overhead_seconds: int = 1290
 
     def __post_init__(self) -> None:
         for name, value in asdict(self).items():
@@ -62,5 +62,11 @@ class RunSettings:  # pylint: disable=too-many-instance-attributes
         """Reserve explicit workflow setup, final cleanup and artifact time."""
         seconds = (self.timeout_seconds + 2 * self.termination_grace_seconds
                    + self.termination_kill_seconds + self.cleanup_timeout_seconds
-                   + self.workflow_overhead_seconds)
+                   + max(self.workflow_overhead_seconds, 960)
+                   + self.orphan_cleanup_timeout_seconds)
         return (seconds + 59) // 60
+
+    @property
+    def orphan_cleanup_minutes(self) -> int:
+        """Reserve a minute for starting and reporting the final cleanup process."""
+        return (self.orphan_cleanup_timeout_seconds + 59) // 60 + 1

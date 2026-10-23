@@ -167,7 +167,7 @@ def test_evidence_cli_reports_completion_only_after_validation(tmp_path: Path, m
     assert not output.exists()
 
 
-@pytest.mark.parametrize('protocol', [None, 'retry-v2', 'retry-v3'])
+@pytest.mark.parametrize('protocol', [None, 'retry-v2', 'retry-v3', 'retry-v4'])
 def test_prepare_dispatch_checks_both_initiator_and_rerunner(
         tmp_path: Path, monkeypatch, protocol) -> None:
     """Reruns cannot bypass either identity check and selection is fixed once."""
@@ -189,23 +189,25 @@ def test_prepare_dispatch_checks_both_initiator_and_rerunner(
     assert subject.main(['prepare']) == 0
     assert [call.args[1] for call in reader.call_args_list] == [
         'collaborators/owner/permission', 'collaborators/rerunner/permission', 'pulls/27']
-    assert output.read_text(encoding='utf-8') == (
+    assert output.read_text(encoding='utf-8').startswith(
         f'head_sha={SHA}\npr_number=27\ntrusted_sha={"b" * 40}\n'
-        f'evidence_protocol={protocol or "retry-v3"}\n')
+        f'evidence_protocol={protocol or "retry-v4"}\n')
+    assert 'run_settings=' in output.read_text(encoding='utf-8')
+    assert 'job_minutes=85\n' in output.read_text(encoding='utf-8')
 
 
-@pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3'])
+@pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3', 'retry-v4'])
 def test_dispatch_protocol_is_explicit_trusted_input(protocol):
     """Only the initiator input chooses the format; artifact fields cannot select it."""
     assert subject.select_protocol(
         {'inputs': {'evidence_protocol': protocol}}, 'workflow_dispatch') == protocol
     assert subject.select_protocol(
-        {'inputs': {'evidence_protocol': protocol}}, 'push') == 'retry-v3'
-    assert subject.select_protocol({'inputs': {}}, 'workflow_dispatch') == 'retry-v3'
+        {'inputs': {'evidence_protocol': protocol}}, 'push') == 'retry-v4'
+    assert subject.select_protocol({'inputs': {}}, 'workflow_dispatch') == 'retry-v4'
 
 
 @pytest.mark.parametrize('protocol', [
-    'retry-v1', '', None, False, [], {}, 'retry-v4', 'retry-v3\ncomplete=true',
+    'retry-v1', '', None, False, [], {}, 'retry-v5', 'retry-v3\ncomplete=true',
 ])
 def test_unknown_dispatch_protocol_stops_before_any_api(tmp_path, monkeypatch, protocol):
     """An unknown format cannot publish outputs or reach the broker job."""

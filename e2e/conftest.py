@@ -14,8 +14,9 @@ from scripts.sandbox_lifecycle import (
     SandboxFailure, SandboxLifecycle, list_exception_facts, sandbox_client,
 )
 from scripts.sandbox_support import OrderJournal, SandboxSession, write_failure_dump
-from scripts.sandbox_retry_report import AttemptRecorder, attempt_recorder
+from scripts.sandbox_retry_report import AttemptRecorder, attempt_recorder, auth_failure
 from scripts.sandbox_financial import observe_finances
+from e2e.retry_policy import may_retry
 
 
 class SandboxInterrupted(BaseException):
@@ -93,9 +94,11 @@ def pytest_runtest_makereport(
     report = outcome.get_result()
     recorder = attempt_recorder(getattr(item, 'session', None))
     if recorder is not None:
+        error = None if call.excinfo is None else call.excinfo.value
+        recorder.retry_blocked = recorder.retry_blocked or auth_failure(error)
         recorder.phase(item.nodeid, report.when,
                        'skipped' if hasattr(report, 'wasxfail') else report.outcome,
-                       None if call.excinfo is None else call.excinfo.value)
+                       error, retryable=may_retry(error, report.when, report.outcome))
     if call.excinfo is not None:
         exception = call.excinfo.value
         report.sandbox_error = list_exception_facts(exception)

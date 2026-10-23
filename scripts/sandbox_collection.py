@@ -6,7 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-from scripts.sandbox_retry_evidence import RetryFailure, checked_sha, read_collection
+from scripts.sandbox_retry_evidence import RetryFailure, checked_sha
+from scripts import retry_evidence
 
 
 class CollectionRecorder:
@@ -72,7 +73,10 @@ def collect_suite(root: Path, sha: str, output: Path) -> None:
     ], cwd=root, env=environment, check=False, capture_output=True, timeout=60)
     if result.returncode != 0:
         raise RetryFailure('full sandbox collection failed')
-    read_collection(output, sha)
+    try:
+        retry_evidence.read_collection(output, sha)
+    except ValueError:
+        raise RetryFailure('full sandbox collection invalid') from None
 
 
 def main(argv: list[str] | None = None) -> int:

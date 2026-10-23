@@ -16,6 +16,48 @@ Live sandbox/GitHub CI отдельный санкционированный з�
 cleanup; локальный запуск при общей песочнице не пересекается с GitHub.
 Дамп/JUnit содержат только безопасные проверенные факты.
 История bootstrap PR #28 сохранена в [истории версий](../history/versioning.md#bootstrap-sandbox-e2e-2026-10-08).
+## Текущий протокол v4
+
+Ручной запуск: Actions > Sandbox live E2E > Run workflow, ref master,
+номер открытого PR. После выпуска 5.3.2 default dispatch и master push используют
+retry-v4. Выбор формата принадлежит trusted prepare, не артефакту.
+Текущий переходный PR проверяется из master с retry-v3; после мержа
+master запускает v4. Права, фиксирование SHA, сериализация и независимый
+верификатор на отдельном runner сохраняются.
+
+Код E2E-тестов выдаёт для упавшей setup/call-фазы булев `retryable`.
+Runner и verifier не читают валюты, типы ошибок SDK или лимиты стакана.
+Тестовый классификатор читает действующий guard, не копию лимита из CI.
+Auth или неполный auth-разбор запрещает повторы всего прогона;
+assertions, неизвестные ошибки и teardown не дают разрешения повтора.
+Постоянные падения не мешают повторить другие разрешённые сценарии,
+но остаются в итоговом failure. Пройденные сценарии не повторяются.
+
+Независимая collection.json фиксирует полный набор точного SHA до передачи
+секрета. Первая попытка содержит весь набор; каждая следующая — ровно
+разрешённые failed node IDs предыдущей. Original result.json содержит фазы,
+явные статусы и факты завершения fixtures. Verifier сверяет оригинальные
+JUnit/cleanup, соответствие process exit и итоговый JUnit.
+Пропуски/xfail/xpass, missing/extra/duplicate cases, ошибки collection/teardown/
+cleanup и неподтверждённый SHA не дают success независимо от passed count.
+
+JSON input run_settings фиксируется trusted prepare и передаётся исполнителю
+и verifier; локально используется E2E_RUN_SETTINGS. Параметры: timeout_seconds,
+max_attempts, retry_delay_seconds, termination_grace_seconds,
+termination_kill_seconds, cleanup_timeout_seconds, orphan_cleanup_timeout_seconds,
+workflow_overhead_seconds. Все бюджеты — положительные целые; пауза может быть 0.
+Повторные ключи/неизвестные поля запрещены. Настройки применяются при dispatch
+без предварительного мержа значений; изменение источников тестов остаётся PR.
+Timeouts шагов выводятся из снимка с запасом на остановку, cleanup и upload;
+hosted job не длиннее 360 минут. Default CI: 3600 секунд на все попытки,
+4 попытки, пауза 10 секунд. Local default: 1800 секунд.
+run-settings.json в артефактах не заменяет доверенный снимок.
+
+## Совместимость v1-v3
+
+Ниже сохранены правила старых форматов для переходных PR и чтения архивов.
+Они не задают причины повторов и числовые лимиты текущего v4.
+
 Ручной запуск через Actions > Sandbox live E2E > Run workflow
 (ref master, pr_number с номером открытого PR). В candidate 5.3.0 поле
 evidence_protocol по умолчанию retry-v3; retry-v2 доступен явно.

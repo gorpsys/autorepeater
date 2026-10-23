@@ -13,6 +13,8 @@ from scripts.sandbox_retry_evidence import (
     MAX_ATTEMPTS, PROTOCOLS, RetryFailure, SuiteCollection, inspect_history, read_collection,
     read_report, retry_nodes, write_final_junit,
 )
+from scripts import retry_evidence, retry_results
+from scripts.retry_settings import RunSettings
 
 
 def junit_arguments(arguments: list[str], root: Path) -> tuple[list[str], Path]:
@@ -63,8 +65,16 @@ def selected_collection(root: Path) -> SuiteCollection | None:
 
 def run_attempts(arguments: list[str], root: Path, timeout: int, *,
                  runtime: RetryRuntime | None = None) -> int:
-    """One fixed run ID/process group and one deadline include all attempts and backoff."""
+    """Keep legacy callers readable while new launches consume test-owned decisions."""
     runtime = RetryRuntime() if runtime is None else runtime
+    if os.environ.get('E2E_EVIDENCE_PROTOCOL') == 'retry-v4':
+        return run_status_attempts(arguments, root, timeout, runtime)
+    return run_legacy_attempts(arguments, root, timeout, runtime)
+
+
+def run_legacy_attempts(arguments: list[str], root: Path, timeout: int,
+                        runtime: RetryRuntime) -> int:
+    """Frozen v1-v3 launch behavior for transition acceptance and archived reports."""
     deadline = runtime.clock() + timeout
     arguments, final_path = junit_arguments(arguments, root)
     if arguments.count('e2e/') != 1 or (root / 'attempts').exists():
@@ -110,6 +120,69 @@ def run_attempts(arguments: list[str], root: Path, timeout: int, *,
     return 1
 
 
+def status_collection(root: Path) -> retry_evidence.Collection | None:
+    """CI requires independent collection; local filtered runs cannot claim acceptance."""
+    sha = os.environ.get('E2E_TESTED_SHA')
+    if sha:
+        return retry_evidence.read_collection(root / 'collection.json', sha)
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        raise ValueError('CI requires independent collection')
+    return None
+
+
+def status_summary(root: Path, requested: Path, states: dict[str, str]) -> None:
+    """Preserve the fixed verifier path and the optional local JUnit destination."""
+    retry_evidence.write_junit(states, root / 'junit.xml')
+    if requested != root / 'junit.xml':
+        retry_evidence.write_junit(states, requested)
+
+
+def run_status_attempts(arguments: list[str], root: Path, timeout: int,
+                        runtime: RetryRuntime) -> int:
+    """Consume test-owned flags; all limits come from one immutable launch snapshot."""
+    settings = RunSettings.from_json(os.environ.get('E2E_RUN_SETTINGS'))
+    if timeout != settings.timeout_seconds:
+        raise ValueError('supervisor and retry timeout differ')
+    deadline = runtime.clock() + timeout
+    arguments, final_path = junit_arguments(arguments, root)
+    if arguments.count('e2e/') != 1 or (root / 'attempts').exists():
+        raise ValueError('fresh retry directory and one suite selector required')
+    root.mkdir(parents=True, exist_ok=True)
+    expected = status_collection(root)
+    (root / 'run-settings.json').write_text(settings.to_json(), encoding='utf-8')
+    history: list[dict[str, int]] = []
+    nodes = None
+    for number in range(1, settings.max_attempts + 1):
+        remaining = deadline - runtime.clock()
+        if remaining <= 0:
+            return 124
+        directory = root / 'attempts' / f'{number:02}'
+        directory.mkdir(parents=True)
+        print(f'Sandbox attempt {number}/{settings.max_attempts}; '
+              f'shared time remaining {int(remaining)}s', flush=True)
+        try:
+            history.append({'number': number, 'returncode': runtime.run(
+                attempt_arguments(arguments, nodes, directory), env=dict(
+                    os.environ, E2E_ATTEMPT_REPORT=str(directory / 'result.json'),
+                    E2E_ARTIFACT_DIR=str(directory), E2E_RUN_SETTINGS=settings.to_json()),
+                timeout=remaining, check=False).returncode})
+        except subprocess.TimeoutExpired:
+            return 124
+        (root / 'retry.json').write_text(
+            json.dumps({'version': 1, 'attempts': history}), encoding='utf-8')
+        states = retry_evidence.inspect_history(root, expected, settings)
+        status_summary(root, final_path, states)
+        if all(state == 'passed' for state in states.values()):
+            return 0
+        report = retry_evidence.read_result(directory / 'result.json')
+        nodes = retry_results.retry_nodes(report.phases, report.selected)
+        if not nodes or deadline - runtime.clock() <= settings.retry_delay_seconds:
+            return 1
+        if number < settings.max_attempts:
+            runtime.sleep(settings.retry_delay_seconds)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Only sandbox_e2e may establish serialization, credential and group ownership."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -117,13 +190,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('pytest_args', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     try:
-        if os.environ.get('E2E_SUPERVISED') != '1' or not 1 <= args.timeout <= 3600:
+        if os.environ.get('E2E_SUPERVISED') != '1' or args.timeout < 1 or (
+                os.environ.get('E2E_EVIDENCE_PROTOCOL') != 'retry-v4' and args.timeout > 3600):
             raise RetryFailure('sandbox retry requires the bounded supervisor')
         root = Path(os.environ.get(
             'E2E_ARTIFACT_DIR', '/tmp/autorepeater-e2e-' + os.environ['E2E_RUN_ID']))
         arguments = args.pytest_args[1:] if args.pytest_args[:1] == ['--'] else args.pytest_args
         return run_attempts(arguments, root, args.timeout)
-    except (RetryFailure, OSError, KeyError):
+    except (RetryFailure, ValueError, OSError, KeyError):
         print('Sandbox retry evidence invalid or cleanup incomplete; stopping', file=sys.stderr)
         return 1
 

@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 
+from scripts.retry_evidence import validate_xml_counts as validate_generic_xml_counts
+
 MAX_ATTEMPTS = 4
 MAX_BYTES = 2_000_000
 STALE_BOOK_MAX_AGE_SECONDS = 180
@@ -324,16 +326,10 @@ def validate_xml_counts(root: ET.Element) -> None:
     suites = list(root.iter('testsuite'))
     if not suites:
         raise RetryFailure('JUnit suite missing')
-    for suite in [root, *suites] if root.tag == 'testsuites' else suites:
-        cases = list(suite.iter('testcase'))
-        expected = {'tests': len(cases),
-                    'failures': sum(case.find('failure') is not None for case in cases),
-                    'errors': sum(case.find('error') is not None for case in cases),
-                    'skipped': sum(case.find('skipped') is not None for case in cases)}
-        for key, number in expected.items():
-            value = suite.get(key)
-            if (value is not None or suite.tag == 'testsuite') and value != str(number):
-                raise RetryFailure('JUnit counters disagree with original cases')
+    try:
+        validate_generic_xml_counts(root, suites)
+    except ValueError:
+        raise RetryFailure('JUnit counters disagree with original cases') from None
 
 
 def verify_attempt(directory: Path, returncode: int, *,

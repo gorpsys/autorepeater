@@ -5,6 +5,41 @@
 Действующие правила выпуска — в [техническом README](../../scripts/README.md#версии-и-выпуск).
 Результаты калибровки вынесены в [исторический отчёт](../reports/2026-10-06-calibration.md).
 
+## v5.3.1: обновление зависимостей и резервный деплой, 2026-10-23
+
+[PR #46](https://github.com/gorpsys/autorepeater/pull/46) влит squash-коммитом
+`6bba877d6df9faa7f4851e6141fe1a3a4c48bad9` в 08:28:57 UTC.
+Аннотированный тег `v5.3.1` создан автоматически и указывает на этот коммит.
+Выпуск обновляет `certifi` до 2026.10.19 и dev-инструмент `pip` до 26.2.2;
+торговый код и workflow не менялись. Результаты аудита и оставшиеся риски
+встроенных компонентов pip описаны в
+[отчёте](../reports/2026-10-22-dependency-security-audit.md).
+
+[PR E2E](https://github.com/gorpsys/autorepeater/actions/runs/39920222396)
+проверил SHA `001620e042558957c8ba626a218cfa4a970a6f82`: 26 прошедших,
+0 упавших и 0 пропущенных сценариев с первой попытки, время тестов 31:53.
+[Master E2E](https://github.com/gorpsys/autorepeater/actions/runs/39924946158)
+проверил squash-коммит: первый проход дал 24 прошедших и 2 упавших сценария;
+два повторяемых сценария снова упали во второй попытке и прошли в третьей.
+Итоговая независимая проверка подтвердила все 26 сценариев и очистку счетов.
+Lint и Offline checks, включая Network package smoke, на master прошли.
+
+[Штатный деплой](https://github.com/gorpsys/autorepeater/actions/runs/39928888616)
+завершился ошибкой создания версии `invalid_argument` в 09:04:31 UTC.
+Точная причина сборки или отклонённое поле по этому ответу не установлены.
+Диагностические ID: `x-request-id=9ee55a63-3ca3-4df7-99a5-df90e4e25ae3`,
+`x-client-trace-id=908f49fe-4ca5-426b-9874-64b7de72b05d`.
+
+Согласованный [резервный offline-деплой](https://github.com/gorpsys/autorepeater/actions/runs/39929637125)
+того же master-коммита завершился успешно в 09:09:48 UTC.
+Read-only проверка подтвердила ACTIVE-версию `d4eeu1a6159chi7qqonu`,
+ID функции `d4e6d0l53hkivgrmfano` (имя `t-invest`) и сохранение runtime-настроек.
+Объект пакета:
+`functions/6bba877d6df9faa7f4851e6141fe1a3a4c48bad9/39929637125-1.zip`.
+SHA-256 архива:
+`dd891abc7b6180cc184b720efd525175a7d6fb55dae1d59d9acd7d800b59b2ce`.
+Production handler для проверки не вызывался; Python cold start не проверен.
+
 ## v5.3.0: валютные операции и резервный деплой, 2026-10-22
 
 [PR #40](https://github.com/gorpsys/autorepeater/pull/40) влит squash-коммитом

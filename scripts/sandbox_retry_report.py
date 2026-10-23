@@ -1,5 +1,5 @@
 """Sanitized original pytest facts, recorded only after actual fixture finalizers."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 import json
 import os
@@ -18,6 +18,7 @@ from scripts.sandbox_retry_evidence import (
     AttemptReport, PhaseFact, TRANSPORT_ROOTS, TRANSIENT_STATUSES,
     PROTOCOLS, STALE_BOOK_MAX_AGE_SECONDS, RetryFailure, checked_sha, validate_stale_book,
 )
+from scripts.retry_results import PhaseResult
 
 KNOWN_ERRORS = (
     RequestError, SandboxFailure, DataAccessError, ExecutionDataError, OrderExecutionError,
@@ -133,7 +134,7 @@ def transport_facts(error: BaseException | None) -> tuple[tuple[str, ...], str |
     return tuple(chain), None
 
 
-class AttemptRecorder:
+class AttemptRecorder:  # pylint: disable=too-many-instance-attributes
     """One child process's mutable recording shell, frozen into a typed report once."""
 
     def __init__(self, path: Path) -> None:
@@ -144,9 +145,15 @@ class AttemptRecorder:
         self.cleaned: list[str] = []
         self.session_cleanup = False
         self.collection_errors = 0
+        self.results: list[PhaseResult] = []
+        self.retry_blocked = False
 
-    def phase(self, node: str, when: str, outcome: str, error: BaseException | None) -> None:
+    def phase(self, node: str, when: str, outcome: str, error: BaseException | None,
+              *, retryable: bool = False) -> None:
         """Do not retain error objects, locals, messages or token-bearing arguments."""
+        if os.environ.get('E2E_EVIDENCE_PROTOCOL') == 'retry-v4':
+            self.results.append(PhaseResult(node, when, outcome, retryable))
+            return
         chain, status = transport_facts(error)
         auth = auth_failure(error)
         stale = (stale_book_facts(error) if when != 'teardown' and outcome == 'failed'
@@ -157,6 +164,23 @@ class AttemptRecorder:
 
     def finish(self, exit_status: int) -> None:
         """Run at sessionfinish, after scenario and session teardown reports exist."""
+        if os.environ.get('E2E_EVIDENCE_PROTOCOL') == 'retry-v4':
+            status_fields = {
+                'version': 1, 'selected': self.selected,
+                'phases': [asdict(replace(phase, retryable=False)
+                                  if self.retry_blocked else phase) for phase in self.results],
+                'entered': self.entered, 'cleaned': self.cleaned,
+                'session_cleanup': self.session_cleanup,
+                'collection_errors': self.collection_errors, 'exit_status': exit_status,
+                'sha': os.environ.get('E2E_TESTED_SHA') or None,
+            }
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(status_fields), encoding='utf-8')
+            markers = 'Sandbox scenario cleanup complete\n' * len(self.cleaned)
+            if self.session_cleanup:
+                markers += 'Sandbox session cleanup complete\n'
+            (self.path.parent / 'cleanup.log').write_text(markers, encoding='utf-8')
+            return
         report = AttemptReport(self.selected, tuple(self.phases), tuple(self.entered),
                                tuple(self.cleaned), self.session_cleanup,
                                self.collection_errors, exit_status)
