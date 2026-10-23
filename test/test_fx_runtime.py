@@ -310,7 +310,7 @@ def test_public_runtime_incomplete_money_preserves_fill_but_defers_paper(sdk_run
     client.orders.post_order.assert_called_once()
     assert state.held == 0
     assert state.cash == {'rub': D(219), 'cny': D(65)}
-    assert client.operations.get_positions.call_count == 2
+    assert client.operations.get_positions.call_count == 3
 
 
 def test_sdk_money_fields_are_optional_bounds_separate_from_receipt_identity():

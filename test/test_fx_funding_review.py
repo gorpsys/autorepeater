@@ -13,7 +13,7 @@ import pytest
 from autorepeater.cash_facts import MoneyAmount, SecurityQuote, SecurityQuoteUnit
 from autorepeater.cash_pools import CashPools, split_cash
 from autorepeater.execution import OrderExecutionError, OrderExecutor
-from autorepeater.execution_data import ExecutionData
+from autorepeater.execution_data import AccountReadiness, ExecutionData
 from autorepeater.execution_market import _Ledger, _purchase_cash
 from autorepeater.fx import FxSnapshot
 from autorepeater.fx_funding import FundingInputs, FxPolicy, build_funding_plan
@@ -204,6 +204,7 @@ def test_composite_index_runtime_preserves_fully_funded_shared_lot():
     initial = replace(destination({'R': D('.1')}), portfolio=PortfolioSnapshot((
         PortfolioEntry('R', InstrumentType.SHARE, 'rub', D(100), D('.1'), ''),)),
                        budget=D(310), available_cash={'rub': D(290)})
+    data.get_readiness.return_value = AccountReadiness(False, False, False, 0)
     data.get_destination.side_effect = lambda account, *, valuation: replace(
         initial, fx_snapshot=valuation.fx)
     data.get_trade_rules.return_value = rules('R')

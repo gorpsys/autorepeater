@@ -71,7 +71,7 @@ from autorepeater.portfolio import get_portfolio
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.portfolio import validate_target
 from autorepeater.repeater import AutoRepeater
-from autorepeater.execution_data import ExecutionData
+from autorepeater.execution_data import AccountReadiness, ExecutionData, ExecutionSnapshot
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.tinvest_execution_data import TInvestExecutionData
 from autorepeater.reporting import GetInstrumentException
@@ -2158,11 +2158,17 @@ def test_configured_index_entrypoints(configured_indexes, monkeypatch, entrypoin
     monkeypatch.setenv('ALGORITM', 'INDEX')
     monkeypatch.setenv('DST_ACCOUNT', '5')
     monkeypatch.setattr(sys, 'argv', ['main.py', '--algoritm', 'INDEX', '-s', name, '-d', '5'])
+    execution = create_autospec(ExecutionData, instance=True, spec_set=True)
+    execution.get_readiness.return_value = AccountReadiness(False, False, False, 0)
+    execution.get_destination.return_value = ExecutionSnapshot(
+        PortfolioSnapshot(()), Decimal(100), {}, {}, {'rub': Decimal(100)}, {}, (), True)
     with patch.object(IndexStrategy, 'load_snapshot', autospec=True,
                       side_effect=TestException()) as snapshot, \
             patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
             patch.object(runner_module, 'TInvestStrategyData',
                          autospec=True) as data_class, \
+            patch.object(runner_module, 'TInvestExecutionData', autospec=True,
+                         return_value=execution), \
             patch.object(runner_module, 'print_all_portfolio', autospec=True), \
             patch.object(runner_module, 'configure_local_logging', autospec=True), \
             patch.object(serverless, 'configure_yc_logging', autospec=True):
