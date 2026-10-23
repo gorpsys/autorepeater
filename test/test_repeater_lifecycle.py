@@ -2,8 +2,12 @@
 from dataclasses import replace
 from decimal import Decimal as D
 from types import SimpleNamespace
+from test.test_account_currency import position
+from test.test_composite_strategy import make_composite
+from test.test_fx_execution import runtime
 from test.test_fx_runtime import fixture_sdk_runtime, launch, money
 from test.test_order_plan import destination, leaf, rules
+from test.test_strategy_contract import contract_case
 from unittest.mock import Mock, call, create_autospec, patch
 
 import pytest
@@ -12,14 +16,17 @@ from t_tech.invest import RequestError, schemas as sdk
 
 import handler as cloud
 from autorepeater import grpc_deadline, repeater, runner, serverless, tinvest_requests
-from autorepeater.execution import OrderExecutionError, OrderExecutor
+from autorepeater.cash_facts import SecurityQuote, SecurityQuoteUnit
+from autorepeater.execution import ExecutionReceipt, OrderExecutionError, OrderExecutor
 from autorepeater.execution_data import (
-    AccountReadiness, ActiveOrder, ExecutionData, ExecutionDataError,
+    AccountReadiness, ActiveOrder, ExecutionData, ExecutionDataError, ExecutionSnapshot,
 )
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_contract import Strategy
-from autorepeater.strategy_data import DataAccessError, PositionEvent, StrategyData
+from autorepeater.strategy_data import (
+    DataAccessError, PortfolioSnapshot, PositionEvent, StrategyData,
+)
 from autorepeater.strategy_plan import AllocationProfile
 from autorepeater.tinvest_execution_data import TInvestExecutionData
 from scripts.sandbox_retry_report import transport_facts
@@ -567,6 +574,162 @@ def test_finite_entrypoints_propagate_readiness_failures(case, clock, entrypoint
                     'token': 'synthetic'}}, None)
     assert not case.strategy.load_snapshot.mock_calls
     assert not case.executor.mock_calls
+    case.data.position_events.assert_not_called()
+
+
+@pytest.mark.parametrize('entrypoint', ['run_sync', 'handler'])
+def test_finite_entrypoints_finish_one_real_pass_without_subscribing(
+        case, clock, monkeypatch, entrypoint):
+    """Cloud defaults and one-shot success retain finite readiness, planning and execution."""
+    for key in ('ALGORITM', 'SRC_ACCOUNT'):
+        monkeypatch.delenv(key, raising=False)
+    case.engine.set_debug(False)
+    case.execution.get_readiness.side_effect = [BLOCKED, READY]
+    case.executor.submit_order.return_value = ExecutionReceipt(
+        'X', 'BUY', 'broker-X', 'FILL', 10, 10, {})
+    prepared = SimpleNamespace(source_display='BALANCED')
+    with patch.object(runner.Runner, '_create_client', autospec=True, spec_set=True), \
+            patch.object(runner.Runner, '_create_repeater', autospec=True, spec_set=True,
+                         return_value=case.engine), \
+            patch.object(runner, 'create_strategy', autospec=True, spec_set=True,
+                         return_value=case.strategy), \
+            patch.object(serverless, 'prepare_strategy', autospec=True, spec_set=True,
+                         return_value=prepared) as prepare, \
+            patch.object(serverless, 'print_launch', autospec=True, spec_set=True):
+        if entrypoint == 'run_sync':
+            runner.Runner('synthetic', prepared, 'dst', runner.RunnerParams(False)).run_sync()
+            prepare.assert_not_called()
+        else:
+            result = cloud.handler({'queryStringParameters': {
+                'dst': 'dst', 'token': 'synthetic'}}, None)
+            assert result['statusCode'] == 200
+            prepare.assert_called_once_with('COMPOSITE', 'BALANCED')
+    assert clock.sleeps == [5]
+    assert case.execution.get_readiness.call_args_list == [
+        call('dst', timeout=30), call('dst', timeout=25)]
+    case.strategy.load_snapshot.assert_called_once_with(case.data)
+    case.executor.submit_order.assert_called_once()
+    case.executor.get_order_state.assert_not_called()
+    case.data.position_events.assert_not_called()
+    case.strategy.event_accounts.assert_not_called()
+
+
+def recovery_strategy(algoritm, currency):
+    """Real leaves share one UID and equal reserves, keeping lot rounding observable."""
+    account, data = contract_case('ACCOUNT')
+    index, _ = contract_case('INDEX')
+    account.config = replace(account.config, reserve=D('.1'))
+    index.config = replace(index.config, reserve=D('.1'))
+    strategy = {'ACCOUNT': account, 'INDEX': index, 'COMPOSITE': make_composite(
+        [account, index], weights=['.5', '.5'])}[algoritm]
+    data.get_instrument.return_value = replace(
+        data.get_instrument.return_value, lot=1, currency=currency)
+    return strategy, data
+
+
+def recovery_runtime(algoritm, currency):
+    """Strict stateful ports model external fills and independent native/FX price changes."""
+    strategy, data = recovery_strategy(algoritm, currency)
+    state = SimpleNamespace(changed=False, blocked=False)
+    data.get_portfolio.side_effect = lambda _account: PortfolioSnapshot((position(
+        'uid', quantity='2' if state.changed else '1'),))
+    market, fx, books = runtime()
+    original_quote = fx.get_quote.side_effect(fx.list_pairs.return_value[0])
+    fx.get_quote.side_effect = lambda pair: replace(
+        original_quote, pair=pair, bid=D(20 if state.changed else 10),
+        ask=D(20 if state.changed else 10))
+
+    def book(_uid):
+        price = D(20 if state.changed else 10) if currency == 'cny' else D(
+            400 if state.changed else 100)
+        return SecurityQuote(currency, price, price, SecurityQuoteUnit.MONEY_PER_PIECE)
+
+    books.get_security_quote.side_effect = book
+    execution = create_autospec(ExecutionData, instance=True, spec_set=True)
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+
+    def probe(_account, *, timeout):
+        assert timeout > 0
+        if state.blocked:
+            state.blocked = False
+            return BLOCKED
+        return READY
+
+    def read_destination(_account, *, valuation):
+        cash = ({'rub': D(200), 'cny': D(10)} if state.changed else
+                {'rub': D(100), 'cny': D(90)}) if currency == 'cny' else {
+                    'rub': D(400 if state.changed else 1000)}
+        portfolio = valuation.portfolio(PortfolioSnapshot(
+            (position('uid', quantity='9'),) if state.changed else ()))
+        return ExecutionSnapshot(portfolio, D(4000 if state.changed else 1000),
+                                 {'uid': D(9)} if state.changed else {},
+                                 {'uid': D(400)} if state.changed else {}, cash,
+                                 {'uid': D(9)} if state.changed else {}, (), True,
+                                 valuation.fx)
+
+    execution.get_readiness.side_effect = probe
+    execution.get_destination.side_effect = read_destination
+    execution.get_trade_rules.return_value = rules('uid', currency=currency)
+    executor.submit_order.side_effect = OrderExecutionError('uncertain submission')
+    engine = repeater.AutoRepeater(strategy, data, execution, executor, market=market)
+    return SimpleNamespace(engine=engine, strategy=strategy, data=data, execution=execution,
+                           executor=executor, state=state, fx=fx)
+
+
+@pytest.mark.parametrize('algoritm', ['ACCOUNT', 'INDEX', 'COMPOSITE'])
+@pytest.mark.parametrize('currency', ['rub', 'cny'], ids=['RUB', 'RUB+CNY'])
+def test_reconnect_real_strategies_use_changed_broker_state_without_intent_replay(
+        clock, monkeypatch, algoritm, currency):
+    """An uncertain send followed by a stream gap requires a new pass before subscribing."""
+    case = recovery_runtime(algoritm, currency)
+    stop = RuntimeError('end finite test stream')
+    case.data.position_events.side_effect = [iter(()), stop]
+
+    def pause(seconds):
+        if seconds == 1:
+            assert case.executor.submit_order.call_count == 1
+            case.state.changed = case.state.blocked = True
+        clock.sleep(seconds)
+
+    monkeypatch.setattr(repeater, 'sleep', pause)
+    with patch.object(repeater.reporting, 'print_rebalance_plan', autospec=True,
+                      spec_set=True) as report, pytest.raises(RuntimeError) as caught:
+        case.engine.mainflow('dst')
+    assert caught.value is stop
+    assert clock.sleeps == [1, 5]
+    assert case.execution.get_readiness.call_args_list == [
+        call('dst', timeout=30), call('dst', timeout=30), call('dst', timeout=25)]
+    assert case.data.begin_snapshot.call_args_list == [call(), call()]
+    assert case.execution.get_destination.call_count == 2
+    assert case.execution.get_trade_rules.call_args_list == [call('dst', ['uid'])] * 2
+    assert case.data.position_events.call_args_list == [
+        call(case.strategy.event_accounts('dst'))] * 2
+    assert case.data.get_portfolio.call_args_list == (
+        [] if algoritm == 'INDEX' else [call('00123')] * 2)
+    first, fresh = [item.args[0] for item in report.call_args_list]
+    assert first.snapshot.budget == D(1000)
+    assert first.marks == {'uid': D(100)}
+    assert fresh.snapshot.budget == D(4000)
+    assert fresh.snapshot.quantities == {'uid': D(9)}
+    assert fresh.snapshot.available_cash == ({'rub': D(200), 'cny': D(10)}
+                                             if currency == 'cny' else {'rub': D(400)})
+    assert fresh.marks == {'uid': D(400)}
+    assert fresh.snapshot.fx_snapshot is not first.snapshot.fx_snapshot
+    if currency == 'cny':
+        assert first.snapshot.fx_snapshot.rate('cny') == D(10)
+        assert fresh.snapshot.fx_snapshot.rate('cny') == D(20)
+    else:
+        assert not case.fx.mock_calls
+    assert fresh.ownership == ({(0,): {'uid': D('4.5')}, (1,): {'uid': D('4.5')}}
+                               if algoritm == 'COMPOSITE' else {(): {'uid': D(9)}})
+    assert fresh.strategy.cash_floor == D(400)
+    assert all(child.cash_floor == D(200) for child in fresh.strategy.children)
+    assert not fresh.sells and not fresh.funding.demands
+    case.executor.submit_order.assert_called_once()
+    intent = case.executor.submit_order.call_args.args[1]
+    assert (intent.uid, intent.side, intent.lot_size) == ('uid', 'BUY', 1)
+    assert sum(intent.pieces.values(), D(0)) == D(intent.lots)
+    case.executor.get_order_state.assert_not_called()
 
 
 @pytest.mark.parametrize('destination_currency', ['rub', 'usd'])

@@ -149,7 +149,12 @@ def test_unknown_execution_stops_only_local_pass(runtime):
     strategy, data, execution, executor = runtime
     strategy.event_accounts.return_value = ('dst',)
     strategy.should_rebalance.return_value = True
-    data.position_events.side_effect = [iter([object()]), RuntimeError('end offline stream')]
+
+    def events():
+        yield PositionEvent(True, 'dst', (), (), 'ready')
+        raise RuntimeError('end offline stream')
+
+    data.position_events.return_value = events()
     executor.submit_order.side_effect = [
         OrderExecutionError('unknown'),
         ExecutionReceipt('stock', 'BUY', 'next', 'FILL', 10, 10, {})]
@@ -157,6 +162,7 @@ def test_unknown_execution_stops_only_local_pass(runtime):
         AutoRepeater(strategy, data, execution, executor).mainflow('dst')
     assert executor.submit_order.call_count == 2
     assert execution.get_destination.call_count == 2
+    data.position_events.assert_called_once_with(('dst',))
 
 
 @pytest.fixture(name='sdk_runtime')

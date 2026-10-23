@@ -862,7 +862,7 @@ class IndependentStrategy:
 INDEPENDENT_PROBE = '''
 import sys
 from decimal import Decimal
-from unittest.mock import Mock, patch
+from unittest.mock import create_autospec, patch
 sys.path.insert(0, sys.argv[1])
 with patch('socket.socket.connect', side_effect=AssertionError('network forbidden')), \
         patch('grpc.secure_channel', side_effect=AssertionError('gRPC forbidden')):
@@ -870,21 +870,24 @@ with patch('socket.socket.connect', side_effect=AssertionError('network forbidde
     import handler
     from autorepeater import runner
     from autorepeater.strategies import prepare_strategy, create_strategy
-    from autorepeater.execution import ExecutionReceipt
-    from autorepeater.execution_data import ExecutionSnapshot, TradeRules
-    from autorepeater.strategy_data import PortfolioSnapshot
+    from autorepeater.execution import ExecutionReceipt, OrderExecutor
+    from autorepeater.execution_data import (
+        AccountReadiness, ExecutionData, ExecutionSnapshot, TradeRules,
+    )
+    from autorepeater.strategy_data import PortfolioSnapshot, StrategyData
     prepared = prepare_strategy('ARCHIVE_INDEPENDENT', 'independent-source')
     strategy = create_strategy(prepared)
     assert strategy.prepared == 'independent-source'
-    data = Mock(spec_set=['begin_snapshot', 'get_portfolio', 'position_events'])
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
     data.get_portfolio.return_value = PortfolioSnapshot(())
     data.position_events.side_effect = RuntimeError('finite offline stream')
-    execution = Mock(spec_set=['get_destination', 'get_trade_rules'])
+    execution = create_autospec(ExecutionData, instance=True, spec_set=True)
     execution.get_destination.return_value = ExecutionSnapshot(
         PortfolioSnapshot(()), Decimal(100), {}, {}, {'rub': Decimal(100)}, {}, (), True)
     execution.get_trade_rules.return_value = {
         'stock': TradeRules(1, 'rub', True, True, Decimal(100), 100, 100)}
-    executor = Mock(spec_set=['submit_order'])
+    execution.get_readiness.return_value = AccountReadiness(False, False, False, 0)
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda account, intent: ExecutionReceipt(
         intent.uid, intent.side, 'offline', 'FILL', intent.lots, intent.lots, {})
     with patch.object(runner, 'Client', autospec=True), \
@@ -910,6 +913,7 @@ with patch('socket.socket.connect', side_effect=AssertionError('network forbidde
         executor.submit_order.assert_called_once()
         assert executor.submit_order.call_args.args[1].lots == 10
     assert data.get_portfolio.call_count == 2
+    assert execution.get_readiness.call_count == 2
 print('independent archive launch completed')
 '''
 
