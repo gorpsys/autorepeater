@@ -22,7 +22,8 @@ ROOTS = [NAME, 'python-json-logger']
 MARKER_ENVIRONMENT = {'implementation_name': 'cpython', 'python_version': '3.12',
                       'sys_platform': 'linux', 'platform_machine': 'x86_64',
                       'platform_system': 'Linux'}
-DEV_TOOLS = 'pytest\npytest-cov==7.1.0\ndiff-cover==10.6.0\npylint\nflake8\nmypy==1.18.2\n'
+DEV_TOOLS = ('pytest\npytest-cov==7.1.0\ndiff-cover==10.6.0\npylint\nflake8\nmypy==1.18.2\n'
+             'pip==26.2.2\n')
 
 
 class LockError(ValueError):
