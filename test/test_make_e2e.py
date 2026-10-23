@@ -75,3 +75,19 @@ def test_infrastructure_cli_missing_token_is_safe_failure():
         assert 'SANDBOX_TOKEN is required' in result.stderr
         assert 'offline-production-marker' not in result.stderr + result.stdout
         assert 'Traceback' not in result.stderr
+
+
+@pytest.mark.parametrize('target', ['lint', 'test', 'coverage', 'e2e'])
+def test_retry_defaults_are_exported_only_to_live_goal(tmp_path, target):
+    """Ordinary offline checks must not inherit the live protocol selected by Make."""
+    overrides = tmp_path / 'inspect.mk'
+    overrides.write_text(
+        'lint test coverage e2e:\n'
+        '\t@$(PYTHON) -c "import os; print(os.environ.get(\'E2E_EVIDENCE_PROTOCOL\'))"\n'
+        'check-lint check-test check-coverage check-e2e:\n\t@:\n', encoding='utf-8')
+    result = subprocess.run(['make', '-s', '-f', str(ROOT / 'Makefile'),
+                             '-f', str(overrides), target, f'PYTHON={sys.executable}'],
+                            cwd=tmp_path, env={'PATH': os.environ['PATH']},
+                            capture_output=True, text=True, check=False, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ('retry-v4' if target == 'e2e' else 'None')

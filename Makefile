@@ -11,9 +11,7 @@ MAKE_ENVIRONMENT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))scripts/make_en
 E2E_TIMEOUT ?= 1800
 E2E_ARGS ?=
 E2E_RUN_SETTINGS ?=
-export E2E_RUN_SETTINGS
 E2E_EVIDENCE_PROTOCOL ?= retry-v4
-export E2E_EVIDENCE_PROTOCOL
 USE_VENDORED_SDK ?= 0
 OFFLINE_ARCHIVE ?= 0
 CLOUD_PACKAGE_SHA ?=
@@ -62,6 +60,8 @@ test: check-test
 coverage: check-coverage
 	"$(PYTHON)" "$(MAKE_OFFLINE)" --python "$(PYTHON)" --root "$(CURDIR)" coverage
 
+e2e: export E2E_RUN_SETTINGS := $(E2E_RUN_SETTINGS)
+e2e: export E2E_EVIDENCE_PROTOCOL := $(E2E_EVIDENCE_PROTOCOL)
 e2e: check-e2e
 	$(SANDBOX_RUN) "$(PYTHON)" -m scripts.sandbox_e2e $(if $(E2E_RUN_SETTINGS),,--timeout "$(E2E_TIMEOUT)") -- $(E2E_ARGS)
 

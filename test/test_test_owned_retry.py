@@ -12,7 +12,7 @@ from test.test_sandbox_dynamic import offline_legacy_suite
 
 import pytest
 
-from scripts import sandbox_github, sandbox_retry
+from scripts import sandbox_e2e, sandbox_github, sandbox_retry
 from scripts.retry_evidence import Collection, verify_history
 from scripts.retry_results import PhaseResult
 from scripts.retry_settings import RunSettings
@@ -135,6 +135,28 @@ def test_generic_runner_deadline_and_error_paths(tmp_path, monkeypatch, fault):
         result = sandbox_retry.run_attempts(['e2e/'], tmp_path, 100, runtime=runtime)
         assert result == (124 if fault in ('deadline', 'timeout') else
                           0 if fault == 'passed' else 1)
+
+
+@pytest.mark.parametrize('returncode', [124, None])
+def test_supervisor_uses_authorized_termination_and_cleanup_budgets(monkeypatch, returncode):
+    """Configured emergency budgets reach shutdown and cleanup, not just job metadata."""
+    settings = RunSettings(timeout_seconds=100, termination_grace_seconds=7,
+                           termination_kill_seconds=3, cleanup_timeout_seconds=12)
+    monkeypatch.setenv('E2E_EVIDENCE_PROTOCOL', 'retry-v4')
+    monkeypatch.setenv('E2E_RUN_SETTINGS', settings.to_json())
+    child = create_autospec(subprocess.Popen, instance=True, spec_set=True)
+    child.wait.side_effect = (subprocess.TimeoutExpired('offline', 100)
+                              if returncode is None else None)
+    child.wait.return_value = returncode
+    start = create_autospec(subprocess.Popen, spec_set=True, return_value=child)
+    stop = create_autospec(sandbox_e2e._terminate_process_group, spec_set=True)
+    cleanup = create_autospec(sandbox_e2e._cleanup_run, spec_set=True)
+    monkeypatch.setattr(sandbox_e2e.subprocess, 'Popen', start)
+    monkeypatch.setattr(sandbox_e2e, '_terminate_process_group', stop)
+    monkeypatch.setattr(sandbox_e2e, '_cleanup_run', cleanup)
+    assert sandbox_e2e.run_bounded(['offline'], 100, 'local', 'a' * 32) == 124
+    stop.assert_called_once_with(child, settings=settings)
+    cleanup.assert_called_once_with('local', 'a' * 32, timeout=12)
 
 
 @pytest.mark.parametrize('mode', ['retry', 'permanent', 'skip', 'xfail', 'xpass'])
