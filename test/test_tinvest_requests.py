@@ -13,6 +13,7 @@ from t_tech.invest.services import OrdersService
 
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.execution import OrderExecutionError
+from autorepeater import grpc_deadline
 from autorepeater.order_plan import OrderIntent
 from autorepeater.tinvest_execution_data import _read
 from autorepeater.tinvest_requests import call_api
@@ -159,3 +160,173 @@ def test_order_status_quota_retries_preserve_broker_id():
     sleep.assert_called_once_with(10)
     assert orders.mock_calls == [
         call.get_order_state(account_id='dst', order_id='broker-id')] * 2
+
+
+@pytest.fixture(name='budget_time')
+def fixture_budget_time(monkeypatch):
+    """Advance only local monotonic time and quota sleeps, never wall time."""
+    now = [100.0]
+
+    def advance(seconds):
+        now[0] += seconds
+
+    sleep = Mock(side_effect=advance)
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: now[0], raising=False)
+    monkeypatch.setattr('autorepeater.tinvest_requests.time.sleep', sleep)
+    return now, advance, sleep
+
+
+@pytest.mark.parametrize('prior_success', [False, True])
+def test_scope_expiration_stops_read_without_transport_cause(budget_time, prior_success):
+    """Exhaustion before the first or between successful RPCs is a local timeout."""
+    _, advance, sleep = budget_time
+    method = Mock(return_value='response')
+    with grpc_deadline.read_deadline(30):
+        if prior_success:
+            assert call_api(method, account_id='first') == 'response'
+        advance(30)
+        with pytest.raises(TimeoutError, match='^SDK read deadline expired$') as raised:
+            call_api(method, account_id='never')
+    assert raised.value.__cause__ is None
+    assert not isinstance(raised.value, invest.RequestError)
+    assert method.call_args_list == ([call(account_id='first')] if prior_success else [])
+    sleep.assert_not_called()
+    assert call_api(method, account_id='next-account') == 'response'
+
+
+@pytest.mark.parametrize('budget,waits', [
+    (3, [3]), (10, [10]), (15, [10, 5]), (30, [10, 10, 10]),
+])
+def test_quota_waits_and_retries_share_budget(budget_time, caplog, budget, waits):
+    """Every retry spends the original budget; the last real quota error is the cause."""
+    now, _, sleep = budget_time
+    secret = 'private-quota-details-and-token'
+    errors = [invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, secret, {'token': secret})
+              for _ in waits]
+    method = Mock(side_effect=[*errors, 'never'])
+    with grpc_deadline.read_deadline(budget):
+        with pytest.raises(TimeoutError, match='^SDK read deadline expired$') as raised:
+            call_api(method, account_id='dst', token=secret)
+    assert raised.value.__cause__ is errors[-1]
+    assert raised.value.__cause__.code == StatusCode.RESOURCE_EXHAUSTED
+    assert method.call_args_list == [call(account_id='dst', token=secret)] * len(waits)
+    assert sleep.call_args_list == [call(seconds) for seconds in waits]
+    assert now[0] == 100 + budget
+    assert secret not in caplog.text
+    assert secret not in str(raised.value)
+
+
+def test_quota_rpc_time_also_reduces_wait_budget(budget_time):
+    """Slow rejected requests leave less time for the following quota pause."""
+    now, advance, sleep = budget_time
+    errors = [invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None)
+              for _ in range(2)]
+    durations = iter([7, 4])
+    rejections = iter(errors)
+
+    def read():
+        advance(next(durations))
+        raise next(rejections)
+
+    method = Mock(side_effect=read)
+    with grpc_deadline.read_deadline(30):
+        with pytest.raises(TimeoutError) as raised:
+            call_api(method)
+    assert raised.value.__cause__ is errors[-1]
+    assert method.call_args_list == [call(), call()]
+    assert sleep.call_args_list == [call(10), call(9)]
+    assert now[0] == 130
+
+
+def test_quota_exhausting_budget_does_not_sleep(budget_time):
+    """An RPC that consumes the last instant cannot trigger a further quota pause."""
+    _, advance, sleep = budget_time
+    error = invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None)
+
+    def read():
+        advance(30)
+        raise error
+
+    method = Mock(side_effect=read)
+    with grpc_deadline.read_deadline(30):
+        with pytest.raises(TimeoutError) as raised:
+            call_api(method)
+    assert raised.value.__cause__ is error
+    method.assert_called_once_with()
+    sleep.assert_not_called()
+
+
+def test_quota_sleep_overshoot_does_not_start_retry(budget_time):
+    """Scheduler delays cannot authorize a new request after the absolute deadline."""
+    _, advance, sleep = budget_time
+    sleep.side_effect = lambda _: advance(31)
+    error = invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None)
+    method = Mock(side_effect=[error, 'never'])
+    with grpc_deadline.read_deadline(30):
+        with pytest.raises(TimeoutError) as raised:
+            call_api(method)
+    assert raised.value.__cause__ is error
+    method.assert_called_once_with()
+    sleep.assert_called_once_with(10)
+
+
+def test_quota_retry_can_succeed_with_unchanged_arguments(budget_time):
+    """Successful retries do not reset the budget for the next read."""
+    _, advance, sleep = budget_time
+    method = Mock(side_effect=[
+        invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None), 'response'])
+    with grpc_deadline.read_deadline(30):
+        assert call_api(method, account_id='dst') == 'response'
+        assert grpc_deadline.remaining_read_timeout() == 20
+        advance(17)
+        assert call_api(method=Mock(return_value='next')) == 'next'
+        assert grpc_deadline.remaining_read_timeout() == 3
+    assert method.call_args_list == [call(account_id='dst')] * 2
+    sleep.assert_called_once_with(10)
+    assert grpc_deadline.remaining_read_timeout() is None
+
+
+def test_interceptor_expiration_on_retry_keeps_actual_quota_cause(budget_time):
+    """The scope may expire between the wrapper check and unary interception."""
+    _, advance, sleep = budget_time
+    error = invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None)
+    continuation = Mock()
+
+    def retry():
+        if method.call_count == 1:
+            raise error
+        advance(20)
+        return grpc_deadline.UnaryDeadlineInterceptor().intercept_unary_unary(
+            continuation, SimpleNamespace(timeout=None), 'never')
+
+    method = Mock(side_effect=retry)
+    with grpc_deadline.read_deadline(30):
+        with pytest.raises(TimeoutError) as raised:
+            call_api(method)
+    assert raised.value.__cause__ is error
+    assert method.call_args_list == [call(), call()]
+    sleep.assert_called_once_with(10)
+    continuation.assert_not_called()
+
+
+@pytest.mark.parametrize('quota_first', [False, True])
+@pytest.mark.parametrize('code', [StatusCode.DEADLINE_EXCEEDED, StatusCode.UNAVAILABLE,
+                                  StatusCode.INTERNAL, StatusCode.UNAUTHENTICATED])
+def test_scoped_transport_error_retains_identity_at_deadline(budget_time, quota_first, code):
+    """An actual transport failure wins over local expiration, without new retries."""
+    _, advance, sleep = budget_time
+    error = invest.RequestError(code, 'private-transport-details', None)
+
+    def fail():
+        if quota_first and method.call_count == 1:
+            raise invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, 'quota', None)
+        advance(30)
+        raise error
+
+    method = Mock(side_effect=fail)
+    with grpc_deadline.read_deadline(30):
+        with pytest.raises(invest.RequestError) as raised:
+            call_api(method)
+    assert raised.value is error
+    assert method.call_count == (2 if quota_first else 1)
+    assert sleep.call_args_list == ([call(10)] if quota_first else [])
