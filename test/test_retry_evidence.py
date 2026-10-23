@@ -16,6 +16,15 @@ FIRST = 'e2e/test_any.py::test_first'
 SECOND = 'e2e/test_any.py::test_second'
 
 
+def mark_original_skipped(path):
+    """Change a failed original into a well-formed JUnit skip for negative tests."""
+    suite = ET.parse(path).getroot()
+    suite.set('failures', '0')
+    suite.set('skipped', '1')
+    suite.find('testcase/failure').tag = 'skipped'
+    ET.ElementTree(suite).write(path)
+
+
 def write_attempt(root, number, outcomes):
     """Write independent structured originals with one phase flag per failure."""
     directory = root / 'attempts' / f'{number:02}'
@@ -150,11 +159,7 @@ def test_skipped_original_cannot_be_relabelled_failed_then_retried(tmp_path):
     entries = [write_attempt(tmp_path, 1, {FIRST: ('failed', True)}),
                write_attempt(tmp_path, 2, {FIRST: ('passed', False)})]
     path = tmp_path / 'attempts/01/junit.xml'
-    suite = ET.parse(path).getroot()
-    suite.set('failures', '0')
-    suite.set('skipped', '1')
-    suite.find('testcase/failure').tag = 'skipped'
-    ET.ElementTree(suite).write(path)
+    mark_original_skipped(path)
     write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
     with pytest.raises(ValueError, match='skipped'):
         verify_history(tmp_path, Collection(SHA, (FIRST,)), settings)

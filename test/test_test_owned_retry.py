@@ -6,10 +6,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 from unittest.mock import create_autospec
-from test.test_retry_evidence import FIRST, SECOND, SHA, write_attempt
+from test.test_retry_evidence import FIRST, SECOND, SHA, mark_original_skipped, write_attempt
 from test.test_sandbox_dynamic import offline_legacy_suite
 from test.test_sandbox_retry import NODE, attempt, store
 
@@ -104,8 +103,9 @@ def test_manifest_cannot_be_replaced_along_with_green_subset(tmp_path, digest_mo
     with pytest.raises(sandbox_github.GitHubFailure, match='manifest'):
         sandbox_github.evidence_result(
             tmp_path / 'junit.xml', None, 'retry-v4', collection=manifest, sha=SHA,
-            settings=settings, collection_digest={'missing': '', 'wrong': '0' * 64,
-                                                   'original': digest}[digest_mode])
+            settings=settings, collection_digest={
+                'missing': '', 'wrong': '0' * 64, 'original': digest,
+            }[digest_mode])
 
 
 @pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3'])
@@ -118,15 +118,31 @@ def test_legacy_skip_mismatch_cannot_be_repaired_by_retry(tmp_path, protocol):
             (tmp_path / f'attempts/{number:02}/report.json').write_text(
                 json.dumps(asdict(report)))
     path = tmp_path / 'attempts/01/junit.xml'
-    suite = ET.parse(path).getroot()
-    suite.set('failures', '0')
-    suite.set('skipped', '1')
-    suite.find('testcase/failure').tag = 'skipped'
-    ET.ElementTree(suite).write(path)
+    mark_original_skipped(path)
     legacy.write_final_junit({NODE: 'passed'}, tmp_path / 'junit.xml')
     with pytest.raises(legacy.RetryFailure, match='skipped'):
         legacy.verify_history(tmp_path, expected=legacy.SuiteCollection(SHA, (NODE,)),
                               protocol=protocol)
+
+
+@pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3'])
+def test_explicit_empty_manifest_digest_does_not_enable_legacy_fallback(
+        tmp_path, monkeypatch, protocol):
+    """A lost or masked workflow output is failure, not permission to trust the artifact."""
+    report = replace(attempt(), sha=SHA)
+    store(tmp_path, 1, report)
+    if protocol == 'retry-v3':
+        (tmp_path / 'attempts/01/report.json').write_text(json.dumps(asdict(report)))
+    legacy.write_final_junit({NODE: 'passed'}, tmp_path / 'junit.xml')
+    manifest = tmp_path / 'collection.json'
+    manifest.write_text(json.dumps({'version': 1, 'sha': SHA, 'nodeids': [NODE]}))
+    output = tmp_path / 'outputs'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    monkeypatch.setenv('EXPECTED_COLLECTION_DIGEST', '')
+    assert sandbox_github.main([
+        'evidence', '--junit', str(tmp_path / 'junit.xml'), '--evidence-format', protocol,
+        '--sha', SHA, '--collection', str(manifest)]) == 1
+    assert not output.exists()
 
 
 def test_new_protocol_is_independent_of_legacy_market_proof():

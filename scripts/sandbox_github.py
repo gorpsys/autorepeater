@@ -242,15 +242,16 @@ def write_outputs(values: dict[str, str]) -> None:
             output.write(f'{key}={value}\n')
 
 
-def verify_collection_digest(collection: Path | None, digest: str) -> None:
+def verify_collection_digest(collection: Path | None, digest: str | None) -> None:
     """The expected manifest hash arrives from the pre-live step, not its artifacts."""
-    if (collection is None or re.fullmatch('[0-9a-f]{64}', digest) is None
+    if (collection is None or not isinstance(digest, str)
+            or re.fullmatch('[0-9a-f]{64}', digest) is None
             or hashlib.sha256(retry_evidence.read_bytes(collection)).hexdigest() != digest):
         raise GitHubFailure('collection differs from pre-live manifest')
 
 
 def status_evidence(junit: Path, collection: Path | None, sha: str,
-                    settings: RunSettings | None, digest: str) -> SuiteEvidence:
+                    settings: RunSettings | None, digest: str | None) -> SuiteEvidence:
     """Generic v4 verification consumes the authorized snapshot, never failure semantics."""
     if collection is None or settings is None:
         raise GitHubFailure('independent collection and authorized settings required')
@@ -259,10 +260,23 @@ def status_evidence(junit: Path, collection: Path | None, sha: str,
     return SuiteEvidence(retry_evidence.verify_history(junit.parent, expected, settings))
 
 
+def legacy_retry_result(junit: Path, collection: Path | None, sha: str,
+                        format_name: str) -> SuiteEvidence:
+    """Keep archived retry schemas readable without coupling v4 to their failure rules."""
+    if format_name in ('retry-v2', 'retry-v3'):
+        if collection is None:
+            raise GitHubFailure('independent full collection required')
+        expected = read_collection(collection, sha)
+        return SuiteEvidence(verify_history(junit.parent, expected=expected, protocol=format_name))
+    if format_name != 'retry-v1':
+        raise GitHubFailure('unsupported evidence protocol')
+    return SuiteEvidence(verify_history(junit.parent, require_full=True))
+
+
 def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
                     collection: Path | None = None, sha: str = '',
                     settings: RunSettings | None = None,
-                    collection_digest: str = '') -> SuiteEvidence:
+                    collection_digest: str | None = None) -> SuiteEvidence:
     """Versioned evidence is explicit; never silently accept a legacy merged XML."""
     # pylint: disable=too-many-arguments
     if format_name == 'single-v1':
@@ -274,17 +288,9 @@ def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
     try:
         if format_name == 'retry-v4':
             return status_evidence(junit, collection, sha, settings, collection_digest)
-        if collection_digest:
+        if collection_digest is not None:
             verify_collection_digest(collection, collection_digest)
-        if format_name in ('retry-v2', 'retry-v3'):
-            if collection is None:
-                raise GitHubFailure('independent full collection required')
-            expected = read_collection(collection, sha)
-            return SuiteEvidence(verify_history(junit.parent, expected=expected,
-                                                protocol=format_name))
-        if format_name != 'retry-v1':
-            raise GitHubFailure('unsupported evidence protocol')
-        return SuiteEvidence(verify_history(junit.parent, require_full=True))
+        return legacy_retry_result(junit, collection, sha, format_name)
     except (RetryFailure, ValueError):
         raise GitHubFailure('retry history does not prove full sandbox acceptance') from None
 
@@ -310,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
                                     settings=(RunSettings.from_json(os.environ['E2E_RUN_SETTINGS'])
                                               if args.evidence_format == 'retry-v4' else None),
                                     collection_digest=os.environ.get(
-                                        'EXPECTED_COLLECTION_DIGEST', ''))
+                                        'EXPECTED_COLLECTION_DIGEST'))
             write_outputs({'complete': 'true', 'passed': str(facts.passed)})
         else:
             event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
