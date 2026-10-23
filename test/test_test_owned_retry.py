@@ -140,6 +140,7 @@ def test_generic_runner_deadline_and_error_paths(tmp_path, monkeypatch, fault):
 @pytest.mark.parametrize('returncode', [124, None])
 def test_supervisor_uses_authorized_termination_and_cleanup_budgets(monkeypatch, returncode):
     """Configured emergency budgets reach shutdown and cleanup, not just job metadata."""
+    # pylint: disable=protected-access
     settings = RunSettings(timeout_seconds=100, termination_grace_seconds=7,
                            termination_kill_seconds=3, cleanup_timeout_seconds=12)
     monkeypatch.setenv('E2E_EVIDENCE_PROTOCOL', 'retry-v4')
