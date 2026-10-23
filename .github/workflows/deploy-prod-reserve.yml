@@ -65,7 +65,7 @@ jobs:
       FUNCTION_RUNTIME: python312
       FUNCTION_ENTRYPOINT: handler.handler
       FUNCTION_MEMORY: 256MB
-      FUNCTION_TIMEOUT: 60s
+      FUNCTION_TIMEOUT: 90s
       FUNCTION_SA_ID: ajelpbq7as5bpe499962
       BUCKET: autorepeater-deploy
       ZIP_PATH: ./build/yandex-function.zip

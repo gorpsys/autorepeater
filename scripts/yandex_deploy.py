@@ -71,7 +71,7 @@ def settings_from_environment(environment: dict[str, str]) -> Settings:
                                 value('FUNCTION_MEMORY'), value('FUNCTION_TIMEOUT'),
                                 value('FUNCTION_SA_ID'))
     if (function.runtime, function.entrypoint, function.memory, function.timeout) != (
-            'python312', 'handler.handler', '256MB', '60s'):
+            'python312', 'handler.handler', '256MB', '90s'):
         raise DeployError('unexpected function execution settings')
     return Settings(value('FOLDER_ID'), value('SA_ID'), value('BUCKET'), value('FUNCTION_ID'),
                     Path(text(environment.get('ZIP_PATH'), 'ZIP_PATH')), function,
