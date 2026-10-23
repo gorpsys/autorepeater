@@ -179,19 +179,40 @@ class AutoRepeater:
                 OrderExecutionError) as error:
             logger.error('Current pass stopped for destination %s: %s', dst, error)
 
+    def _handle_position_event(self, event, dst: str) -> None:
+        triggered = self.strategy.should_rebalance(event, dst)
+        if not isinstance(triggered, bool):
+            raise ValueError('strategy should_rebalance must return bool')
+        if triggered:
+            self._local_pass(dst)
+        else:
+            reporting.print_skipped_strategy_event(event)
+
     def mainflow(self, dst: str) -> None:
-        """Initial pass and events only; a submission stop does not end the stream."""
+        """Reconcile after stream loss; healthy subscriptions remain event-driven."""
         self._local_pass(dst)
+        delay = 1
         while True:
+            accounts = validate_event_accounts(self.strategy.event_accounts(dst))
             try:
-                accounts = validate_event_accounts(self.strategy.event_accounts(dst))
-                for event in self.data.position_events(accounts):
-                    triggered = self.strategy.should_rebalance(event, dst)
-                    if not isinstance(triggered, bool):
-                        raise ValueError('strategy should_rebalance must return bool')
-                    if triggered:
-                        self._local_pass(dst)
-                    else:
-                        reporting.print_skipped_strategy_event(event)
-            except DataAccessError as error:
-                logger.error('Position stream stopped for destination %s: %s', dst, error)
+                events = iter(self.data.position_events(accounts))
+            except DataAccessError:
+                logger.error('Position stream stopped for destination %s', dst)
+            else:
+                subscribed = monotonic()
+                while True:
+                    try:
+                        event = next(events)
+                    except StopIteration:
+                        logger.warning('Position stream ended for destination %s', dst)
+                        break
+                    except DataAccessError:
+                        logger.error('Position stream stopped for destination %s', dst)
+                        break
+                    if event.has_position and monotonic() - subscribed >= 60:
+                        delay = 1
+                    self._handle_position_event(event, dst)
+            logger.warning('Position stream reconnect for destination %s in %s seconds', dst, delay)
+            sleep(delay)
+            self._local_pass(dst)
+            delay = min(delay * 2, 30)

@@ -12,14 +12,14 @@ from t_tech.invest import RequestError, schemas as sdk
 
 import handler as cloud
 from autorepeater import grpc_deadline, repeater, runner, serverless, tinvest_requests
-from autorepeater.execution import OrderExecutor
+from autorepeater.execution import OrderExecutionError, OrderExecutor
 from autorepeater.execution_data import (
     AccountReadiness, ActiveOrder, ExecutionData, ExecutionDataError,
 )
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_contract import Strategy
-from autorepeater.strategy_data import PositionEvent, StrategyData
+from autorepeater.strategy_data import DataAccessError, PositionEvent, StrategyData
 from autorepeater.strategy_plan import AllocationProfile
 from autorepeater.tinvest_execution_data import TInvestExecutionData
 from scripts.sandbox_retry_report import transport_facts
@@ -290,7 +290,7 @@ def test_ready_still_validates_complete_plan_before_rules_or_effects(case, clock
 
 @pytest.mark.parametrize('failure', ['timeout', 'lost', 'local_deadline'])
 def test_cli_stops_only_current_pass_and_next_event_rechecks(case, clock, failure):
-    """No stream recovery change: a fresh event can start a new independent pass."""
+    """A fresh event can start a new independent pass without losing the subscription."""
     local = ExecutionDataError('readiness read deadline expired')
     local.__cause__ = TimeoutError('read deadline expired')
     if failure == 'timeout':
@@ -304,13 +304,234 @@ def test_cli_stops_only_current_pass_and_next_event_rechecks(case, clock, failur
     case.strategy.event_accounts.return_value = ('dst',)
     case.strategy.should_rebalance.return_value = True
     stop = RuntimeError('end finite test stream')
-    case.data.position_events.side_effect = [iter((PositionEvent(False, '', (), (), ''),)), stop]
+
+    def stream():
+        yield PositionEvent(False, '', (), (), '')
+        raise stop
+
+    case.data.position_events.return_value = stream()
     with pytest.raises(RuntimeError) as caught:
         case.engine.mainflow('dst')
     assert caught.value is stop
     case.strategy.load_snapshot.assert_called_once_with(case.data)
     assert case.execution.get_readiness.call_count == (7 if failure == 'timeout' else 2)
     assert clock.sleeps == ([5] * 6 if failure == 'timeout' else [])
+
+
+@pytest.mark.parametrize('failure', ['eof', 'open', 'read'])
+def test_cli_reconnect_pauses_then_reconciles_before_subscribing(
+        case, clock, monkeypatch, caplog, failure):
+    """Even an empty replacement stream follows a fresh pass, never a replayed intent."""
+    error = DataAccessError('synthetic private stream payload')
+    stop = RuntimeError('end finite test stream')
+    timeline = []
+    case.strategy.event_accounts.return_value = ('source', 'dst')
+
+    def broken_stream():
+        yield from ()
+        raise error
+
+    first = {'eof': iter(()), 'open': error, 'read': broken_stream()}[failure]
+    case.data.position_events.side_effect = [first, stop]
+
+    def pause(seconds):
+        timeline.append(('sleep', seconds))
+        clock.sleep(seconds)
+
+    monkeypatch.setattr(repeater, 'sleep', pause)
+    with patch.object(case.engine, 'sync_accounts', autospec=True, spec_set=True) as sync:
+        sync.side_effect = lambda dst: timeline.append(('sync', dst, clock.now))
+        case.strategy.event_accounts.side_effect = lambda dst: (
+            timeline.append(('accounts', dst)) or ('source', 'dst'))
+        calls = Mock()
+        calls.attach_mock(sync, 'sync')
+        calls.attach_mock(case.data, 'data')
+        with pytest.raises(RuntimeError) as caught:
+            case.engine.mainflow('dst')
+        assert caught.value is stop
+        assert timeline == [
+            ('sync', 'dst', 100), ('accounts', 'dst'), ('sleep', 1),
+            ('sync', 'dst', 101), ('accounts', 'dst')]
+        assert calls.mock_calls == [
+            call.sync('dst'), call.data.position_events(('source', 'dst')),
+            call.sync('dst'), call.data.position_events(('source', 'dst'))]
+    assert clock.sleeps == [1]
+    case.strategy.should_rebalance.assert_not_called()
+    assert not case.executor.mock_calls
+    assert caplog.messages == [
+        ('Position stream ended for destination dst' if failure == 'eof'
+         else 'Position stream stopped for destination dst'),
+        'Position stream reconnect for destination dst in 1 seconds']
+
+
+@pytest.mark.parametrize('failure', ['eof', 'open', 'read'])
+def test_cli_reconnect_backoff_is_bounded_even_when_passes_are_slow(case, clock, failure):
+    """Disconnected time and reconciliation time never count as a healthy subscription."""
+    error = DataAccessError('synthetic private stream payload')
+    stop = RuntimeError('end finite test stream')
+    case.strategy.event_accounts.return_value = ('dst',)
+
+    def broken_stream():
+        yield from ()
+        raise error
+
+    case.data.position_events.side_effect = [
+        error if failure == 'open' else broken_stream() if failure == 'read' else iter(())
+        for _ in range(8)] + [stop]
+    passes = []
+
+    def slow_pass(dst):
+        passes.append((dst, clock.now))
+        clock.now += 90
+
+    with patch.object(case.engine, 'sync_accounts', autospec=True, spec_set=True,
+                      side_effect=slow_pass), pytest.raises(RuntimeError) as caught:
+        case.engine.mainflow('dst')
+    assert caught.value is stop
+    assert clock.sleeps == [1, 2, 4, 8, 16, 30, 30, 30]
+    expected = [('dst', 100)]
+    for delay in clock.sleeps:
+        expected.append(('dst', expected[-1][1] + 90 + delay))
+    assert passes == expected
+    assert case.data.position_events.call_args_list == [call(('dst',))] * 9
+    case.strategy.should_rebalance.assert_not_called()
+
+
+@pytest.mark.parametrize('age,has_position,expected_delays', [
+    (0, False, [1, 2, 4, 8]), (0, True, [1, 2, 4, 8]),
+    (59.999, True, [1, 2, 4, 8]), (60, False, [1, 2, 4, 8]),
+    (120, False, [1, 2, 4, 8]), (60, None, [1, 2, 4, 8]),
+    (60, True, [1, 2, 1, 2]), (120, True, [1, 2, 1, 2]),
+])
+def test_cli_backoff_resets_only_on_a_position_event_in_a_stable_subscription(
+        case, clock, age, has_position, expected_delays):
+    """A skipped real position event can prove stability; service events and EOF cannot."""
+    stop = RuntimeError('end finite test stream')
+    event = PositionEvent(has_position is True, 'dst' if has_position else '', (), (), 'service')
+    case.strategy.event_accounts.return_value = ('dst',)
+    case.strategy.should_rebalance.return_value = False
+
+    def stream():
+        clock.now += age
+        if has_position is not None:
+            yield event
+
+    case.data.position_events.side_effect = [iter(()), iter(()), stream(), iter(()), stop]
+    with patch.object(case.engine, 'sync_accounts', autospec=True, spec_set=True) as sync, \
+            patch.object(repeater.reporting, 'print_skipped_strategy_event',
+                         autospec=True, spec_set=True) as skipped, \
+            pytest.raises(RuntimeError) as caught:
+        case.engine.mainflow('dst')
+    assert caught.value is stop
+    assert clock.sleeps == expected_delays
+    assert sync.call_args_list == [call('dst')] * 5
+    assert case.data.position_events.call_args_list == [call(('dst',))] * 5
+    assert case.strategy.should_rebalance.call_args_list == (
+        [call(event, 'dst')] if has_position is not None else [])
+    assert skipped.call_args_list == ([call(event)] if has_position is not None else [])
+
+
+@pytest.mark.parametrize('long_pass', [False, True])
+def test_cli_healthy_stream_has_no_price_timer_or_reset_at_eof(case, clock, long_pass):
+    """Time passing after a young position event cannot reset backoff or trigger a pass."""
+    event = PositionEvent(True, 'dst', (), (), 'position')
+    service = PositionEvent(False, '', (), (), 'service')
+    stop = RuntimeError('end finite test stream')
+    case.strategy.event_accounts.return_value = ('dst',)
+    case.strategy.should_rebalance.side_effect = [long_pass, False]
+
+    def stream():
+        yield event
+        clock.now += 120
+        yield service
+
+    case.data.position_events.side_effect = [iter(()), stream(), stop]
+
+    def sync_pass(_dst):
+        if case.strategy.should_rebalance.call_count:
+            clock.now += 60
+
+    with patch.object(case.engine, 'sync_accounts', autospec=True, spec_set=True,
+                      side_effect=sync_pass) as sync, pytest.raises(RuntimeError) as caught:
+        case.engine.mainflow('dst')
+    assert caught.value is stop
+    assert clock.sleeps == [1, 2]
+    assert sync.call_args_list == [call('dst')] * (4 if long_pass else 3)
+    assert case.strategy.should_rebalance.call_args_list == [
+        call(event, 'dst'), call(service, 'dst')]
+
+
+@pytest.mark.parametrize('stage', ['initial', 'event', 'reconnect'])
+@pytest.mark.parametrize('error', [
+    repeater.AccountNotReadyError('account not ready within 30 seconds'),
+    repeater.AccountNotReadyError('account became not ready after preflight'),
+    DataAccessError('read failed'), ExecutionDataError('read failed'),
+    OrderExecutionError('submission stopped'),
+])
+def test_cli_pass_errors_keep_the_subscription_lifecycle(case, clock, stage, error):
+    """A failed pass ends locally; the next event computes a new independent pass."""
+    event = PositionEvent(True, 'dst', (), (), 'position')
+    stop = RuntimeError('end finite test stream')
+    case.strategy.event_accounts.return_value = ('dst',)
+    case.strategy.should_rebalance.return_value = True
+
+    def stream():
+        yield event
+        raise stop
+
+    case.data.position_events.side_effect = (
+        [iter(()), stream()] if stage == 'reconnect' else [stream()])
+    results = [None, error, None] if stage == 'reconnect' else (
+        [error, None] if stage == 'initial' else [None, error])
+    with patch.object(case.engine, 'sync_accounts', autospec=True, spec_set=True,
+                      side_effect=results) as sync, pytest.raises(RuntimeError) as caught:
+        case.engine.mainflow('dst')
+    assert caught.value is stop
+    assert sync.call_args_list == [call('dst')] * len(results)
+    assert clock.sleeps == ([1] if stage == 'reconnect' else [])
+    assert case.data.position_events.call_args_list == [call(('dst',))] * (
+        2 if stage == 'reconnect' else 1)
+    case.strategy.should_rebalance.assert_called_once_with(event, 'dst')
+
+
+@pytest.mark.parametrize('stage', ['initial', 'event', 'reconnect', 'open', 'read',
+                                   'accounts', 'decision', 'sleep'])
+@pytest.mark.parametrize('error_type', [
+    ValueError, TypeError, RuntimeError, KeyboardInterrupt, SystemExit,
+])
+def test_cli_does_not_retry_fatal_errors(case, clock, monkeypatch, stage, error_type):
+    """Only a stream DataAccessError is recoverable; stop signals always escape unchanged."""
+    error = error_type('stop immediately')
+    event = PositionEvent(True, 'dst', (), (), 'position')
+    case.strategy.event_accounts.return_value = ('dst',)
+    case.strategy.should_rebalance.return_value = True
+
+    def stream():
+        if stage == 'read':
+            raise error
+        yield event
+        raise AssertionError('unexpected next event')
+
+    case.data.position_events.side_effect = (
+        [iter(())] if stage in ('reconnect', 'sleep') else
+        [error] if stage == 'open' else [stream()])
+    results = [error] if stage == 'initial' else (
+        [None, error] if stage in ('event', 'reconnect') else [None])
+    if stage == 'accounts':
+        case.strategy.event_accounts.side_effect = error
+    if stage == 'decision':
+        case.strategy.should_rebalance.side_effect = error
+    if stage == 'sleep':
+        def pause(_seconds):
+            raise error
+        monkeypatch.setattr(repeater, 'sleep', pause)
+    with patch.object(case.engine, 'sync_accounts', autospec=True, spec_set=True,
+                      side_effect=results) as sync, pytest.raises(error_type) as caught:
+        case.engine.mainflow('dst')
+    assert caught.value is error
+    assert sync.call_args_list == [call('dst')] * len(results)
+    assert clock.sleeps == ([1] if stage == 'reconnect' else [])
+    assert case.data.position_events.call_count == (0 if stage in ('initial', 'accounts') else 1)
 
 
 @pytest.mark.parametrize('entrypoint', ['run_sync', 'handler'])
