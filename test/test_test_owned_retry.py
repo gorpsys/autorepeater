@@ -1,14 +1,17 @@
 """The launch snapshot and test-owned boolean drive the new retry protocol."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 from unittest.mock import create_autospec
 from test.test_retry_evidence import FIRST, SECOND, SHA, write_attempt
 from test.test_sandbox_dynamic import offline_legacy_suite
+from test.test_sandbox_retry import NODE, attempt, store
 
 import pytest
 
@@ -83,6 +86,47 @@ def test_workflow_can_authorize_new_budgets_before_merge():
     assert settings.timeout_seconds == 4200 and settings.max_attempts == 6
     assert settings.run_step_minutes == 72
     assert sandbox_github.select_settings({}, 'push').timeout_seconds == 3600
+
+
+@pytest.mark.parametrize('digest_mode', ['missing', 'wrong', 'original'])
+def test_manifest_cannot_be_replaced_along_with_green_subset(tmp_path, digest_mode):
+    """The hash fixed before live is independent of the manifest uploaded afterwards."""
+    settings = RunSettings()
+    manifest = tmp_path / 'collection.json'
+    manifest.write_text(json.dumps({'version': 1, 'sha': SHA, 'nodeids': [FIRST, SECOND]}))
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps({'version': 1, 'sha': SHA, 'nodeids': [FIRST]}))
+    entry = write_attempt(tmp_path, 1, {FIRST: ('passed', False)})
+    (tmp_path / 'retry.json').write_text(json.dumps({'version': 1, 'attempts': [entry]}))
+    (tmp_path / 'run-settings.json').write_text(settings.to_json())
+    from scripts.retry_evidence import write_junit  # pylint: disable=import-outside-toplevel
+    write_junit({FIRST: 'passed'}, tmp_path / 'junit.xml')
+    with pytest.raises(sandbox_github.GitHubFailure, match='manifest'):
+        sandbox_github.evidence_result(
+            tmp_path / 'junit.xml', None, 'retry-v4', collection=manifest, sha=SHA,
+            settings=settings, collection_digest={'missing': '', 'wrong': '0' * 64,
+                                                   'original': digest}[digest_mode])
+
+
+@pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3'])
+def test_legacy_skip_mismatch_cannot_be_repaired_by_retry(tmp_path, protocol):
+    """The migration path rejects the same original JUnit skip laundering as v4."""
+    reports = [replace(attempt(failed=(NODE,)), sha=SHA), replace(attempt(), sha=SHA)]
+    for number, report in enumerate(reports, 1):
+        store(tmp_path, number, report)
+        if protocol == 'retry-v3':
+            (tmp_path / f'attempts/{number:02}/report.json').write_text(
+                json.dumps(asdict(report)))
+    path = tmp_path / 'attempts/01/junit.xml'
+    suite = ET.parse(path).getroot()
+    suite.set('failures', '0')
+    suite.set('skipped', '1')
+    suite.find('testcase/failure').tag = 'skipped'
+    ET.ElementTree(suite).write(path)
+    legacy.write_final_junit({NODE: 'passed'}, tmp_path / 'junit.xml')
+    with pytest.raises(legacy.RetryFailure, match='skipped'):
+        legacy.verify_history(tmp_path, expected=legacy.SuiteCollection(SHA, (NODE,)),
+                              protocol=protocol)
 
 
 def test_new_protocol_is_independent_of_legacy_market_proof():
@@ -200,7 +244,8 @@ def test_gate(proof):
         assert sandbox_github.evidence_result(
             tmp_path / 'junit.xml', None, 'retry-v4',
             collection=tmp_path / 'collection.json', sha=SHA,
-            settings=settings).passed == len(nodes)
+            settings=settings, collection_digest=hashlib.sha256(
+                (tmp_path / 'collection.json').read_bytes()).hexdigest()).passed == len(nodes)
     else:
         with pytest.raises(ValueError):
             verify_history(tmp_path, Collection(SHA, nodes), settings)

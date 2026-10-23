@@ -354,6 +354,8 @@ Assertions и произвольный текст исключения повт�
 auth запрещает все повторы. Skipped/xfail/xpass и ошибки cleanup не принимаются.
 
 `collection.json` содержит независимую полную коллекцию точного SHA;
+её SHA-256 фиксируется отдельным step output до live и передаётся verifier
+вне артефактов producer. Подмена manifest вместе с результатами отклоняется.
 `run-settings.json` — снимок настроек, `retry.json` — историю попыток.
 В `attempts/NN` сохраняются исходные `result.json`, `junit.xml`, дампы
 и `cleanup.log`. Итоговый `junit.xml` сверяется с исходными результатами:

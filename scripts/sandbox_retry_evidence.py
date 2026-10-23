@@ -312,6 +312,8 @@ def xml_states(path: Path) -> dict[str, str]:
     validate_xml_counts(root)
     states: dict[str, str] = {}
     for case in root.iter('testcase'):
+        if case.find('skipped') is not None:
+            raise RetryFailure('skipped original test cannot pass or retry')
         node = case.get('classname', '').replace('.', '/') + '.py::' + case.get('name', '')
         nodeids([node])
         if node in states:

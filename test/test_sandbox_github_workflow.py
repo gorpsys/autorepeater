@@ -88,6 +88,7 @@ def test_evidence_is_verified_on_a_separate_readonly_runner() -> None:
     assert '--collection sandbox-results/collection.json' in text
     assert '--sha "$TESTED_SHA"' in text
     assert 'TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
+    assert 'EXPECTED_COLLECTION_DIGEST: ${{ needs.live.outputs.collection_digest }}' in text
     assert "needs.live.result == 'success'" in text
 
 
@@ -235,6 +236,10 @@ def test_full_collection_precedes_live_secret_and_uses_trusted_protocol_output()
     collector = 'scripts.sandbox_collection --sha "$E2E_TESTED_SHA"'
     assert collector in text
     assert text.index(collector) < text.index('SANDBOX_TOKEN:')
+    assert 'collection_digest: ${{ steps.collection.outputs.collection_digest }}' in text
+    assert 'hashlib.sha256' in text
+    assert text.index('hashlib.sha256') < text.index('SANDBOX_TOKEN:')
+    assert "Path(os.environ['GITHUB_OUTPUT'])" in text
 
 
 def test_dispatch_protocol_default_and_selection_are_owned_by_prepare() -> None:

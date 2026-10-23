@@ -1,5 +1,6 @@
 """Trusted GitHub target selection and exact sandbox-suite evidence validation."""
 import argparse
+import hashlib
 from dataclasses import dataclass
 import json
 import os
@@ -241,18 +242,27 @@ def write_outputs(values: dict[str, str]) -> None:
             output.write(f'{key}={value}\n')
 
 
+def verify_collection_digest(collection: Path | None, digest: str) -> None:
+    """The expected manifest hash arrives from the pre-live step, not its artifacts."""
+    if (collection is None or re.fullmatch('[0-9a-f]{64}', digest) is None
+            or hashlib.sha256(retry_evidence.read_bytes(collection)).hexdigest() != digest):
+        raise GitHubFailure('collection differs from pre-live manifest')
+
+
 def status_evidence(junit: Path, collection: Path | None, sha: str,
-                    settings: RunSettings | None) -> SuiteEvidence:
+                    settings: RunSettings | None, digest: str) -> SuiteEvidence:
     """Generic v4 verification consumes the authorized snapshot, never failure semantics."""
     if collection is None or settings is None:
         raise GitHubFailure('independent collection and authorized settings required')
+    verify_collection_digest(collection, digest)
     expected = retry_evidence.read_collection(collection, sha)
     return SuiteEvidence(retry_evidence.verify_history(junit.parent, expected, settings))
 
 
 def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
                     collection: Path | None = None, sha: str = '',
-                    settings: RunSettings | None = None) -> SuiteEvidence:
+                    settings: RunSettings | None = None,
+                    collection_digest: str = '') -> SuiteEvidence:
     """Versioned evidence is explicit; never silently accept a legacy merged XML."""
     # pylint: disable=too-many-arguments
     if format_name == 'single-v1':
@@ -263,7 +273,9 @@ def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
         raise GitHubFailure('retry evidence requires the fixed merged JUnit path')
     try:
         if format_name == 'retry-v4':
-            return status_evidence(junit, collection, sha, settings)
+            return status_evidence(junit, collection, sha, settings, collection_digest)
+        if collection_digest:
+            verify_collection_digest(collection, collection_digest)
         if format_name in ('retry-v2', 'retry-v3'):
             if collection is None:
                 raise GitHubFailure('independent full collection required')
@@ -296,7 +308,9 @@ def main(argv: list[str] | None = None) -> int:
             facts = evidence_result(args.junit, args.run_log, args.evidence_format,
                                     collection=args.collection, sha=args.sha,
                                     settings=(RunSettings.from_json(os.environ['E2E_RUN_SETTINGS'])
-                                              if args.evidence_format == 'retry-v4' else None))
+                                              if args.evidence_format == 'retry-v4' else None),
+                                    collection_digest=os.environ.get(
+                                        'EXPECTED_COLLECTION_DIGEST', ''))
             write_outputs({'complete': 'true', 'passed': str(facts.passed)})
         else:
             event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
