@@ -2,6 +2,14 @@
 from dataclasses import dataclass
 
 
+def checked_nodeid(value: object) -> str:
+    """A collected selector is data, never an option or a multiline argument."""
+    if (not isinstance(value, str) or not value or value.startswith('-')
+            or any(char in value for char in ('\x00', '\r', '\n'))):
+        raise ValueError('invalid test node ID')
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class PhaseResult:
     """A failed phase explicitly grants or denies retry; causes stay in test code."""
@@ -11,10 +19,7 @@ class PhaseResult:
     retryable: bool
 
     def __post_init__(self) -> None:
-        if (not isinstance(self.nodeid, str) or not self.nodeid
-                or self.nodeid.startswith('-')
-                or any(char in self.nodeid for char in ('\x00', '\r', '\n'))):
-            raise ValueError('invalid test node ID')
+        checked_nodeid(self.nodeid)
         if self.when not in ('setup', 'call', 'teardown') or self.outcome not in (
                 'passed', 'failed', 'skipped'):
             raise ValueError('invalid test phase result')
