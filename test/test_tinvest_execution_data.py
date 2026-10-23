@@ -3,7 +3,7 @@ import inspect
 from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import Mock, create_autospec
+from unittest.mock import Mock, call, create_autospec
 
 import pytest
 from grpc import StatusCode
@@ -11,7 +11,8 @@ from t_tech.invest import schemas as sdk
 from t_tech.invest import RequestError
 from t_tech.invest.services import MarketDataService, OperationsService, OrdersService
 
-from autorepeater.execution_data import ExecutionDataError
+from autorepeater import grpc_deadline, tinvest_requests
+from autorepeater.execution_data import AccountReadiness, ExecutionDataError
 from autorepeater.strategy_data import (
     DataAccessError, InstrumentInfo, InstrumentType, PortfolioEntry,
     PortfolioSnapshot, StrategyData,
@@ -62,6 +63,219 @@ def fixture_reads():
         trading_status=sdk.SecurityTradingStatus.SECURITY_TRADING_STATUS_UNSPECIFIED,
         market_order_available_flag=False, limit_order_available_flag=False)
     return client, data, TInvestExecutionData(client, data)
+
+
+@pytest.fixture(name='readiness_reads')
+def fixture_readiness_reads(reads):
+    """Raw blocking facts match the neutral portfolio used for full reads."""
+    client, _, _ = reads
+    client.operations.get_portfolio.return_value = sdk.PortfolioResponse(positions=[
+        sdk.PortfolioPosition(instrument_uid='uid', blocked=False,
+                              blocked_lots=sdk.Quotation(units=0, nano=0))])
+    return reads
+
+
+@pytest.mark.parametrize('guard', [
+    'none', 'loading', 'money', 'security', 'exchange', 'future', 'option',
+    'portfolio_flag', 'portfolio_number', 'new', 'partial', 'fill', 'rejected', 'cancelled'])
+def test_readiness_matches_full_snapshot_blockers(readiness_reads, guard):
+    """Both paths share blocker and active-order semantics, with exactly three reads."""
+    client, data, adapter = readiness_reads
+    positions = client.operations.get_positions.return_value
+    if guard == 'loading':
+        positions.limits_loading_in_progress = True
+    elif guard == 'money':
+        positions.blocked = [money(1, 'usd')]
+    elif guard in ('security', 'exchange'):
+        positions.securities = [sdk.PositionsSecurities(
+            instrument_uid='uid', blocked=int(guard == 'security'),
+            exchange_blocked=guard == 'exchange')]
+    elif guard in ('future', 'option'):
+        group, constructor = (('futures', sdk.PositionsFutures) if guard == 'future'
+                              else ('options', sdk.PositionsOptions))
+        setattr(positions, group, [constructor(instrument_uid='uid', blocked=1)])
+    elif guard.startswith('portfolio'):
+        raw = client.operations.get_portfolio.return_value.positions[0]
+        raw.blocked = guard == 'portfolio_flag'
+        raw.blocked_lots.nano = int(guard == 'portfolio_number')
+        data.get_portfolio.return_value = PortfolioSnapshot((replace(
+            entry(), blocked=raw.blocked, blocked_lots=D(raw.blocked_lots.nano) / 10**9),))
+    elif guard != 'none':
+        status = {'new': 'NEW', 'partial': 'PARTIALLYFILL', 'fill': 'FILL',
+                  'rejected': 'REJECTED', 'cancelled': 'CANCELLED'}[guard]
+        client.orders.get_orders.return_value.orders = [sdk.OrderState(
+            order_id='order', instrument_uid='uid', execution_report_status=getattr(
+                sdk.OrderExecutionReportStatus, 'EXECUTION_REPORT_STATUS_' + status),
+            lots_requested=2, lots_executed=1)]
+    result = adapter.get_readiness('account', timeout=1)
+    assert result == AccountReadiness(
+        guard == 'loading', guard.startswith('portfolio'),
+        guard in ('money', 'security', 'exchange', 'future', 'option'),
+        int(guard in ('new', 'partial')))
+    assert client.mock_calls == [
+        call.operations.get_positions(account_id='account'),
+        call.orders.get_orders(account_id='account'),
+        call.operations.get_portfolio(account_id='account')]
+    assert data.mock_calls == []
+    assert result.ready is adapter.get_destination('account').limits_ready
+
+
+def test_readiness_ignores_valuation_cash_and_strategy_sources(readiness_reads):
+    """Foreign and unpriced holdings require only explicit blocking evidence."""
+    client, data, adapter = readiness_reads
+    client.operations.get_positions.return_value.money = [money(-5, 'usd')]
+    client.operations.get_portfolio.return_value.positions = [SimpleNamespace(
+        instrument_uid='foreign', blocked=False, blocked_lots=sdk.Quotation(units=0, nano=0),
+        current_price=None, quantity=None, currency='usd')]
+    data.get_portfolio.side_effect = AssertionError('no valuation or source reads')
+    assert adapter.get_readiness('account', timeout=1).ready
+    assert data.mock_calls == []
+    client.market_data.get_last_prices.assert_not_called()
+    client.market_data.get_trading_status.assert_not_called()
+    client.orders.get_max_lots.assert_not_called()
+    client.orders.post_order.assert_not_called()
+    client.orders.cancel_order.assert_not_called()
+
+
+@pytest.mark.parametrize('field,value', [
+    ('blocked', None), ('blocked', 0), ('blocked_lots', None),
+    ('blocked_lots', sdk.Quotation(units=-1, nano=0)),
+    ('blocked_lots', SimpleNamespace(units=True, nano=0)),
+    ('blocked_lots', SimpleNamespace(units=0, nano='NaN')),
+    ('instrument_uid', ''),
+])
+def test_readiness_rejects_invalid_portfolio_blockers(readiness_reads, field, value):
+    """Malformed blocker evidence remains an error even when loading is true."""
+    client, _, adapter = readiness_reads
+    client.operations.get_positions.return_value.limits_loading_in_progress = True
+    setattr(client.operations.get_portfolio.return_value.positions[0], field, value)
+    with pytest.raises(ValueError):
+        adapter.get_readiness('account', timeout=1)
+
+
+@pytest.mark.parametrize('state', ['loading', 'money', 'currency', 'security', 'exchange',
+                                   'future', 'option'])
+def test_readiness_rejects_invalid_positions_blockers(readiness_reads, state):
+    """No malformed flag or numeric blocker can be interpreted as clear."""
+    client, _, adapter = readiness_reads
+    positions = client.operations.get_positions.return_value
+    if state == 'loading':
+        positions.limits_loading_in_progress = 0
+    elif state == 'money':
+        positions.blocked[0].units = True
+    elif state == 'currency':
+        positions.blocked[0].currency = ''
+    elif state in ('security', 'exchange'):
+        positions.securities = [sdk.PositionsSecurities(
+            instrument_uid='uid', blocked=True if state == 'security' else 0,
+            exchange_blocked=0 if state == 'exchange' else False)]
+    else:
+        group, constructor = (('futures', sdk.PositionsFutures) if state == 'future'
+                              else ('options', sdk.PositionsOptions))
+        setattr(positions, group, [constructor(instrument_uid='uid', blocked=-1)])
+    with pytest.raises(ValueError):
+        adapter.get_readiness('account', timeout=1)
+
+
+@pytest.mark.parametrize('operation', ['positions', 'orders', 'portfolio'])
+def test_readiness_transport_cause_and_scope_cleanup(readiness_reads, operation):
+    """A transport error keeps its actual cause and cannot leak the read budget."""
+    client, _, adapter = readiness_reads
+    method = {'positions': client.operations.get_positions, 'orders': client.orders.get_orders,
+              'portfolio': client.operations.get_portfolio}[operation]
+    error = RequestError(StatusCode.UNAVAILABLE, 'synthetic failure', ())
+    method.side_effect = error
+    with pytest.raises(ExecutionDataError) as raised:
+        adapter.get_readiness('account', timeout=1)
+    assert raised.value.__cause__ is error
+    assert grpc_deadline.remaining_read_timeout() is None
+    method.assert_called_once_with(account_id='account')
+
+
+@pytest.mark.parametrize('timeout', [None, True, 0, -1, float('nan'), float('inf'), '1'])
+def test_readiness_invalid_timeout_makes_no_reads(readiness_reads, timeout):
+    """A probe requires a positive finite shared budget before any SDK access."""
+    client, data, adapter = readiness_reads
+    with pytest.raises(ValueError, match='timeout'):
+        adapter.get_readiness('account', timeout=timeout)
+    assert client.mock_calls == data.mock_calls == []
+
+
+@pytest.mark.parametrize('completed', [0, 1, 2, 3])
+def test_readiness_deadline_between_reads(readiness_reads, monkeypatch, completed):
+    """Exhaustion before, between or after reads yields a local timeout cause."""
+    client, _, adapter = readiness_reads
+    now = [0.0]
+    methods = [client.operations.get_positions, client.orders.get_orders,
+               client.operations.get_portfolio]
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: now[0])
+    if completed:
+        method = methods[completed - 1]
+        response = method.return_value
+
+        def finish(**_kwargs):
+            now[0] = 1.0
+            return response
+
+        method.side_effect = finish
+    else:
+        ticks = iter((0.0, 1.0))
+        monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: next(ticks))
+    with pytest.raises(ExecutionDataError, match='^readiness read deadline expired$') as raised:
+        adapter.get_readiness('account', timeout=1)
+    assert isinstance(raised.value.__cause__, TimeoutError)
+    assert str(raised.value.__cause__) == 'SDK read deadline expired'
+    assert raised.value.__cause__.__cause__ is None
+    assert [method.call_count for method in methods] == [int(i < completed) for i in range(3)]
+    assert grpc_deadline.remaining_read_timeout() is None
+
+
+def test_readiness_quota_uses_one_budget_and_preserves_last_cause(readiness_reads, monkeypatch):
+    """Quota waits consume the probe budget and never start an expired retry."""
+    client, _, adapter = readiness_reads
+    now, waits = [0.0], []
+
+    def sleep(seconds):
+        waits.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(tinvest_requests.time, 'sleep', sleep)
+    first = RequestError(StatusCode.RESOURCE_EXHAUSTED, 'first', ())
+    last = RequestError(StatusCode.RESOURCE_EXHAUSTED, 'last', ())
+    client.operations.get_positions.side_effect = [
+        first, client.operations.get_positions.return_value]
+    client.orders.get_orders.side_effect = last
+    with pytest.raises(ExecutionDataError, match='^readiness read deadline expired$') as raised:
+        adapter.get_readiness('account', timeout=12)
+    assert isinstance(raised.value.__cause__, TimeoutError)
+    assert raised.value.__cause__.__cause__ is last
+    assert waits == [10, 2]
+    assert client.operations.get_positions.call_count == 2
+    client.orders.get_orders.assert_called_once_with(account_id='account')
+    client.operations.get_portfolio.assert_not_called()
+    assert grpc_deadline.remaining_read_timeout() is None
+
+
+def test_readiness_success_keeps_one_budget_for_all_reads(readiness_reads, monkeypatch):
+    """Successful RPCs consume the same scope and every probe starts fresh."""
+    client, _, adapter = readiness_reads
+    now, remaining = [0.0], []
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: now[0])
+
+    def timed(response, **_kwargs):
+        remaining.append(grpc_deadline.remaining_read_timeout())
+        now[0] += 1
+        return response
+
+    for method in (client.operations.get_positions, client.orders.get_orders,
+                   client.operations.get_portfolio):
+        method.side_effect = (
+            lambda response=method.return_value, **kwargs: timed(response, **kwargs))
+    assert adapter.get_readiness('account', timeout=4).ready
+    assert adapter.get_readiness('account', timeout=4).ready
+    assert remaining == [4, 3, 2, 4, 3, 2]
+    assert grpc_deadline.remaining_read_timeout() is None
 
 
 def test_budget_keeps_nano_per_position_and_duplicate_pieces(reads):
@@ -371,9 +585,10 @@ def test_invalid_positions_fields(reads, state):
     ('execution_report_status', True), ('lots_requested', None), ('lots_executed', 3),
     ('order_id', ''), ('instrument_uid', ''),
 ])
-def test_invalid_active_orders(reads, field, value):
+@pytest.mark.parametrize('method', ['get_destination', 'get_readiness'])
+def test_invalid_active_orders(readiness_reads, field, value, method):
     """An unknown status or impossible fill count cannot permit trading."""
-    client, _, adapter = reads
+    client, _, adapter = readiness_reads
     order = sdk.OrderState(order_id='order', instrument_uid='uid',
                            execution_report_status=(
                               sdk.OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_NEW),
@@ -381,7 +596,7 @@ def test_invalid_active_orders(reads, field, value):
     setattr(order, field, value)
     client.orders.get_orders.return_value.orders = [order]
     with pytest.raises(ValueError):
-        adapter.get_destination('account')
+        getattr(adapter, method)('account', **({'timeout': 1} if method == 'get_readiness' else {}))
 
 
 def test_multicurrency_fresh_cash_zero_caps_and_terminal_orders(reads):
@@ -422,13 +637,15 @@ def test_multicurrency_fresh_cash_zero_caps_and_terminal_orders(reads):
 
 
 @pytest.mark.parametrize('account', [None, '', 'a b', True])
-@pytest.mark.parametrize('method', ['get_destination', 'get_trade_rules'])
+@pytest.mark.parametrize('method', ['get_destination', 'get_trade_rules', 'get_readiness'])
 def test_account_is_required(reads, account, method):
     """Account-dependent caps cannot be loaded without a valid account."""
     client, data, adapter = reads
     with pytest.raises(ValueError, match='account_id'):
         if method == 'get_trade_rules':
             adapter.get_trade_rules(account, [])
+        elif method == 'get_readiness':
+            adapter.get_readiness(account, timeout=1)
         else:
             adapter.get_destination(account)
     assert client.mock_calls == []
