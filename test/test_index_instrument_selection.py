@@ -3,6 +3,7 @@ from dataclasses import replace
 from decimal import Decimal
 import logging
 from test.test_autorepeater import client_tinvest
+from test.test_order_plan import destination
 from unittest.mock import call, create_autospec
 
 import pytest
@@ -10,7 +11,7 @@ from t_tech import invest
 
 from autorepeater import strategies
 from autorepeater.execution import OrderExecutor
-from autorepeater.execution_data import ExecutionData
+from autorepeater.execution_data import AccountReadiness, ExecutionData
 from autorepeater.index_strategy import IndexStrategy
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.repeater import AutoRepeater
@@ -86,7 +87,9 @@ def test_multiple_available_candidates_choose_first_in_search_order_with_warning
             instrument('a-second', 'TQBR', True)]
     strategy, data = selection_case(rows)
     execution = create_autospec(ExecutionData, instance=True, spec_set=True)
-    execution.get_destination.side_effect = RuntimeError('stop after selection')
+    execution.get_readiness.return_value = AccountReadiness(False, False, False, 0)
+    execution.get_destination.return_value = destination()
+    execution.get_trade_rules.side_effect = RuntimeError('stop after selection')
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     engine = AutoRepeater(strategy, data, execution, executor)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
@@ -97,7 +100,9 @@ def test_multiple_available_candidates_choose_first_in_search_order_with_warning
                                  call.get_instrument('a-second'),
                                  call.get_last_prices(['z-first'])]
     data.get_last_prices.assert_called_once_with(['z-first'])
-    assert execution.method_calls == [call.get_destination('dst')]
+    assert execution.method_calls == [
+        call.get_readiness('dst', timeout=pytest.approx(30)), call.get_destination('dst'),
+        call.get_trade_rules('dst', ['z-first'])]
     assert not executor.method_calls
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
@@ -169,8 +174,9 @@ def test_closed_tqtf_fund_is_replaced_by_api_available_tqbr(client, src):
     from autorepeater.execution_data import ExecutionSnapshot, TradeRules  # pylint: disable=import-outside-toplevel
     from autorepeater.order_execution import TInvestOrderExecutor  # pylint: disable=import-outside-toplevel
     from autorepeater.strategy_data import PortfolioSnapshot  # pylint: disable=import-outside-toplevel
-    from unittest.mock import Mock, ANY  # pylint: disable=import-outside-toplevel
-    execution = Mock(spec_set=['get_destination', 'get_trade_rules'])
+    from unittest.mock import ANY  # pylint: disable=import-outside-toplevel
+    execution = create_autospec(ExecutionData, instance=True, spec_set=True)
+    execution.get_readiness.return_value = AccountReadiness(False, False, False, 0)
     execution.get_destination.return_value = ExecutionSnapshot(
         PortfolioSnapshot(()), Decimal(100), {}, {}, {'rub': Decimal(100)}, {}, (), True)
     execution.get_trade_rules.return_value = {

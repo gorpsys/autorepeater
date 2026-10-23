@@ -20,7 +20,7 @@ def settings(tmp_path):
     return deploy.Settings(
         'b1gdgrp5bnth11phova8', 'ajela8pd8l3bjeupa04s', 'autorepeater-deploy',
         'functionid', tmp_path / 'package.zip',
-        deploy.FunctionSettings('python312', 'handler.handler', '256MB', '60s',
+        deploy.FunctionSettings('python312', 'handler.handler', '256MB', '90s',
                                 'ajelpbq7as5bpe499962'),
         deploy.SecretBinding('e6qc2ghhip6925lllhm7', 'e6qqshm7lkthgotpdqf6', 't_token', 't_token'),
         'b1gbga988v36vq19lmb7')
@@ -44,7 +44,8 @@ def test_new_version_uses_bucket_and_keeps_environment_and_lockbox(tmp_path):
     assert '--function-name' not in args
     assert args[args.index('--function-id') + 1] == cfg.function_id
     assert args[args.index('--memory') + 1] == '256MB'
-    assert args[args.index('--execution-timeout') + 1] == '60s'
+    assert current()['executionTimeout'] == '60s'
+    assert args[args.index('--execution-timeout') + 1] == '90s'
     assert args[args.index('--service-account-id') + 1] == cfg.function.service_account_id
     assert args[args.index('--package-object-name') + 1] == 'sha/package.zip'
     assert args[args.index('--package-sha256') + 1] == 'f' * 64
@@ -96,6 +97,7 @@ def test_verification_requires_active_matching_version_and_preserved_fields(tmp_
     before = current()
     after = deepcopy(before)
     after['id'] = 'newversion'
+    after['executionTimeout'] = '90s'
     after['secrets'] = [cfg.secret.as_rest()]
     after['description'] = f'GitHub master {SHA}; package sha256 ' + 'f' * 64
     deploy.verify_version(cfg, before, after, sha=SHA, digest='f' * 64)
@@ -104,6 +106,20 @@ def test_verification_requires_active_matching_version_and_preserved_fields(tmp_
         damaged = dict(after, **{key: bad})
         with pytest.raises(DeployError):
             deploy.verify_version(cfg, before, damaged, sha=SHA, digest='f' * 64)
+
+
+@pytest.mark.parametrize('timeout', ['60s', 'invalid', '', None])
+def test_verification_rejects_unapproved_published_timeout(tmp_path, timeout):
+    """Only the new version must have 90s; the existing 60s version may migrate."""
+    cfg = settings(tmp_path)
+    after = dict(current(), id='newversion', secrets=[cfg.secret.as_rest()],
+                 description=f'GitHub master {SHA}; package sha256 ' + 'f' * 64)
+    if timeout is None:
+        del after['executionTimeout']
+    else:
+        after['executionTimeout'] = timeout
+    with pytest.raises(DeployError, match='execution settings mismatch'):
+        deploy.verify_version(cfg, current(), after, sha=SHA, digest='f' * 64)
 
 
 def test_publication_does_not_upload_until_metadata_validated(tmp_path):
@@ -124,7 +140,7 @@ def test_successful_publication_is_single_upload_create_and_readback(tmp_path):
     yc = create_autospec(deploy.YandexCLI, instance=True, spec_set=True)
     before = current()
     digest = deploy.package_digest(cfg.archive)
-    after = dict(before, id='newversion', secrets=[cfg.secret.as_rest()],
+    after = dict(before, id='newversion', executionTimeout='90s', secrets=[cfg.secret.as_rest()],
                  description=f'GitHub master {SHA}; package sha256 {digest}')
     yc.call.side_effect = [before, {}, after, after]
     result = deploy.publish(cfg, yc, SHA, '123', '2')
@@ -135,6 +151,9 @@ def test_successful_publication_is_single_upload_create_and_readback(tmp_path):
     assert calls[1].args[0][:3] == ['storage', 's3api', 'put-object']
     assert f'functions/{SHA}/123-2.zip' in calls[1].args[0]
     assert calls[2].args[0][:4] == ['serverless', 'function', 'version', 'create']
+    arguments = calls[2].args[0]
+    assert before['executionTimeout'] == '60s'
+    assert arguments[arguments.index('--execution-timeout') + 1] == '90s'
     assert calls[3].args[0][:4] == ['serverless', 'function', 'version', 'get-by-tag']
     get_latest = ['serverless', 'function', 'version', 'get-by-tag',
                   '--function-id', cfg.function_id, '--tag', '$latest']
@@ -184,7 +203,7 @@ def test_publication_rejects_wrong_response_function_id(tmp_path, stage, functio
     cfg = settings(tmp_path)
     cfg.archive.write_bytes(b'ZIP')
     client = create_autospec(deploy.YandexCLI, instance=True, spec_set=True)
-    after = dict(current(), id='newversion', secrets=[cfg.secret.as_rest()],
+    after = dict(current(), id='newversion', executionTimeout='90s', secrets=[cfg.secret.as_rest()],
                  name='python-function',
                  description=f'GitHub master {SHA}; package sha256 '
                              f'{deploy.package_digest(cfg.archive)}')
@@ -206,7 +225,7 @@ def test_verification_rejects_agreeing_but_unexpected_function_ids(
     """The explicit target wins over two agreeing responses or display names."""
     cfg = settings(tmp_path)
     before = dict(current(), functionId=function_id, name='python-function')
-    after = dict(before, id=version_id, secrets=[cfg.secret.as_rest()],
+    after = dict(before, id=version_id, executionTimeout='90s', secrets=[cfg.secret.as_rest()],
                  description=f'GitHub master {SHA}; package sha256 ' + 'f' * 64)
     with pytest.raises(DeployError, match='function ID'):
         deploy.verify_version(cfg, before, after, sha=SHA, digest='f' * 64)
@@ -219,6 +238,7 @@ def test_publication_survives_function_rename(tmp_path):
     client = create_autospec(deploy.YandexCLI, instance=True, spec_set=True)
     before = dict(current(), name='python-function')
     after = dict(before, name='renamed-function', id='newversion',
+                 executionTimeout='90s',
                  secrets=[cfg.secret.as_rest()],
                  description=f'GitHub master {SHA}; package sha256 '
                              f'{deploy.package_digest(cfg.archive)}')
@@ -247,7 +267,7 @@ def deployment_environment(tmp_path):
         'CLOUD_ID': 'cloud', 'FOLDER_ID': 'folder', 'SA_ID': 'deploysa', 'BUCKET': 'bucket',
         'FUNCTION_ID': 'functionid', 'ZIP_PATH': str(tmp_path / 'package.zip'),
         'FUNCTION_RUNTIME': 'python312', 'FUNCTION_ENTRYPOINT': 'handler.handler',
-        'FUNCTION_MEMORY': '256MB', 'FUNCTION_TIMEOUT': '60s', 'FUNCTION_SA_ID': 'runtimesa',
+        'FUNCTION_MEMORY': '256MB', 'FUNCTION_TIMEOUT': '90s', 'FUNCTION_SA_ID': 'runtimesa',
         'LOCKBOX_SECRET_ID': 'secret', 'LOCKBOX_VERSION_ID': 'version',
         'LOCKBOX_KEY': 't_token', 'LOCKBOX_ENVIRONMENT_VARIABLE': 't_token',
         'ACTIONS_ID_TOKEN_REQUEST_URL': 'https://example.actions.githubusercontent.com/token?a=b',
@@ -266,6 +286,7 @@ def test_settings_preserve_explicit_cloud_identities(tmp_path):
     assert cfg.cloud_id == 'cloud'
     assert cfg.function_id == 'functionid'
     assert cfg.function.service_account_id == 'runtimesa'
+    assert cfg.function.timeout == '90s'
     assert cfg.archive == tmp_path / 'package.zip'
 
 
@@ -279,6 +300,26 @@ def test_invalid_settings_have_no_production_fallback(tmp_path, key, value):
     env = dict(deployment_environment(tmp_path), **{key: value})
     with pytest.raises(DeployError):
         deploy.settings_from_environment(env)
+
+
+@pytest.mark.parametrize('timeout', ['60s', 'invalid', '', None])
+def test_unapproved_timeout_stops_before_credentials(monkeypatch, tmp_path, timeout):
+    """Old, invalid and missing timeouts cannot fall back or obtain credentials."""
+    env = deployment_environment(tmp_path)
+    if timeout is None:
+        del env['FUNCTION_TIMEOUT']
+    else:
+        env['FUNCTION_TIMEOUT'] = timeout
+    monkeypatch.setattr(deploy.os, 'environ', env)
+    exchange = create_autospec(deploy.exchange_token, spec_set=True)
+    publish = create_autospec(deploy.publish, spec_set=True)
+    monkeypatch.setattr(deploy, 'exchange_token', exchange)
+    monkeypatch.setattr(deploy, 'publish', publish)
+    with pytest.raises(DeployError):
+        deploy.settings_from_environment(env)
+    assert deploy.main() == 1
+    exchange.assert_not_called()
+    publish.assert_not_called()
 
 
 @pytest.mark.parametrize('function_id', [None, '', 'bad,id'])
@@ -598,7 +639,8 @@ def test_duplicate_secret_names_and_changed_operational_settings_are_rejected(tm
     data = dict(current(), secrets=[cfg.secret.as_rest()] * 2)
     with pytest.raises(DeployError, match='duplicate'):
         deploy.read_secret_bindings(data)
-    after = dict(current(), id='new', secrets=[cfg.secret.as_rest()], concurrency='2',
+    after = dict(current(), id='new', executionTimeout='90s',
+                 secrets=[cfg.secret.as_rest()], concurrency='2',
                  description=f'GitHub master {SHA}; package sha256 ' + 'f' * 64)
     with pytest.raises(DeployError, match='operational'):
         deploy.verify_version(cfg, current(), after, sha=SHA, digest='f' * 64)

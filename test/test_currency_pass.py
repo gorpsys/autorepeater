@@ -5,7 +5,7 @@ from datetime import timedelta
 from decimal import Decimal
 from test.test_account_currency import NOW, position, valuation
 from test.test_composite_strategy import make_composite
-from unittest.mock import Mock, create_autospec, patch
+from unittest.mock import Mock, call, create_autospec, patch
 
 import pytest
 from t_tech.invest import schemas as sdk
@@ -14,7 +14,7 @@ from t_tech.invest.services import OperationsService, OrdersService
 from autorepeater.account_config import AccountConfig
 from autorepeater.account_strategy import AccountStrategy, PreparedAccountSource
 from autorepeater.execution import OrderExecutor
-from autorepeater.execution_data import ExecutionData, TradeRules
+from autorepeater.execution_data import AccountReadiness, ExecutionData, TradeRules
 from autorepeater.repeater import AutoRepeater
 from autorepeater.strategy_data import InstrumentType, PortfolioSnapshot, StrategyData
 from autorepeater.strategy_plan import StrategyContext
@@ -76,6 +76,7 @@ def test_shared_uid_composite_uses_one_book_and_one_fx_before_any_effect(debug):
     adapter, _ = execution(data)
     destination_state = adapter.get_destination('dst', valuation=value)
     port = create_autospec(ExecutionData, instance=True, spec_set=True)
+    port.get_readiness.return_value = AccountReadiness(False, False, False, 0)
     port.get_destination.return_value = destination_state
     port.get_trade_rules.return_value = {'foreign': TradeRules(1, 'cny', True, True, D(100), 1, 1)}
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
@@ -106,11 +107,13 @@ def test_stale_fx_fails_before_any_account_or_effect():
     value, _ = valuation(clock=lambda: NOW + timedelta(seconds=181))
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     port = create_autospec(ExecutionData, instance=True, spec_set=True)
+    port.get_readiness.return_value = AccountReadiness(False, False, False, 0)
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     with pytest.raises(ValueError, match='stale'):
         AutoRepeater(account(), data, port, executor).sync_accounts('dst', valuation=value)
     data.get_portfolio.assert_not_called()
-    assert port.mock_calls == executor.mock_calls == []
+    assert port.mock_calls == [call.get_readiness('dst', timeout=pytest.approx(30))]
+    assert executor.mock_calls == []
 
 
 def test_destination_with_a_different_fx_snapshot_rejects_before_rules_or_orders():
@@ -122,9 +125,12 @@ def test_destination_with_a_different_fx_snapshot_rejects_before_rules_or_orders
     adapter, _ = execution(data)
     destination = adapter.get_destination('dst', valuation=value)
     port = create_autospec(ExecutionData, instance=True, spec_set=True)
+    port.get_readiness.return_value = AccountReadiness(False, False, False, 0)
     port.get_destination.return_value = replace(destination, fx_snapshot=other.fx)
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+    data.reset_mock()
     with pytest.raises(ValueError, match='share the pass FX snapshot'):
         AutoRepeater(account(), data, port, executor).sync_accounts('dst', valuation=value)
     port.get_trade_rules.assert_not_called()
+    data.get_portfolio.assert_not_called()
     assert not executor.mock_calls

@@ -14,7 +14,9 @@ from t_tech.invest import (
 )
 from t_tech.invest.services import OrdersService
 
-from autorepeater.execution_data import ExecutionData, ExecutionSnapshot, TradeRules
+from autorepeater.execution_data import (
+    AccountReadiness, ExecutionData, ExecutionSnapshot, TradeRules,
+)
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError, OrderExecutor
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.portfolio import TargetPortfolio
@@ -36,6 +38,7 @@ def fixture_runtime():
     strategy = create_autospec(Strategy, instance=True, spec_set=True)
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     execution = create_autospec(ExecutionData, instance=True, spec_set=True)
+    execution.get_readiness.return_value = AccountReadiness(False, False, False, 0)
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     snapshot = ExecutionSnapshot(PortfolioSnapshot(()), Decimal(100), {}, {},
                                  {'rub': Decimal(100)}, {}, (), True)
@@ -70,8 +73,8 @@ def test_final_api_and_neutral_execution_order(runtime, debug, caplog):
     with caplog.at_level(logging.INFO, logger='tinkoffBot'):
         engine.sync_accounts('dst')
     names = [item[0] for item in timeline.mock_calls]
-    assert names[:6] == ['data.begin_snapshot', 'strategy.load_snapshot',
-                         'execution.get_destination',
+    assert names[:7] == ['execution.get_readiness', 'data.begin_snapshot',
+                         'execution.get_destination', 'strategy.load_snapshot',
                          'strategy.allocation_profile', 'strategy.build_plan',
                          'execution.get_trade_rules']
     assert executor.submit_order.call_count == (0 if debug else 1)
@@ -146,7 +149,12 @@ def test_unknown_execution_stops_only_local_pass(runtime):
     strategy, data, execution, executor = runtime
     strategy.event_accounts.return_value = ('dst',)
     strategy.should_rebalance.return_value = True
-    data.position_events.side_effect = [iter([object()]), RuntimeError('end offline stream')]
+
+    def events():
+        yield PositionEvent(True, 'dst', (), (), 'ready')
+        raise RuntimeError('end offline stream')
+
+    data.position_events.return_value = events()
     executor.submit_order.side_effect = [
         OrderExecutionError('unknown'),
         ExecutionReceipt('stock', 'BUY', 'next', 'FILL', 10, 10, {})]
@@ -154,6 +162,7 @@ def test_unknown_execution_stops_only_local_pass(runtime):
         AutoRepeater(strategy, data, execution, executor).mainflow('dst')
     assert executor.submit_order.call_count == 2
     assert execution.get_destination.call_count == 2
+    data.position_events.assert_called_once_with(('dst',))
 
 
 @pytest.fixture(name='sdk_runtime')
@@ -200,7 +209,8 @@ def test_sdk_failure_propagates_through_sync_and_cloud_boundary(
     assert orders.mock_calls == [stock_post_call('first-request')]
     assert factory.mock_calls == [call()]
     assert data.mock_calls == [call.begin_snapshot()]
-    assert execution.mock_calls == [call.get_destination('dst'),
+    assert execution.mock_calls == [call.get_readiness('dst', timeout=pytest.approx(30)),
+                                    call.get_destination('dst'),
                                     call.get_trade_rules('dst', ['stock'])]
     assert any(record.levelno == logging.ERROR and 'request_id=first-request' in record.message
                for record in caplog.records)
@@ -265,7 +275,8 @@ def test_sdk_unknown_result_stops_pass_but_mainflow_processes_next_event(
     assert factory.mock_calls == [call(), call()]
     assert data.mock_calls == [call.begin_snapshot(), call.position_events(('dst',)),
                                call.begin_snapshot()]
-    assert execution.mock_calls == [call.get_destination('dst'),
+    assert execution.mock_calls == [call.get_readiness('dst', timeout=pytest.approx(30)),
+                                    call.get_destination('dst'),
                                     call.get_trade_rules('dst', ['stock'])] * 2
     strategy.should_rebalance.assert_called_once_with(
         PositionEvent(True, 'dst', (), (), 'offline'), 'dst')
@@ -356,8 +367,8 @@ def test_confirmed_sale_refreshes_money_before_buy_without_reload(runtime):
     calls = timeline.mock_calls
     sell, buy = [item for item in calls if item[0] == 'orders.submit_order']
     assert (sell.args[1].side, buy.args[1].side) == ('SELL', 'BUY')
-    assert calls.index(sell) < 3 < calls.index(buy)
-    assert calls[3][0] == 'reads.get_destination'
+    assert calls.index(sell) < 4 < calls.index(buy)
+    assert calls[4][0] == 'reads.get_destination'
     strategy.load_snapshot.assert_called_once_with(data)
     assert strategy.build_plan.call_count == strategy.allocation_profile.call_count == 1
 

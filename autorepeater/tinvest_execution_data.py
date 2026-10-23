@@ -4,8 +4,9 @@ from decimal import Decimal
 from t_tech.invest import GetMaxLotsRequest, OrderExecutionReportStatus, RequestError
 
 from autorepeater.execution_data import (
-    ActiveOrder, ExecutionDataError, ExecutionSnapshot, TradeRules,
+    AccountReadiness, ActiveOrder, ExecutionDataError, ExecutionSnapshot, TradeRules,
 )
+from autorepeater.grpc_deadline import read_deadline, remaining_read_timeout
 from autorepeater.logging_config import logger as LOGGER
 from autorepeater.money import format_decimal, format_decimal_map
 from autorepeater.strategy_data import DataAccessError, InstrumentType
@@ -47,6 +48,18 @@ def _money(values, field):
     return result
 
 
+def _portfolio_blocked(uid, flag, count):
+    uid = _text(uid, 'portfolio UID')
+    context = f'portfolio {uid}'
+    blocked_flag = _bool(flag, f'{context}.blocked')
+    blocked_count = _decimal(count, f'{context}.blocked_lots', nonnegative=True)
+    blocked = blocked_flag or blocked_count != 0
+    if blocked:
+        LOGGER.info('Execution portfolio blocking: uid=%s blocked=%s blocked_lots=%s',
+                    uid, blocked_flag, format_decimal(blocked_count))
+    return blocked
+
+
 def _portfolio_state(portfolio):
     budget = Decimal(0)
     quantities, marks, identities = {}, {}, {}
@@ -58,12 +71,8 @@ def _portfolio_state(portfolio):
         _decimal(position.current_price, f'{context}.current_price')
         price = _decimal(position.mark, f'{context}.mark')
         quantity = _decimal(position.quantity, f'{context}.quantity')
-        blocked_flag = _bool(position.blocked, f'{context}.blocked')
-        blocked_count = _decimal(position.blocked_lots, f'{context}.blocked_lots', nonnegative=True)
-        blocked = blocked or blocked_flag or blocked_count != 0
-        if blocked_flag or blocked_count != 0:
-            LOGGER.info('Execution portfolio blocking: uid=%s blocked=%s blocked_lots=%s',
-                        uid, blocked_flag, format_decimal(blocked_count))
+        position_blocked = _portfolio_blocked(uid, position.blocked, position.blocked_lots)
+        blocked = blocked or position_blocked
         budget += (price * quantity).quantize(NANO)
         identity = (price, position.currency, position.instrument_type)
         if uid in identities and identities[uid] != identity:
@@ -130,6 +139,26 @@ class TInvestExecutionData:
         self._client = client
         self._data = data
 
+    def get_readiness(self, account_id: str, *, timeout: float) -> AccountReadiness:
+        """Read only blockers, sharing one deadline across all SDK calls and retries."""
+        _text(account_id, 'account_id')
+        try:
+            with read_deadline(timeout):
+                positions = _read(self._client.operations.get_positions, account_id=account_id)
+                loading = _bool(positions.limits_loading_in_progress, 'limits_loading_in_progress')
+                positions_blocked = _positions_blocked(positions)
+                active = _active_orders(
+                    _read(self._client.orders.get_orders, account_id=account_id).orders)
+                portfolio = _read(self._client.operations.get_portfolio, account_id=account_id)
+                blockers = [_portfolio_blocked(
+                    position.instrument_uid, position.blocked,
+                    _quotation(position.blocked_lots, 'portfolio blocked_lots'))
+                    for position in portfolio.positions]
+                remaining_read_timeout()
+                return AccountReadiness(loading, any(blockers), positions_blocked, len(active))
+        except TimeoutError as error:
+            raise ExecutionDataError('readiness read deadline expired') from error
+
     def get_destination(self, account_id, *, valuation=None):
         """Keep full valuation; advertise no availability in any blocked state."""
         _text(account_id, 'account_id')
@@ -142,7 +171,7 @@ class TInvestExecutionData:
         cash = _money(positions.money, 'money')
         loading = _bool(positions.limits_loading_in_progress, 'limits_loading_in_progress')
         positions_blocked = _positions_blocked(positions)
-        ready = not (loading or portfolio_blocked or positions_blocked or active)
+        ready = AccountReadiness(loading, portfolio_blocked, positions_blocked, len(active)).ready
         LOGGER.info('Execution snapshot: account=%s limits_ready=%s loading=%s '
                     'portfolio_blocked=%s positions_blocked=%s active_orders=%d cash=%s',
                     account_id, ready, loading, portfolio_blocked, positions_blocked,
