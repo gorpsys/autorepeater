@@ -1525,7 +1525,7 @@ def test_cloud_rejects_source_before_credentials(
         ({'queryStringParameters': None},
          {'SRC_ACCOUNT': '4', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token',
           't_token': 'legacy-token'}, ('4', 'env-dst', 'env-token')),
-        ({'queryStringParameters': {'dst': '', 'token': ''}},
+        ({'queryStringParameters': {'token': ''}},
          {'SRC_ACCOUNT': '4', 'DST_ACCOUNT': 'env-dst', 'INVEST_TOKEN': 'env-token'},
          ('4', 'env-dst', 'env-token')),
         ({}, {'SRC_ACCOUNT': '4', 't_token': 'legacy-token'},
@@ -1533,7 +1533,7 @@ def test_cloud_rejects_source_before_credentials(
         (None, {'SRC_ACCOUNT': '4', 'INVEST_TOKEN': 'env-token'},
          ('4', serverless.DEFAULT_DST_ACCOUNT, 'env-token')),
     ],
-    ids=['query_priority', 'null_query', 'empty_query_values', 'legacy_token', 'no_event',
+    ids=['query_priority', 'null_query', 'empty_token', 'legacy_token', 'no_event',
          ],
 )
 def test_cloud_entrypoint(event, environment, expected, invest_environment):

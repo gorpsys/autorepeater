@@ -13,9 +13,15 @@ DEFAULT_SRC = 'BALANCED'
 
 def get_query_params(event):
     """Return query string params from a Yandex Cloud event."""
-    params = event.get('queryStringParameters') if event else None
+    if event is None:
+        return {}
+    if not isinstance(event, dict):
+        raise ValueError('event must be an object or null')
+    params = event.get('queryStringParameters')
     if params is None:
         return {}
+    if not isinstance(params, dict):
+        raise ValueError('queryStringParameters must be an object or null')
     return params
 
 
@@ -42,6 +48,8 @@ def handler(event, context):
     default_src = DEFAULT_SRC if algoritm == DEFAULT_ALGORITM else None
     src = params['src'] if 'src' in params else os.environ.get('SRC_ACCOUNT', default_src)
     prepared = prepare_strategy(algoritm, src)
+    if 'dst' in params and (not isinstance(params['dst'], str) or not params['dst'].strip()):
+        raise ValueError('dst must be a nonempty string')
     dst = get_param(params, 'dst', 'DST_ACCOUNT', DEFAULT_DST_ACCOUNT)
     print_launch(algoritm, src, dst)
     invest_token = get_param(params, 'token', 'INVEST_TOKEN')
