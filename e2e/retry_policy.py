@@ -1,12 +1,86 @@
 """Test-owned failure policy; CI receives only its explicit boolean decision."""
 from datetime import datetime, timedelta
-from types import TracebackType
+import sys
+from types import CodeType, TracebackType
 
+from grpc import StatusCode
 from t_tech.invest import RequestError
 
-from scripts.sandbox_retry_report import (
-    KNOWN_ERRORS, auth_failure, transport_facts, validation_method,
+from autorepeater.execution import OrderExecutionError
+from autorepeater.execution_data import ExecutionDataError
+from autorepeater.strategy_data import DataAccessError
+from scripts.sandbox_lifecycle import SandboxFailure
+
+
+KNOWN_ERRORS = (
+    RequestError, SandboxFailure, DataAccessError, ExecutionDataError, OrderExecutionError,
 )
+TRANSPORT_ROOTS = frozenset(error.__name__ for error in KNOWN_ERRORS)
+TRANSIENT_STATUSES = frozenset(('DEADLINE_EXCEEDED', 'UNAVAILABLE'))
+
+
+def validation_method(code: CodeType) -> str | None:
+    """Match loaded method code identities without importing optional future runtime."""
+    for module, owner, method in (
+            ('autorepeater.tinvest_security_data', 'TInvestSecurityData', 'get_security_quote'),
+            ('autorepeater.fx_data', 'FxQuote', 'validate_fresh')):
+        cls = getattr(sys.modules.get(module), owner, None)
+        if code is getattr(getattr(cls, method, None), '__code__', None):
+            return method
+    return None
+
+
+def auth_failure(error: BaseException | None) -> bool:
+    """Auth or incomplete bounded inspection forbids retries of every case."""
+    visited: set[int] = set()
+    while error is not None and id(error) not in visited and len(visited) < 8:
+        visited.add(id(error))
+        if isinstance(error, RequestError) and error.code in (
+                StatusCode.UNAUTHENTICATED, StatusCode.PERMISSION_DENIED):
+            return True
+        # A full stored buffer cannot prove that no auth failure was truncated.
+        if isinstance(error, SandboxFailure) and (len(error.api_facts) >= 8 or any(
+                fact.get('grpc_status') in ('UNAUTHENTICATED', 'PERMISSION_DENIED')
+                for fact in error.api_facts[:8])):
+            return True
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+    return error is not None
+
+
+def stored_transport(facts: tuple[dict[str, object], ...]) -> tuple[tuple[str, ...], str | None]:
+    """safe_call records typed SDK facts; stop before its underlying gRPC details."""
+    chain: list[str] = []
+    for fact in facts[:8]:
+        name = fact.get('type')
+        if not isinstance(name, str) or name not in TRANSPORT_ROOTS:
+            return (*chain, 'other'), None
+        chain.append(name)
+        if name == 'RequestError':
+            status = fact.get('grpc_status')
+            return tuple(chain), status if isinstance(status, str) and (
+                status in TRANSIENT_STATUSES) else None
+    return tuple(chain), None
+
+
+def transport_facts(error: BaseException | None) -> tuple[tuple[str, ...], str | None]:
+    """Known transport wrappers only; an assertion or unknown root is not retryable."""
+    chain: list[str] = []
+    visited: set[int] = set()
+    while error is not None and id(error) not in visited and len(chain) < 8:
+        visited.add(id(error))
+        if type(error) not in KNOWN_ERRORS:
+            return (*chain, 'other'), None
+        chain.append(type(error).__name__)
+        if isinstance(error, RequestError):
+            status = error.code
+            return tuple(chain), status.name if status in (
+                StatusCode.DEADLINE_EXCEEDED, StatusCode.UNAVAILABLE) else None
+        if isinstance(error, SandboxFailure) and error.api_facts:
+            suffix, status_name = stored_transport(error.api_facts)
+            combined = (*chain, *suffix)
+            return combined[:8], status_name if len(combined) <= 8 else None
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+    return tuple(chain), None
 
 
 def validation_trace(error: BaseException | None) -> TracebackType | None:

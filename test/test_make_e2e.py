@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def make_process_environment():
     """Test child Make defaults independently of the outer Make that launched pytest."""
-    inherited = {'PYTHON', 'MAKEFLAGS', 'MFLAGS', 'MAKEOVERRIDES', 'MAKELEVEL'}
+    inherited = {'PYTHON', 'MAKEFLAGS', 'MFLAGS', 'MAKEOVERRIDES', 'MAKELEVEL',
+                 'E2E_RUN_SETTINGS', 'E2E_TIMEOUT', 'E2E_ARGS'}
     return {key: value for key, value in os.environ.items() if key not in inherited}
 
 
@@ -78,16 +79,16 @@ def test_infrastructure_cli_missing_token_is_safe_failure():
 
 
 @pytest.mark.parametrize('target', ['lint', 'test', 'coverage', 'e2e'])
-def test_retry_defaults_are_exported_only_to_live_goal(tmp_path, target):
-    """Ordinary offline checks must not inherit the live protocol selected by Make."""
+def test_retry_settings_are_exported_only_to_live_goal(tmp_path, target):
+    """Ordinary offline checks must not inherit the live run settings selected by Make."""
     overrides = tmp_path / 'inspect.mk'
     overrides.write_text(
         'lint test coverage e2e:\n'
-        '\t@$(PYTHON) -c "import os; print(os.environ.get(\'E2E_EVIDENCE_PROTOCOL\'))"\n'
+        '\t@$(PYTHON) -c "import os; print(os.environ.get(\'E2E_RUN_SETTINGS\'))"\n'
         'check-lint check-test check-coverage check-e2e:\n\t@:\n', encoding='utf-8')
     result = subprocess.run(['make', '-s', '-f', str(ROOT / 'Makefile'),
                              '-f', str(overrides), target, f'PYTHON={sys.executable}'],
                             cwd=tmp_path, env={'PATH': os.environ['PATH']},
                             capture_output=True, text=True, check=False, timeout=15)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == ('retry-v4' if target == 'e2e' else 'None')
+    assert result.stdout.strip() == ('' if target == 'e2e' else 'None')

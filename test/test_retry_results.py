@@ -99,3 +99,21 @@ def test_arbitrary_collected_suite_size_and_order_are_preserved():
     selected = tuple(f'e2e/test_any.py::test_case_{index}' for index in range(31))
     results = tuple(phase for node in selected for phase in phases(node, retryable=True))
     assert retry_nodes(results, selected) == selected
+
+
+@pytest.mark.parametrize('node', [
+    '../test_case.py::test_case', '/tmp/test_case.py::test_case',
+    'e2e/../test_case.py::test_case', 'e2e/test_case.py',
+    'e2e/test_case.py::', 'e2e/test_case.py::test_case\tunsafe',
+])
+def test_selectors_cannot_escape_checkout_or_become_process_options(node):
+    """Actual pytest selectors remain relative, explicit and free of controls."""
+    with pytest.raises(ValueError):
+        PhaseResult(node, 'call', 'failed', True)
+
+
+def test_nested_module_class_and_parameter_selectors_are_valid():
+    """Class members and opaque pytest parameter labels preserve their identity."""
+    node = 'e2e/nested/test_cases.py::TestOuter::TestInner::test_case[a::b / c]'
+    results = phases(node, retryable=True)
+    assert retry_nodes(results, (node,)) == (node,)

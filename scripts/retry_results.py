@@ -5,7 +5,11 @@ from dataclasses import dataclass
 def checked_nodeid(value: object) -> str:
     """A collected selector is data, never an option or a multiline argument."""
     if (not isinstance(value, str) or not value or value.startswith('-')
-            or any(char in value for char in ('\x00', '\r', '\n'))):
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise ValueError('invalid test node ID')
+    module, separator, member = value.partition('::')
+    if (not separator or not member or not module.endswith('.py') or '\\' in module
+            or any(part in ('', '.', '..') for part in module.split('/'))):
         raise ValueError('invalid test node ID')
     return value
 

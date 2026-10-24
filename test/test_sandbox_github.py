@@ -5,11 +5,11 @@ import runpy
 import sys
 from unittest.mock import create_autospec
 from urllib.error import URLError
-import xml.etree.ElementTree as ET
 
 import pytest
 
 from scripts import sandbox_github as subject
+from scripts.retry_settings import RunSettings
 
 SHA = 'a' * 40
 REPO = 'gorpsys/autorepeater'
@@ -20,15 +20,6 @@ def pull_request(number: int = 27) -> dict[str, object]:
     return {'number': number, 'state': 'open',
             'base': {'ref': 'master', 'repo': {'full_name': REPO}},
             'head': {'sha': SHA, 'repo': {'full_name': REPO}}}
-
-
-def write_junit(path: Path, names: tuple[str, ...] | None = None) -> ET.Element:
-    """Write independent pytest-style evidence, never run live collection."""
-    suite = ET.Element('testsuite', tests='17', failures='0', errors='0', skipped='0')
-    for name in subject.EXPECTED_SCENARIOS if names is None else names:
-        ET.SubElement(suite, 'testcase', classname='e2e.test_sandbox', name=name)
-    ET.ElementTree(suite).write(path)
-    return suite
 
 
 def test_open_same_repo_exact_head_is_selected() -> None:
@@ -90,50 +81,6 @@ def test_dispatch_number_is_strict(number: object) -> None:
         subject.parse_pr_number(number)
 
 
-def test_full_seventeen_scenarios_are_required(tmp_path: Path) -> None:
-    """Only exact unique expected scenarios with passed teardown are complete."""
-    path = tmp_path / 'junit.xml'
-    write_junit(path)
-    assert subject.verify_junit(path).passed == 17
-
-
-@pytest.mark.parametrize('change', [
-    'empty', 'missing', 'duplicate', 'foreign', 'skip', 'failure', 'error',
-    'suite-error', 'wrong-class',
-])
-def test_incomplete_evidence_never_becomes_success(tmp_path: Path, change: str) -> None:
-    """Counts alone do not prove a full run or clean fixture teardown."""
-    path = tmp_path / 'junit.xml'
-    suite = write_junit(path)
-    cases = list(suite)
-    if change == 'empty':
-        suite.clear()
-    elif change == 'missing':
-        suite.remove(cases[0])
-    elif change == 'duplicate':
-        cases[0].set('name', cases[1].get('name', ''))
-    elif change == 'foreign':
-        cases[0].set('name', 'test_unrelated')
-    elif change == 'wrong-class':
-        cases[0].set('classname', 'test.something')
-    elif change == 'suite-error':
-        suite.set('errors', '1')
-    else:
-        ET.SubElement(cases[0], {'skip': 'skipped'}.get(change, change))
-    ET.ElementTree(suite).write(path)
-    with pytest.raises(subject.GitHubFailure):
-        subject.verify_junit(path)
-
-
-@pytest.mark.parametrize('content', ['', '<invalid', '<!DOCTYPE x><testsuite/>'])
-def test_invalid_or_doctype_xml_is_fatal(tmp_path: Path, content: str) -> None:
-    """Evidence parsing rejects unsupported declarations and broken artifacts."""
-    path = tmp_path / 'junit.xml'
-    path.write_text(content, encoding='utf-8')
-    with pytest.raises(subject.GitHubFailure):
-        subject.verify_junit(path)
-
-
 def test_github_client_uses_fixed_endpoint_timeout_and_no_error_details(monkeypatch) -> None:
     """API transport cannot print a token, URL/query or arbitrary server text."""
     opener = create_autospec(subject.urlopen, spec_set=True)
@@ -148,33 +95,35 @@ def test_github_client_uses_fixed_endpoint_timeout_and_no_error_details(monkeypa
     assert opener.call_args.kwargs == {'timeout': 15}
 
 
-def test_evidence_cli_reports_completion_only_after_validation(tmp_path: Path, monkeypatch) -> None:
-    """The live job's flag is absent on incomplete evidence."""
-    path = tmp_path / 'junit.xml'
+@pytest.mark.parametrize('passed', [1, 26])
+def test_evidence_cli_reports_completion_only_after_validation(
+        tmp_path: Path, monkeypatch, capsys, passed: int) -> None:
+    """The generic verifier checks originals and accepts any nonempty actual suite."""
     output = tmp_path / 'outputs'
-    run_log = tmp_path / 'run.log'
-    run_log.write_text('Sandbox scenario cleanup complete\n' * 17 +
-                       'Sandbox session cleanup complete\n', encoding='utf-8')
+    settings = RunSettings(timeout_seconds=2400, max_attempts=2, retry_delay_seconds=0)
+    verifier = create_autospec(subject.retry_evidence.verify_history, spec_set=True)
+    verifier.return_value = passed
+    monkeypatch.setattr(subject.retry_evidence, 'verify_history', verifier)
     monkeypatch.setenv('GITHUB_OUTPUT', str(output))
-    write_junit(path)
-    arguments = ['evidence', '--evidence-format', 'single-v1', '--junit', str(path),
-                 '--run-log', str(run_log)]
+    monkeypatch.setenv('E2E_RUN_SETTINGS', settings.to_json())
+    arguments = ['evidence', '--junit', str(tmp_path / 'junit.xml'), '--sha', SHA]
     assert subject.main(arguments) == 0
-    assert output.read_text(encoding='utf-8') == 'complete=true\npassed=17\n'
+    verifier.assert_called_once_with(tmp_path, settings, expected_sha=SHA)
+    assert output.read_text(encoding='utf-8') == f'complete=true\npassed={passed}\n'
     output.unlink()
-    write_junit(path, ())
+    verifier.side_effect = ValueError('synthetic private evidence')
     assert subject.main(arguments) == 1
     assert not output.exists()
+    assert capsys.readouterr().err == (
+        'retry history does not prove full sandbox acceptance; no success status\n')
 
 
-@pytest.mark.parametrize('protocol', [None, 'retry-v2', 'retry-v3', 'retry-v4'])
+@pytest.mark.parametrize('raw_settings', ['{}', '{"timeout_seconds":2400,"max_attempts":2}'])
 def test_prepare_dispatch_checks_both_initiator_and_rerunner(
-        tmp_path: Path, monkeypatch, protocol) -> None:
-    """Reruns cannot bypass either identity check and selection is fixed once."""
+        tmp_path: Path, monkeypatch, raw_settings: str) -> None:
+    """Reruns check both identities and preserve custom authorized budgets."""
     event = tmp_path / 'event.json'
-    inputs = {'pr_number': '27'}
-    if protocol is not None:
-        inputs['evidence_protocol'] = protocol
+    inputs = {'pr_number': '27', 'run_settings': raw_settings}
     event.write_text(json.dumps({'inputs': inputs}), encoding='utf-8')
     output = tmp_path / 'outputs'
     for key, value in {'GITHUB_EVENT_PATH': str(event), 'GITHUB_EVENT_NAME': 'workflow_dispatch',
@@ -189,58 +138,53 @@ def test_prepare_dispatch_checks_both_initiator_and_rerunner(
     assert subject.main(['prepare']) == 0
     assert [call.args[1] for call in reader.call_args_list] == [
         'collaborators/owner/permission', 'collaborators/rerunner/permission', 'pulls/27']
-    assert output.read_text(encoding='utf-8').startswith(
+    settings = subject.select_settings({'inputs': inputs}, 'workflow_dispatch')
+    assert output.read_text(encoding='utf-8') == (
         f'head_sha={SHA}\npr_number=27\ntrusted_sha={"b" * 40}\n'
-        f'evidence_protocol={protocol or "retry-v4"}\n')
-    assert 'run_settings=' in output.read_text(encoding='utf-8')
-    assert 'job_minutes=85\n' in output.read_text(encoding='utf-8')
+        f'run_settings={settings.to_json()}\n'
+        f'run_step_minutes={settings.run_step_minutes}\n'
+        f'job_minutes={settings.job_minutes}\n'
+        f'cleanup_minutes={settings.orphan_cleanup_minutes}\n'
+        f'cleanup_seconds={settings.orphan_cleanup_timeout_seconds}\n')
 
 
-@pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3', 'retry-v4'])
-def test_dispatch_protocol_is_explicit_trusted_input(protocol):
-    """Only the initiator input chooses the format; artifact fields cannot select it."""
-    assert subject.select_protocol(
-        {'inputs': {'evidence_protocol': protocol}}, 'workflow_dispatch') == protocol
-    assert subject.select_protocol(
-        {'inputs': {'evidence_protocol': protocol}}, 'push') == 'retry-v4'
-    assert subject.select_protocol({'inputs': {}}, 'workflow_dispatch') == 'retry-v4'
-
-
-@pytest.mark.parametrize('protocol', [
-    'retry-v1', '', None, False, [], {}, 'retry-v5', 'retry-v3\ncomplete=true',
-])
-def test_unknown_dispatch_protocol_stops_before_any_api(tmp_path, monkeypatch, protocol):
-    """An unknown format cannot publish outputs or reach the broker job."""
-    event = tmp_path / 'event.json'
-    event.write_text(json.dumps({'inputs': {'evidence_protocol': protocol}}))
-    monkeypatch.setenv('GITHUB_EVENT_PATH', str(event))
-    monkeypatch.setenv('GITHUB_EVENT_NAME', 'workflow_dispatch')
-    monkeypatch.setenv('GITHUB_REPOSITORY', REPO)
-    monkeypatch.setenv('GH_TOKEN', 'synthetic')
+@pytest.mark.parametrize('sha', ['', 'main', '0' * 40, 'A' * 40])
+def test_evidence_rejects_untrusted_sha_before_reading_artifacts(tmp_path, monkeypatch, sha):
+    """A caller must supply the exact trusted commit before any acceptance check."""
+    verifier = create_autospec(subject.retry_evidence.verify_history, spec_set=True)
+    monkeypatch.setattr(subject.retry_evidence, 'verify_history', verifier)
+    monkeypatch.setenv('E2E_RUN_SETTINGS', RunSettings().to_json())
     output = tmp_path / 'outputs'
     monkeypatch.setenv('GITHUB_OUTPUT', str(output))
-    reader = create_autospec(subject.GitHubClient.read, spec_set=True)
-    monkeypatch.setattr(subject.GitHubClient, 'read', reader)
-    with pytest.raises(subject.GitHubFailure, match='protocol'):
-        subject.select_protocol(json.loads(event.read_text()), 'workflow_dispatch')
-    assert subject.main(['prepare']) == 1
+    assert subject.main(['evidence', '--junit', str(tmp_path / 'junit.xml'), '--sha', sha]) == 1
     assert not output.exists()
-    reader.assert_not_called()
+    verifier.assert_not_called()
 
 
-@pytest.mark.parametrize('scenario_count,session_count', [
-    (0, 0), (16, 1), (17, 0), (17, 2), (18, 1),
-])
-def test_passed_junit_without_exact_cleanup_is_incomplete(
-        tmp_path: Path, scenario_count: int, session_count: int) -> None:
-    """A valid pass-only XML cannot hide missing finalizers or another execution."""
-    path = tmp_path / 'junit.xml'
-    write_junit(path)
-    run_log = tmp_path / 'run.log'
-    run_log.write_text('Sandbox scenario cleanup complete\n' * scenario_count +
-                       'Sandbox session cleanup complete\n' * session_count, encoding='utf-8')
-    with pytest.raises(subject.GitHubFailure, match='cleanup'):
-        subject.verify_evidence(path, run_log)
+@pytest.mark.parametrize('raw_settings', [None, '', '{}broken', '{"max_attempts":false}',
+                                          '{"unknown":1}', '{"max_attempts":2,"max_attempts":3}'])
+def test_evidence_requires_parsed_authorized_settings(tmp_path, monkeypatch, raw_settings):
+    """Missing or malformed trusted settings cannot fall back to artifact budgets."""
+    verifier = create_autospec(subject.retry_evidence.verify_history, spec_set=True)
+    monkeypatch.setattr(subject.retry_evidence, 'verify_history', verifier)
+    if raw_settings is None:
+        monkeypatch.delenv('E2E_RUN_SETTINGS', raising=False)
+    else:
+        monkeypatch.setenv('E2E_RUN_SETTINGS', raw_settings)
+    output = tmp_path / 'outputs'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    assert subject.main(['evidence', '--junit', str(tmp_path / 'junit.xml'), '--sha', SHA]) == 1
+    assert not output.exists()
+    verifier.assert_not_called()
+
+
+def test_evidence_requires_fixed_final_junit_name(tmp_path, monkeypatch):
+    """A separately supplied XML must not redirect verification to other evidence."""
+    verifier = create_autospec(subject.retry_evidence.verify_history, spec_set=True)
+    monkeypatch.setattr(subject.retry_evidence, 'verify_history', verifier)
+    with pytest.raises(subject.GitHubFailure, match='fixed merged JUnit'):
+        subject.evidence_result(tmp_path / 'other.xml', sha=SHA, settings=RunSettings())
+    verifier.assert_not_called()
 
 
 @pytest.mark.parametrize('repository,token', [('invalid', 'synthetic'), (REPO, '')])
@@ -304,50 +248,6 @@ def test_untrusted_or_unsupported_events_fail_closed(
     client.read.return_value = {'permission': 'admin'}
     with pytest.raises(subject.GitHubFailure):
         subject.select_target(event, dict(selection_environment(event_name), **overrides), client)
-
-
-@pytest.mark.parametrize('kind', [
-    'missing', 'large', 'binary', 'symlink', 'root', 'counts', 'nested-errors',
-])
-def test_unreadable_or_invalid_junit_fails(tmp_path: Path, kind: str) -> None:
-    """XML facts, not suite display text, decide whether a collection completed."""
-    path = tmp_path / 'junit.xml'
-    if kind == 'large':
-        path.write_bytes(b'x' * (subject.MAX_EVIDENCE_BYTES + 1))
-    elif kind == 'binary':
-        path.write_bytes(b'\xff')
-    elif kind == 'symlink':
-        path.symlink_to(tmp_path / 'absent')
-    elif kind == 'root':
-        path.write_text('<unrelated/>', encoding='utf-8')
-    elif kind in ('counts', 'nested-errors'):
-        suite = write_junit(path)
-        if kind == 'counts':
-            suite.set('tests', '18')
-            ET.ElementTree(suite).write(path)
-        else:
-            suite.set('errors', '1')
-            root = ET.Element('testsuites')
-            root.append(suite)
-            ET.ElementTree(root).write(path)
-    with pytest.raises(subject.GitHubFailure):
-        subject.verify_junit(path)
-
-
-@pytest.mark.parametrize('kind', ['missing', 'large', 'binary', 'symlink'])
-def test_cleanup_evidence_boundary_is_bounded(tmp_path: Path, kind: str) -> None:
-    """Reading malformed diagnostics does not enable acceptance or secret output."""
-    path = tmp_path / 'junit.xml'
-    write_junit(path)
-    run_log = tmp_path / 'run.log'
-    if kind == 'large':
-        run_log.write_bytes(b'x' * (subject.MAX_EVIDENCE_BYTES + 1))
-    elif kind == 'binary':
-        run_log.write_bytes(b'\xff')
-    elif kind == 'symlink':
-        run_log.symlink_to(tmp_path / 'absent')
-    with pytest.raises(subject.GitHubFailure):
-        subject.verify_evidence(path, run_log)
 
 
 def test_missing_github_output_fails(monkeypatch) -> None:

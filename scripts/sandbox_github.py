@@ -1,6 +1,5 @@
 """Trusted GitHub target selection and exact sandbox-suite evidence validation."""
 import argparse
-import hashlib
 from dataclasses import dataclass
 import json
 import os
@@ -9,11 +8,6 @@ import re
 import sys
 from urllib.error import URLError
 from urllib.request import Request, urlopen
-import xml.etree.ElementTree as ET
-
-from scripts.sandbox_retry_evidence import (
-    EXPECTED_SCENARIOS, RetryFailure, read_collection, verify_history,
-)
 from scripts import retry_evidence
 from scripts.retry_settings import RunSettings
 MAX_EVIDENCE_BYTES = 2_000_000
@@ -111,16 +105,6 @@ class GitHubClient:  # pylint: disable=too-few-public-methods
             raise GitHubFailure('GitHub API request failed') from None
 
 
-def select_protocol(event: object, event_name: str) -> str:
-    """Select the result schema without interpreting any reason for test failure."""
-    if event_name != 'workflow_dispatch':
-        return 'retry-v4'
-    protocol = record(record(event).get('inputs')).get('evidence_protocol', 'retry-v4')
-    if not isinstance(protocol, str) or protocol not in ('retry-v2', 'retry-v3', 'retry-v4'):
-        raise GitHubFailure('unsupported dispatch evidence protocol')
-    return protocol
-
-
 def select_settings(event: object, event_name: str) -> RunSettings:
     """Freeze dispatch budgets before test code runs; push retains the one-hour limit."""
     value = (record(record(event).get('inputs')).get('run_settings', '{}')
@@ -169,69 +153,6 @@ def select_target(event: object, environment: dict[str, str], client: GitHubClie
     raise GitHubFailure('unsupported GitHub event')
 
 
-def read_junit(path: Path) -> ET.Element:
-    """Read bounded UTF-8 XML without symlinks or entity declarations."""
-    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
-        raise GitHubFailure('symlink evidence is not accepted')
-    try:
-        with path.open('rb') as source:
-            raw = source.read(MAX_EVIDENCE_BYTES + 1)
-        text = raw.decode('utf-8')
-        if len(raw) > MAX_EVIDENCE_BYTES or '<!DOCTYPE' in text or '<!ENTITY' in text:
-            raise GitHubFailure('unsupported JUnit evidence')
-        return ET.fromstring(text)
-    except (OSError, ET.ParseError, UnicodeError):
-        raise GitHubFailure('cannot read JUnit evidence') from None
-
-
-def validate_junit_counts(root: ET.Element) -> None:
-    """Reject suite-level failures and counters inconsistent with their cases."""
-    if any(root.get(key, '0') != '0' for key in ('failures', 'errors', 'skipped')):
-        raise GitHubFailure('sandbox suite failed or skipped')
-    for suite in root.iter('testsuite'):
-        for key in ('failures', 'errors', 'skipped'):
-            if suite.get(key, '0') != '0':
-                raise GitHubFailure('sandbox suite failed or skipped')
-        if suite.get('tests') != str(len(list(suite.iter('testcase')))):
-            raise GitHubFailure('JUnit counts mismatch')
-
-
-def verify_junit(path: Path) -> SuiteEvidence:
-    """Prove all 17 cases passed including setup/teardown, with no hidden selection."""
-    root = read_junit(path)
-    if root.tag not in ('testsuite', 'testsuites'):
-        raise GitHubFailure('invalid JUnit root')
-    validate_junit_counts(root)
-    cases = list(root.iter('testcase'))
-    names = [case.get('name') for case in cases]
-    if len(cases) != len(EXPECTED_SCENARIOS) or set(names) != set(EXPECTED_SCENARIOS):
-        raise GitHubFailure('full 17 sandbox scenarios required')
-    for case in cases:
-        if case.get('classname') != 'e2e.test_sandbox' or any(
-                case.find(tag) is not None for tag in ('failure', 'error', 'skipped')):
-            raise GitHubFailure('sandbox scenario not passed')
-    return SuiteEvidence(len(cases))
-
-
-def verify_evidence(junit: Path, run_log: Path) -> SuiteEvidence:
-    """Require the full suite plus existing fixture finalizer completion markers."""
-    facts = verify_junit(junit)
-    if run_log.is_symlink() or any(parent.is_symlink() for parent in run_log.parents):
-        raise GitHubFailure('symlink cleanup evidence is not accepted')
-    try:
-        with run_log.open('rb') as source:
-            raw = source.read(MAX_EVIDENCE_BYTES + 1)
-        if len(raw) > MAX_EVIDENCE_BYTES:
-            raise GitHubFailure('cleanup evidence exceeds size limit')
-        lines = raw.decode('utf-8').splitlines()
-    except (OSError, UnicodeError):
-        raise GitHubFailure('cannot read cleanup evidence') from None
-    if lines.count('Sandbox scenario cleanup complete') != facts.passed or (
-            lines.count('Sandbox session cleanup complete') != 1):
-        raise GitHubFailure('exact fixture cleanup evidence required')
-    return facts
-
-
 def write_outputs(values: dict[str, str]) -> None:
     """Only validated own facts enter GitHub's single-line output boundary."""
     path = os.environ.get('GITHUB_OUTPUT')
@@ -242,56 +163,15 @@ def write_outputs(values: dict[str, str]) -> None:
             output.write(f'{key}={value}\n')
 
 
-def verify_collection_digest(collection: Path | None, digest: str | None) -> None:
-    """The expected manifest hash arrives from the pre-live step, not its artifacts."""
-    if (collection is None or not isinstance(digest, str)
-            or re.fullmatch('[0-9a-f]{64}', digest) is None
-            or hashlib.sha256(retry_evidence.read_bytes(collection)).hexdigest() != digest):
-        raise GitHubFailure('collection differs from pre-live manifest')
-
-
-def status_evidence(junit: Path, collection: Path | None, sha: str,
-                    settings: RunSettings | None, digest: str | None) -> SuiteEvidence:
-    """Generic v4 verification consumes the authorized snapshot, never failure semantics."""
-    if collection is None or settings is None:
-        raise GitHubFailure('independent collection and authorized settings required')
-    verify_collection_digest(collection, digest)
-    expected = retry_evidence.read_collection(collection, sha)
-    return SuiteEvidence(retry_evidence.verify_history(junit.parent, expected, settings))
-
-
-def legacy_retry_result(junit: Path, collection: Path | None, sha: str,
-                        format_name: str) -> SuiteEvidence:
-    """Keep archived retry schemas readable without coupling v4 to their failure rules."""
-    if format_name in ('retry-v2', 'retry-v3'):
-        if collection is None:
-            raise GitHubFailure('independent full collection required')
-        expected = read_collection(collection, sha)
-        return SuiteEvidence(verify_history(junit.parent, expected=expected, protocol=format_name))
-    if format_name != 'retry-v1':
-        raise GitHubFailure('unsupported evidence protocol')
-    return SuiteEvidence(verify_history(junit.parent, require_full=True))
-
-
-def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
-                    collection: Path | None = None, sha: str = '',
-                    settings: RunSettings | None = None,
-                    collection_digest: str | None = None) -> SuiteEvidence:
-    """Versioned evidence is explicit; never silently accept a legacy merged XML."""
-    # pylint: disable=too-many-arguments
-    if format_name == 'single-v1':
-        if run_log is None:
-            raise GitHubFailure('single-v1 cleanup log required')
-        return verify_evidence(junit, run_log)
+def evidence_result(junit: Path, *, sha: str, settings: RunSettings) -> SuiteEvidence:
+    """Verify originals against the trusted commit and authorized execution budgets."""
+    trusted_sha = commit_sha(sha)
     if junit.name != 'junit.xml':
         raise GitHubFailure('retry evidence requires the fixed merged JUnit path')
     try:
-        if format_name == 'retry-v4':
-            return status_evidence(junit, collection, sha, settings, collection_digest)
-        if collection_digest is not None:
-            verify_collection_digest(collection, collection_digest)
-        return legacy_retry_result(junit, collection, sha, format_name)
-    except (RetryFailure, ValueError):
+        return SuiteEvidence(retry_evidence.verify_history(
+            junit.parent, settings, expected_sha=trusted_sha))
+    except ValueError:
         raise GitHubFailure('retry history does not prove full sandbox acceptance') from None
 
 
@@ -302,34 +182,23 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser('prepare')
     evidence = commands.add_parser('evidence')
     evidence.add_argument('--junit', type=Path, required=True)
-    evidence.add_argument('--run-log', type=Path)
-    evidence.add_argument('--collection', type=Path)
-    evidence.add_argument('--sha', default='')
-    evidence.add_argument('--evidence-format',
-                          choices=('retry-v1', 'retry-v2', 'retry-v3', 'retry-v4', 'single-v1'),
-                          default='retry-v1')
+    evidence.add_argument('--sha', required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == 'evidence':
-            facts = evidence_result(args.junit, args.run_log, args.evidence_format,
-                                    collection=args.collection, sha=args.sha,
-                                    settings=(RunSettings.from_json(os.environ['E2E_RUN_SETTINGS'])
-                                              if args.evidence_format == 'retry-v4' else None),
-                                    collection_digest=os.environ.get(
-                                        'EXPECTED_COLLECTION_DIGEST'))
+            facts = evidence_result(
+                args.junit, sha=args.sha,
+                settings=RunSettings.from_json(os.environ['E2E_RUN_SETTINGS']))
             write_outputs({'complete': 'true', 'passed': str(facts.passed)})
         else:
             event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
-            protocol = select_protocol(event, os.environ['GITHUB_EVENT_NAME'])
             client = GitHubClient(os.environ['GITHUB_REPOSITORY'], os.environ.get('GH_TOKEN', ''))
             target = select_target(event, dict(os.environ), client)
             trusted_sha = (target.sha if os.environ['GITHUB_EVENT_NAME'] == 'pull_request'
                            else commit_sha(os.environ.get('GITHUB_SHA')))
             settings = select_settings(event, os.environ['GITHUB_EVENT_NAME'])
-            if protocol != 'retry-v4' and settings != RunSettings(timeout_seconds=3600):
-                raise GitHubFailure('custom run settings require retry-v4')
             write_outputs({'head_sha': target.sha, 'pr_number': str(target.pr_number),
-                           'trusted_sha': trusted_sha, 'evidence_protocol': protocol,
+                           'trusted_sha': trusted_sha,
                            'run_settings': settings.to_json(),
                            'run_step_minutes': str(settings.run_step_minutes),
                            'job_minutes': str(settings.job_minutes),

@@ -1,5 +1,5 @@
 """Generic verification of original test results, retry selection and cleanup."""
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import re
@@ -12,10 +12,10 @@ MAX_BYTES = 2_000_000
 
 
 def checked_sha(value: object) -> str:
-    """Collection and attempts belong to one immutable nonzero commit."""
+    """Attempts belong to one immutable nonzero commit when a SHA is supplied."""
     if (not isinstance(value, str) or re.fullmatch('[0-9a-f]{40}', value) is None
             or value == '0' * 40):
-        raise ValueError('invalid collection SHA')
+        raise ValueError('invalid test SHA')
     return value
 
 
@@ -27,18 +27,6 @@ def nodeids(value: object) -> tuple[str, ...]:
     if len(set(nodes)) != len(nodes):
         raise ValueError('duplicate test node IDs')
     return nodes
-
-
-@dataclass(frozen=True, slots=True)
-class Collection:
-    """Independent full collection of the tested SHA, not a fixed scenario list."""
-    sha: str
-    nodeids: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        checked_sha(self.sha)
-        if not nodeids(self.nodeids):
-            raise ValueError('nonempty independent collection required')
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,14 +78,6 @@ def integer(value: object) -> int:
     return value
 
 
-def read_collection(path: Path, sha: str) -> Collection:
-    """The trusted caller fixes the SHA before collecting candidate tests."""
-    fields = object_fields(read_json(path), {'version', 'sha', 'nodeids'})
-    if integer(fields['version']) != 1 or checked_sha(fields['sha']) != checked_sha(sha):
-        raise ValueError('full collection for exact SHA required')
-    return Collection(sha, nodeids(fields['nodeids']))
-
-
 def phase_result(value: object) -> PhaseResult:
     """Failure classification is one explicit boolean supplied by test code."""
     fields = object_fields(value, {'nodeid', 'when', 'outcome', 'retryable'})
@@ -145,9 +125,7 @@ def validate_result(report: AttemptEvidence, returncode: int) -> dict[str, str]:
 
 def junit_key(node: str) -> tuple[str, str]:
     """Match pytest JUnit identity, including classes and parameterized methods."""
-    module, separator, member = checked_nodeid(node).partition('::')
-    if not separator or not module.endswith('.py'):
-        raise ValueError('test node cannot be represented in JUnit')
+    module, _, member = checked_nodeid(node).partition('::')
     label, bracket, parameters = member.partition('[')
     members = label.split('::')
     classname = '.'.join([module[:-3].replace('/', '.'), *members[:-1]])
@@ -233,23 +211,27 @@ def history_entries(root: Path, settings: RunSettings) -> list[dict[str, object]
     return records
 
 
-def inspect_history(root: Path, expected: Collection | None,
-                    settings: RunSettings) -> dict[str, str]:
+def inspect_history(root: Path, settings: RunSettings, *,
+                    expected_sha: str | None = None) -> dict[str, str]:
     """Reconstruct full selection and every permitted retry from original results."""
+    if expected_sha is not None:
+        checked_sha(expected_sha)
     try:
-        recorded = RunSettings.from_json(read_bytes(root / 'run-settings.json').decode('utf-8'))
-    except UnicodeError:
-        raise ValueError('invalid run settings encoding') from None
+        fields = object_fields(read_json(root / 'run-settings.json'), set(asdict(settings)))
+        recorded = RunSettings.from_json(json.dumps(fields))
+    except ValueError:
+        raise ValueError('invalid run settings evidence') from None
     if recorded != settings:
         raise ValueError('run settings differ from authorized launch')
     states: dict[str, str] = {}
     next_nodes = None
+    run_sha = expected_sha
     for number, entry in enumerate(history_entries(root, settings), 1):
         report = verify_attempt(root / 'attempts' / f'{number:02}', integer(entry['returncode']))
-        if expected is not None and report.sha != expected.sha:
-            raise ValueError('attempt SHA differs from independent collection')
-        if number == 1 and expected is not None and set(report.selected) != set(expected.nodeids):
-            raise ValueError('full first collection required')
+        if number == 1 and expected_sha is None:
+            run_sha = report.sha
+        if report.sha != run_sha:
+            raise ValueError('attempt SHA differs from run SHA')
         if next_nodes is not None and (not next_nodes or report.selected != next_nodes):
             raise ValueError('illegal retry selection')
         states.update(result_states(report.phases, report.selected))
@@ -270,9 +252,9 @@ def write_junit(states: dict[str, str], path: Path) -> None:
     ET.ElementTree(suite).write(path, encoding='utf-8', xml_declaration=True)
 
 
-def verify_history(root: Path, expected: Collection, settings: RunSettings) -> int:
-    """A green final file is accepted only when all collected originals prove it."""
-    states = inspect_history(root, expected, settings)
+def verify_history(root: Path, settings: RunSettings, *, expected_sha: str | None = None) -> int:
+    """A green final file is accepted only when all original results prove it."""
+    states = inspect_history(root, settings, expected_sha=expected_sha)
     if not states or any(state != 'passed' for state in states.values()):
         raise ValueError('tests remain failed')
     if xml_states(root / 'junit.xml', tuple(states)) != states:

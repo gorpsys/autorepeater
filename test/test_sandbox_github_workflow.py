@@ -83,12 +83,10 @@ def test_evidence_is_verified_on_a_separate_readonly_runner() -> None:
     assert 'actions/download-artifact@v4' in text
     assert 'ref: ${{ needs.prepare.outputs.trusted_sha }}' in text
     assert '-m scripts.sandbox_github evidence' in text
-    assert '--evidence-format "$E2E_EVIDENCE_PROTOCOL"' in text
-    assert 'E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}' in text
-    assert '--collection sandbox-results/collection.json' in text
+    assert '--junit sandbox-results/junit.xml --sha "$TESTED_SHA"' in text
+    assert 'E2E_RUN_SETTINGS: ${{ needs.prepare.outputs.run_settings }}' in text
     assert '--sha "$TESTED_SHA"' in text
     assert 'TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
-    assert 'EXPECTED_COLLECTION_DIGEST: ${{ needs.live.outputs.collection_digest }}' in text
     assert "needs.live.result == 'success'" in text
 
 
@@ -139,13 +137,13 @@ def test_live_step_deadlines_reserve_cleanup_artifact_and_overhead_time() -> Non
     deadlines = [re.findall(r'^        timeout-minutes: (.+)$', step, re.MULTILINE)
                  for step in steps]
     assert all(len(values) == 1 for values in deadlines)
-    run_step, cleanup_step, marker_step, upload_step = steps[4:]
+    run_step, cleanup_step, marker_step, upload_step = steps[3:]
     assert 'id: run\n' in run_step
-    assert [int(values[0]) for values in deadlines[:4]] == [2, 2, 6, 1]
-    assert 'fromJSON(needs.prepare.outputs.run_step_minutes)' in deadlines[4][0]
+    assert [int(values[0]) for values in deadlines[:3]] == [2, 2, 6]
+    assert 'fromJSON(needs.prepare.outputs.run_step_minutes)' in deadlines[3][0]
     assert settings.run_step_minutes == 62
-    assert 'fromJSON(needs.prepare.outputs.cleanup_minutes)' in deadlines[5][0]
-    assert [int(values[0]) for values in deadlines[6:]] == [1, 2]
+    assert 'fromJSON(needs.prepare.outputs.cleanup_minutes)' in deadlines[4][0]
+    assert [int(values[0]) for values in deadlines[5:]] == [1, 2]
     assert 'id: cleanup\n' in cleanup_step
     assert 'timeout "${CLEANUP_SECONDS}s"' in cleanup_step
     assert 'test -f sandbox-results/retry.json' in marker_step
@@ -228,31 +226,26 @@ def test_inline_publication_predicate_is_fail_closed(
     assert result is expected
 
 
-def test_full_collection_precedes_live_secret_and_uses_trusted_protocol_output() -> None:
-    """The workflow owns the evidence version and fixes the collection's SHA."""
-    text = job('live')
-    assert 'E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}' in text
-    assert 'E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in text
-    collector = 'scripts.sandbox_collection --sha "$E2E_TESTED_SHA"'
-    assert collector in text
-    assert text.index(collector) < text.index('SANDBOX_TOKEN:')
-    assert 'collection_digest: ${{ steps.collection.outputs.collection_digest }}' in text
-    assert 'hashlib.sha256' in text
-    assert text.index('hashlib.sha256') < text.index('SANDBOX_TOKEN:')
-    assert "Path(os.environ['GITHUB_OUTPUT'])" in text
+def test_actual_run_owns_its_first_nonempty_attempt() -> None:
+    """Acceptance uses actual original results without a collection-only process."""
+    text = WORKFLOW.read_text(encoding='utf-8')
+    assert 'E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}' in job('live')
+    assert 'scripts.sandbox_collection' not in text
+    assert 'collection_digest' not in text
+    assert 'EXPECTED_COLLECTION_DIGEST' not in text
+    assert '--collection' not in text
+    assert 'id: collection' not in text
 
 
-def test_dispatch_protocol_default_and_selection_are_owned_by_prepare() -> None:
-    """The same validated prepare output binds producer and independent verifier."""
+def test_dispatch_settings_are_unconditional_without_protocol_selection() -> None:
+    """The same authorized snapshot binds the sole retry producer and verifier."""
     text = WORKFLOW.read_text(encoding='utf-8')
     inputs = text.split('  workflow_dispatch:', 1)[1].split('  push:', 1)[0]
-    assert 'evidence_protocol:' in inputs
-    protocol_input = inputs.split('      evidence_protocol:', 1)[1]
-    assert 'required: false' in protocol_input
-    assert 'default: retry-v4' in inputs
-    assert 'type: choice' in inputs
-    assert '- retry-v2' in inputs and '- retry-v3' in inputs
-    assert '- retry-v4' in inputs and 'run_settings:' in inputs
-    assert '- retry-v1' not in inputs
-    assert 'evidence_protocol: ${{ steps.target.outputs.evidence_protocol }}' in job('prepare')
-    assert 'inputs.evidence_protocol' not in job('live') + job('verify')
+    assert 'run_settings:' in inputs
+    assert "default: '{}'" in inputs
+    assert 'evidence_protocol' not in text
+    assert 'E2E_EVIDENCE_PROTOCOL' not in text
+    assert '--evidence-format' not in text
+    assert 'run_settings: ${{ steps.target.outputs.run_settings }}' in job('prepare')
+    for name in ('live', 'verify'):
+        assert 'E2E_RUN_SETTINGS: ${{ needs.prepare.outputs.run_settings }}' in job(name)

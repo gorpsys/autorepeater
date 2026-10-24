@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from scripts.retry_evidence import Collection, inspect_history, verify_history, write_junit
+from scripts.retry_evidence import inspect_history, verify_history, write_junit
 from scripts import retry_evidence
 from scripts.retry_results import PhaseResult
 from scripts.retry_settings import RunSettings
@@ -14,6 +14,45 @@ from scripts.retry_settings import RunSettings
 SHA = 'a' * 40
 FIRST = 'e2e/test_any.py::test_first'
 SECOND = 'e2e/test_any.py::test_second'
+
+
+@pytest.mark.parametrize('sha', [None, SHA])
+def test_first_actual_nonempty_attempt_defines_run_without_inventory(tmp_path, sha):
+    """Local runs need no SHA; trusted runs bind originals directly to their SHA."""
+    settings = RunSettings()
+    entries = [write_attempt(tmp_path, 1, {FIRST: ('passed', False)})]
+    path = tmp_path / 'attempts/01/result.json'
+    report = json.loads(path.read_text())
+    report['sha'] = sha
+    path.write_text(json.dumps(report))
+    write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
+    assert verify_history(tmp_path, settings, expected_sha=sha) == 1
+
+
+@pytest.mark.parametrize('first_sha,second_sha', [(SHA, 'b' * 40), (None, SHA), (SHA, None)])
+def test_all_attempts_keep_same_sha_without_external_inventory(tmp_path, first_sha, second_sha):
+    """Even local verification cannot combine results from different checkouts."""
+    settings = RunSettings()
+    entries = [write_attempt(tmp_path, 1, {FIRST: ('failed', True)}),
+               write_attempt(tmp_path, 2, {FIRST: ('passed', False)})]
+    for number, sha in enumerate((first_sha, second_sha), 1):
+        path = tmp_path / 'attempts' / f'{number:02}' / 'result.json'
+        report = json.loads(path.read_text())
+        report['sha'] = sha
+        path.write_text(json.dumps(report))
+    write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
+    with pytest.raises(ValueError, match='SHA'):
+        inspect_history(tmp_path, settings)
+
+
+def test_artifact_settings_must_contain_the_full_authorized_snapshot(tmp_path):
+    """An artifact cannot silently fill missing launch budgets from verifier defaults."""
+    settings = RunSettings()
+    entries = [write_attempt(tmp_path, 1, {FIRST: ('passed', False)})]
+    write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
+    (tmp_path / 'run-settings.json').write_text('{}')
+    with pytest.raises(ValueError, match='settings'):
+        inspect_history(tmp_path, settings)
 
 
 def mark_original_skipped(path):
@@ -68,7 +107,7 @@ def test_retry_permission_is_the_test_owned_boolean(tmp_path):
         FIRST: ('passed', False), SECOND: ('failed', True)}),
         write_attempt(tmp_path, 2, {SECOND: ('passed', False)})]
     write_history(tmp_path, entries, {FIRST: 'passed', SECOND: 'passed'}, settings)
-    assert verify_history(tmp_path, Collection(SHA, (FIRST, SECOND)), settings) == 2
+    assert verify_history(tmp_path, settings, expected_sha=SHA) == 2
 
 
 def test_permanent_failure_is_preserved_while_other_test_retries(tmp_path):
@@ -78,10 +117,10 @@ def test_permanent_failure_is_preserved_while_other_test_retries(tmp_path):
         FIRST: ('failed', False), SECOND: ('failed', True)}),
         write_attempt(tmp_path, 2, {SECOND: ('passed', False)})]
     write_history(tmp_path, entries, {FIRST: 'failed', SECOND: 'passed'}, settings)
-    assert inspect_history(tmp_path, Collection(SHA, (FIRST, SECOND)), settings) == {
+    assert inspect_history(tmp_path, settings, expected_sha=SHA) == {
         FIRST: 'failed', SECOND: 'passed'}
     with pytest.raises(ValueError, match='failed'):
-        verify_history(tmp_path, Collection(SHA, (FIRST, SECOND)), settings)
+        verify_history(tmp_path, settings, expected_sha=SHA)
 
 
 def test_attempt_limit_is_launch_configuration_not_a_master_constant(tmp_path):
@@ -91,7 +130,7 @@ def test_attempt_limit_is_launch_configuration_not_a_master_constant(tmp_path):
         FIRST: ('passed', False) if number == 6 else ('failed', True)})
         for number in range(1, 7)]
     write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
-    assert verify_history(tmp_path, Collection(SHA, (FIRST,)), settings) == 1
+    assert verify_history(tmp_path, settings, expected_sha=SHA) == 1
 
 
 def test_all_collected_tests_are_required_regardless_of_count(tmp_path):
@@ -100,7 +139,7 @@ def test_all_collected_tests_are_required_regardless_of_count(tmp_path):
     selected = tuple(f'e2e/test_any.py::test_case_{index}' for index in range(31))
     entries = [write_attempt(tmp_path, 1, {node: ('passed', False) for node in selected})]
     write_history(tmp_path, entries, dict.fromkeys(selected, 'passed'), settings)
-    assert verify_history(tmp_path, Collection(SHA, selected), settings) == 31
+    assert verify_history(tmp_path, settings, expected_sha=SHA) == 31
 
 
 @pytest.mark.parametrize('retryable', [False, None, 1, 'true'])
@@ -115,7 +154,7 @@ def test_unpermitted_or_invalid_retry_cannot_pass(tmp_path, retryable):
     path.write_text(json.dumps(report), encoding='utf-8')
     write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
     with pytest.raises(ValueError):
-        verify_history(tmp_path, Collection(SHA, (FIRST,)), settings)
+        verify_history(tmp_path, settings, expected_sha=SHA)
 
 
 @pytest.mark.parametrize('field,value', [
@@ -132,7 +171,7 @@ def test_sha_cleanup_collection_and_exit_proof_remain_strict(tmp_path, field, va
     path.write_text(json.dumps(report), encoding='utf-8')
     write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
     with pytest.raises(ValueError):
-        verify_history(tmp_path, Collection(SHA, (FIRST,)), settings)
+        verify_history(tmp_path, settings, expected_sha=SHA)
 
 
 def test_settings_cannot_be_changed_by_attempts_or_artifacts(tmp_path):
@@ -141,16 +180,7 @@ def test_settings_cannot_be_changed_by_attempts_or_artifacts(tmp_path):
     entries = [write_attempt(tmp_path, 1, {FIRST: ('passed', False)})]
     write_history(tmp_path, entries, {FIRST: 'passed'}, RunSettings(max_attempts=6))
     with pytest.raises(ValueError, match='settings'):
-        verify_history(tmp_path, Collection(SHA, (FIRST,)), settings)
-
-
-def test_a_green_subset_cannot_replace_the_full_first_collection(tmp_path):
-    """The independent full collection controls acceptance, not report counters."""
-    settings = RunSettings()
-    entries = [write_attempt(tmp_path, 1, {FIRST: ('passed', False)})]
-    write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
-    with pytest.raises(ValueError, match='collection'):
-        verify_history(tmp_path, Collection(SHA, (FIRST, SECOND)), settings)
+        verify_history(tmp_path, settings, expected_sha=SHA)
 
 
 def test_skipped_original_cannot_be_relabelled_failed_then_retried(tmp_path):
@@ -162,10 +192,10 @@ def test_skipped_original_cannot_be_relabelled_failed_then_retried(tmp_path):
     mark_original_skipped(path)
     write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
     with pytest.raises(ValueError, match='skipped'):
-        verify_history(tmp_path, Collection(SHA, (FIRST,)), settings)
+        verify_history(tmp_path, settings, expected_sha=SHA)
 
 
-@pytest.mark.parametrize('fault', ['extra', 'gap', 'limit', 'duplicate-key', 'unknown-field',
+@pytest.mark.parametrize('fault', ['duplicate-key', 'unknown-field',
                                    'cleanup', 'missing-case', 'counter', 'final', 'symlink'])
 def test_corrupt_originals_are_not_repaired_by_a_green_summary(tmp_path, fault):
     """The final summary never repairs malformed original or lifecycle evidence."""
@@ -173,38 +203,48 @@ def test_corrupt_originals_are_not_repaired_by_a_green_summary(tmp_path, fault):
     entries = [write_attempt(tmp_path, 1, {FIRST: ('passed', False)})]
     write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
     attempt = tmp_path / 'attempts/01'
-    if fault == 'extra':
-        (tmp_path / 'attempts/02').mkdir()
-    elif fault == 'gap':
-        entries[0]['number'] = 2
-        (tmp_path / 'retry.json').write_text(json.dumps({'version': 1, 'attempts': entries}))
-    elif fault == 'limit':
-        entries.append(write_attempt(tmp_path, 2, {FIRST: ('passed', False)}))
-        write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
-    elif fault == 'duplicate-key':
+    if fault == 'duplicate-key':
         path = attempt / 'result.json'
         path.write_text(path.read_text().replace('"version": 1', '"version": 1, "version": 1'))
-    elif fault == 'unknown-field':
+    if fault == 'unknown-field':
         path = attempt / 'result.json'
         value = json.loads(path.read_text())
         value['unexpected'] = 1
         path.write_text(json.dumps(value))
-    elif fault == 'cleanup':
+    if fault == 'cleanup':
         (attempt / 'cleanup.log').write_text('')
-    elif fault == 'missing-case':
+    if fault == 'missing-case':
         write_junit({}, attempt / 'junit.xml')
-    elif fault == 'counter':
+    if fault == 'counter':
         path = attempt / 'junit.xml'
         path.write_text(path.read_text().replace('tests="1"', 'tests="2"'))
-    elif fault == 'final':
+    if fault == 'final':
         write_junit({FIRST: 'failed'}, tmp_path / 'junit.xml')
-    else:
+    if fault == 'symlink':
         original = attempt / 'result.json'
         target = tmp_path / 'saved.json'
         original.rename(target)
         original.symlink_to(target)
     with pytest.raises(ValueError):
-        verify_history(tmp_path, Collection(SHA, (FIRST,)), settings)
+        verify_history(tmp_path, settings, expected_sha=SHA)
+
+
+@pytest.mark.parametrize('fault', ['extra', 'gap', 'limit'])
+def test_corrupt_attempt_sequence_cannot_pass(tmp_path, fault):
+    """A run cannot omit, add or exceed its authorized attempt history."""
+    settings = RunSettings(max_attempts=1)
+    entries = [write_attempt(tmp_path, 1, {FIRST: ('passed', False)})]
+    write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
+    if fault == 'extra':
+        (tmp_path / 'attempts/02').mkdir()
+    if fault == 'gap':
+        entries[0]['number'] = 2
+        (tmp_path / 'retry.json').write_text(json.dumps({'version': 1, 'attempts': entries}))
+    if fault == 'limit':
+        entries.append(write_attempt(tmp_path, 2, {FIRST: ('passed', False)}))
+        write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
+    with pytest.raises(ValueError):
+        verify_history(tmp_path, settings, expected_sha=SHA)
 
 
 @pytest.mark.parametrize('selection', [(FIRST,), (FIRST, SECOND), ()])
@@ -216,7 +256,7 @@ def test_retry_selection_cannot_include_passed_or_omit_eligible_tests(tmp_path, 
         write_attempt(tmp_path, 2, {node: ('passed', False) for node in selection})]
     write_history(tmp_path, entries, {FIRST: 'passed', SECOND: 'passed'}, settings)
     with pytest.raises(ValueError):
-        verify_history(tmp_path, Collection(SHA, (FIRST, SECOND)), settings)
+        verify_history(tmp_path, settings, expected_sha=SHA)
 
 
 def test_real_pytest_shaped_setup_error_and_parameterized_method(tmp_path):
@@ -227,6 +267,78 @@ def test_real_pytest_shaped_setup_error_and_parameterized_method(tmp_path):
                     '<testcase classname="e2e.test_other.TestExample" name="test_case[a::b]">'
                     '<error message="setup failed"/></testcase></testsuite></testsuites>')
     assert retry_evidence.xml_states(path, (node,)) == {node: 'failed'}
+
+
+@pytest.mark.parametrize('field,value', [
+    ('version', 2), ('phases', False), ('session_cleanup', 'true'),
+    ('selected', [FIRST, FIRST]), ('exit_status', False),
+])
+def test_original_result_schema_rejects_coercion(tmp_path, field, value):
+    """Counters, lifecycle proof and phase lists have exact original types."""
+    write_attempt(tmp_path, 1, {FIRST: ('passed', False)})
+    path = tmp_path / 'attempts/01/result.json'
+    report = json.loads(path.read_text())
+    report[field] = value
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError):
+        retry_evidence.read_result(path)
+
+
+@pytest.mark.parametrize('fault', [
+    'empty-first', 'outside-fixture', 'no-fixture', 'canceled', 'missing-directories',
+    'original-disagrees', 'symlink-directory',
+])
+def test_lifecycle_guards_remain_required_without_collection_inventory(tmp_path, fault):
+    """A retry permission never excuses missing execution or cleanup evidence."""
+    settings = RunSettings()
+    entries = [write_attempt(tmp_path, 1, {FIRST: ('passed', False)})]
+    path = tmp_path / 'attempts/01/result.json'
+    report = json.loads(path.read_text())
+    if fault == 'empty-first':
+        report.update(selected=[], phases=[], entered=[], cleaned=[])
+    elif fault == 'outside-fixture':
+        report.update(entered=[FIRST, SECOND], cleaned=[FIRST, SECOND])
+    elif fault == 'no-fixture':
+        report.update(entered=[], cleaned=[])
+    elif fault == 'canceled':
+        report['exit_status'] = entries[0]['returncode'] = 143
+    path.write_text(json.dumps(report))
+    write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
+    if fault == 'missing-directories':
+        (tmp_path / 'attempts').rename(tmp_path / 'saved-attempts')
+    elif fault == 'symlink-directory':
+        (tmp_path / 'attempts/01').rename(tmp_path / 'saved-attempt')
+        (tmp_path / 'attempts/01').symlink_to(tmp_path / 'saved-attempt', target_is_directory=True)
+    elif fault == 'original-disagrees':
+        write_junit({FIRST: 'failed'}, tmp_path / 'attempts/01/junit.xml')
+    with pytest.raises(ValueError):
+        verify_history(tmp_path, settings, expected_sha=SHA)
+
+
+def test_setup_failure_without_scenario_fixture_can_retry_after_session_cleanup(tmp_path):
+    """Failed session setup has no entered scenario, but still requires its finalizers."""
+    settings = RunSettings()
+    entries = [write_attempt(tmp_path, 1, {FIRST: ('failed', True)}),
+               write_attempt(tmp_path, 2, {FIRST: ('passed', False)})]
+    path = tmp_path / 'attempts/01/result.json'
+    report = json.loads(path.read_text())
+    report.update(entered=[], cleaned=[], phases=[
+        asdict(PhaseResult(FIRST, 'setup', 'failed', True)),
+        asdict(PhaseResult(FIRST, 'teardown', 'passed', False))])
+    path.write_text(json.dumps(report))
+    (path.parent / 'cleanup.log').write_text('Sandbox session cleanup complete\n')
+    write_history(tmp_path, entries, {FIRST: 'passed'}, settings)
+    assert verify_history(tmp_path, settings, expected_sha=SHA) == 1
+
+
+def test_colliding_junit_identities_are_not_accepted(tmp_path):
+    """Distinct selectors must remain distinguishable in the original JUnit."""
+    first = 'e2e/nested/test_cases.py::TestCases::test_case[a::b]'
+    second = 'e2e.nested/test_cases.py::TestCases::test_case[a::b]'
+    path = tmp_path / 'junit.xml'
+    write_junit({first: 'passed'}, path)
+    with pytest.raises(ValueError, match='ambiguous'):
+        retry_evidence.xml_states(path, (first, second))
 
 
 @pytest.mark.parametrize('function,value', [
@@ -251,13 +363,6 @@ def test_invalid_result_payloads_fail_closed(tmp_path, raw):
     path.write_bytes(raw)
     with pytest.raises(ValueError):
         retry_evidence.read_result(path)
-
-
-@pytest.mark.parametrize('value', [[], [FIRST, FIRST]])
-def test_collection_itself_must_be_nonempty_and_unique(value):
-    """A full collection is an independent nonempty set, not a counter."""
-    with pytest.raises(ValueError):
-        Collection(SHA, value)
 
 
 @pytest.mark.parametrize('fault', ['missing', 'oversized', 'duplicate-case', 'bad-xml',
@@ -294,4 +399,4 @@ def test_unreadable_or_invalid_evidence_is_not_assumed_green(tmp_path, monkeypat
     else:
         (tmp_path / 'run-settings.json').write_bytes(b'\xff')
     with pytest.raises(ValueError):
-        verify_history(tmp_path, Collection(SHA, (FIRST,)), settings)
+        verify_history(tmp_path, settings, expected_sha=SHA)

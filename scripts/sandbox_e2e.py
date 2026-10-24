@@ -26,17 +26,6 @@ def namespace() -> str:
     return 'local'
 
 
-def timeout_seconds(value: str) -> int:
-    """Total live execution starts at 1800s; no unlimited override is supported."""
-    try:
-        seconds = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError('timeout must be an integer in 1..3600') from None
-    if not 1 <= seconds <= 3600:
-        raise argparse.ArgumentTypeError('timeout must be in 1..3600')
-    return seconds
-
-
 def _group_active(group_id: int) -> bool:
     """Linux /proc confirms runnable members, not merely the controller's exit."""
     for process in Path('/proc').iterdir():
@@ -98,8 +87,7 @@ def _cleanup_run(selected_namespace: str, run_id: str, *, timeout: int = 60) -> 
 
 def run_bounded(command: list[str], timeout: int, selected_namespace: str, run_id: str) -> int:
     """Terminate the entire process group, then attempt finite current-run cleanup."""
-    settings = (RunSettings.from_json(os.environ.get('E2E_RUN_SETTINGS'))
-                if os.environ.get('E2E_EVIDENCE_PROTOCOL') == 'retry-v4' else None)
+    settings = RunSettings.from_json(os.environ.get('E2E_RUN_SETTINGS'))
     child = subprocess.Popen(command, start_new_session=True)  # pylint: disable=consider-using-with
     previous = {}
 
@@ -111,22 +99,14 @@ def run_bounded(command: list[str], timeout: int, selected_namespace: str, run_i
     try:
         result = child.wait(timeout=timeout)
         if result == 124:
-            if settings is None:
-                _terminate_process_group(child)
-                _cleanup_run(selected_namespace, run_id)
-            else:
-                _terminate_process_group(child, settings=settings)
-                _cleanup_run(selected_namespace, run_id, timeout=settings.cleanup_timeout_seconds)
+            _terminate_process_group(child, settings=settings)
+            _cleanup_run(selected_namespace, run_id, timeout=settings.cleanup_timeout_seconds)
             return 124
         return result
     except (subprocess.TimeoutExpired, KeyboardInterrupt):
         print('Sandbox run interrupted or timed out; attempting cleanup', flush=True)
-        if settings is None:
-            _terminate_process_group(child)
-            _cleanup_run(selected_namespace, run_id)
-        else:
-            _terminate_process_group(child, settings=settings)
-            _cleanup_run(selected_namespace, run_id, timeout=settings.cleanup_timeout_seconds)
+        _terminate_process_group(child, settings=settings)
+        _cleanup_run(selected_namespace, run_id, timeout=settings.cleanup_timeout_seconds)
         return 124
     finally:
         for signum, handler in previous.items():
@@ -137,17 +117,13 @@ def main(argv: list[str] | None = None, *,
          run_id_factory: Callable[[], UUID] | None = None) -> int:
     """Only explicit e2e collection runs live; the offline pytest default is test/."""
     parser = argparse.ArgumentParser(description=__doc__)
-    argument_type = (int if os.environ.get('E2E_EVIDENCE_PROTOCOL') == 'retry-v4'
-                     else timeout_seconds)
-    parser.add_argument('--timeout', type=argument_type)
+    parser.add_argument('--timeout', type=int)
     parser.add_argument('pytest_args', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     try:
         settings = RunSettings.from_json(os.environ.get('E2E_RUN_SETTINGS') or None)
         if args.timeout is not None:
             settings = replace(settings, timeout_seconds=args.timeout)
-        if os.environ.get('E2E_EVIDENCE_PROTOCOL') != 'retry-v4':
-            timeout_seconds(str(settings.timeout_seconds))
         os.environ['E2E_RUN_SETTINGS'] = settings.to_json()
         selected_namespace = namespace()
         if not os.environ.get('SANDBOX_TOKEN'):
@@ -170,7 +146,7 @@ def main(argv: list[str] | None = None, *,
                                 '--confcutdir=e2e', '-q', '--tb=no', '--show-capture=no',
                                 '-p', 'no:cacheprovider', *additional],
                                settings.timeout_seconds, selected_namespace, run_id)
-    except (ValueError, OSError, argparse.ArgumentTypeError) as error:
+    except (ValueError, OSError) as error:
         reason = str(error) if isinstance(error, ValueError) else 'cannot launch sandbox process'
         print(reason, file=sys.stderr)
         return 2

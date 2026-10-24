@@ -20,7 +20,6 @@ files = [
     "scripts/sandbox_evidence.py",
     "scripts/sandbox_github.py",
     "scripts/sandbox_retry.py",
-    "scripts/sandbox_retry_evidence.py",
     "scripts/sandbox_retry_report.py",
     "scripts/retry_results.py",
     "scripts/retry_settings.py",
@@ -38,6 +37,10 @@ no_implicit_optional = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["e2e.retry_policy"]
+follow_imports = "normal"
 
 [[tool.mypy.overrides]]
 module = ["t_tech.*", "grpc.*"]

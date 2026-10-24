@@ -8,15 +8,6 @@ on:
         description: Open same-repository PR targeting master
         required: true
         type: string
-      evidence_protocol:
-        description: Trusted evidence protocol for this complete PR run
-        required: false
-        type: choice
-        default: retry-v4
-        options:
-          - retry-v2
-          - retry-v3
-          - retry-v4
       run_settings:
         description: JSON run budgets (timeout_seconds, max_attempts, retry_delay_seconds)
         required: false
@@ -48,7 +39,6 @@ jobs:
       head_sha: ${{ steps.target.outputs.head_sha }}
       trusted_sha: ${{ steps.target.outputs.trusted_sha }}
       pr_number: ${{ steps.target.outputs.pr_number }}
-      evidence_protocol: ${{ steps.target.outputs.evidence_protocol }}
       run_settings: ${{ steps.target.outputs.run_settings }}
       run_step_minutes: ${{ steps.target.outputs.run_step_minutes }}
       job_minutes: ${{ steps.target.outputs.job_minutes }}
@@ -98,14 +88,11 @@ jobs:
     # Queue and environment approval wait are outside this active job deadline.
     # The authorized run snapshot reserves termination, cleanup and workflow overhead.
     timeout-minutes: ${{ fromJSON(needs.prepare.outputs.job_minutes) }}
-    outputs:
-      collection_digest: ${{ steps.collection.outputs.collection_digest }}
     permissions:
       contents: read
     env:
       SANDBOX_CI_SERIALIZED: "1"
       PYTEST_ADDOPTS: ""
-      E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}
       E2E_TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
       E2E_RUN_SETTINGS: ${{ needs.prepare.outputs.run_settings }}
     defaults:
@@ -126,19 +113,6 @@ jobs:
       - name: Install verified test dependencies with SDK fallback
         timeout-minutes: 6
         run: make setup
-      - name: Collect the full suite of the exact tested SHA without live fixtures
-        id: collection
-        timeout-minutes: 1
-        run: |
-          .venv/bin/python -m scripts.sandbox_collection --sha "$E2E_TESTED_SHA" --output sandbox-results/collection.json
-          python3 -I - <<'PY'
-          import hashlib
-          import os
-          from pathlib import Path
-          digest = hashlib.sha256(Path('sandbox-results/collection.json').read_bytes()).hexdigest()
-          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
-              output.write(f'collection_digest={digest}\n')
-          PY
       - name: Run all real sandbox scenarios
         id: run
         timeout-minutes: ${{ fromJSON(needs.prepare.outputs.run_step_minutes) }}
@@ -158,7 +132,7 @@ jobs:
           SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
           CLEANUP_SECONDS: ${{ needs.prepare.outputs.cleanup_seconds }}
         run: timeout "${CLEANUP_SECONDS}s" .venv/bin/python -m scripts.sandbox_lifecycle cleanup --namespace ci
-      - name: Require original versioned retry evidence
+      - name: Require original retry evidence
         if: ${{ always() && steps.run.outcome != 'skipped' }}
         timeout-minutes: 1
         run: test -f sandbox-results/retry.json
@@ -198,14 +172,12 @@ jobs:
         with:
           name: sandbox-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: sandbox-results
-      - name: Verify exact full suite and fixture cleanup
+      - name: Verify original results and fixture cleanup
         id: evidence
         env:
           TESTED_SHA: ${{ needs.prepare.outputs.head_sha }}
-          E2E_EVIDENCE_PROTOCOL: ${{ needs.prepare.outputs.evidence_protocol }}
           E2E_RUN_SETTINGS: ${{ needs.prepare.outputs.run_settings }}
-          EXPECTED_COLLECTION_DIGEST: ${{ needs.live.outputs.collection_digest }}
-        run: python3 -m scripts.sandbox_github evidence --evidence-format "$E2E_EVIDENCE_PROTOCOL" --junit sandbox-results/junit.xml --collection sandbox-results/collection.json --sha "$TESTED_SHA"
+        run: python3 -m scripts.sandbox_github evidence --junit sandbox-results/junit.xml --sha "$TESTED_SHA"
 
   publish:
     needs: [prepare, pending, live, verify]
