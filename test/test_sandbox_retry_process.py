@@ -81,7 +81,8 @@ def test_controller_hard_timeout_cleanup_waits_for_group(monkeypatch):
     child.wait.return_value = 124
     events = []
     monkeypatch.setattr(sandbox_e2e.subprocess, 'Popen', lambda *_, **__: child)
-    monkeypatch.setattr(sandbox_e2e, '_terminate_process_group', lambda _: events.append('stopped'))
-    monkeypatch.setattr(sandbox_e2e, '_cleanup_run', lambda *_: events.append('cleanup'))
+    monkeypatch.setattr(sandbox_e2e, '_terminate_process_group',
+                        lambda _, **__: events.append('stopped'))
+    monkeypatch.setattr(sandbox_e2e, '_cleanup_run', lambda *_, **__: events.append('cleanup'))
     assert sandbox_e2e.run_bounded(['controller'], 1, 'local', 'a' * 32) == 124
     assert events == ['stopped', 'cleanup']

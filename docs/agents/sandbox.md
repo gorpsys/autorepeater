@@ -16,72 +16,57 @@ Live sandbox/GitHub CI отдельный санкционированный з�
 cleanup; локальный запуск при общей песочнице не пересекается с GitHub.
 Дамп/JUnit содержат только безопасные проверенные факты.
 История bootstrap PR #28 сохранена в [истории версий](../history/versioning.md#bootstrap-sandbox-e2e-2026-10-08).
-Ручной запуск через Actions > Sandbox live E2E > Run workflow
-(ref master, pr_number с номером открытого PR). В candidate 5.3.0 поле
-evidence_protocol по умолчанию retry-v3; retry-v2 доступен явно.
-Trusted prepare проверяет allowlist до live и фиксирует единый output для
-producer и независимого verifier. Неизвестный выбор, включая retry-v1,
-отклоняется; совместимость legacy v1 в Python helpers сохраняется.
-После merge 5.3.0 master push выбирает v3 независимо от полей payload.
-Обычный ручной запуск и автоматический master push одобрения не требуют.
+## Текущий протокол v4
+
+Ручной запуск: Actions > Sandbox live E2E > Run workflow, ref master,
+номер открытого PR. Единственный поддерживаемый путь — retry-v4;
+выбора протокола и совместимости со старыми форматами в коде нет.
+Права, фиксирование SHA, сериализация и независимый верификатор на отдельном
+runner сохраняются. До обновления trusted workflow в master новый формат
+не принимается; не обходить защиту и не проверять evidence кодом PR.
+Код E2E-тестов выдаёт для упавшей setup/call-фазы булев `retryable`.
+Runner и verifier не читают валюты, типы ошибок SDK или лимиты стакана.
+Тестовый классификатор читает действующий guard, не копию лимита из CI.
+Auth или неполный auth-разбор запрещает повторы всего прогона;
+assertions, неизвестные ошибки и teardown не дают разрешения повтора.
+Постоянные падения не мешают повторить другие разрешённые сценарии,
+но остаются в итоговом failure. Пройденные сценарии не повторяются.
+
+Первый pytest-процесс собирает весь каталог e2e/; новые файлы, классы и
+параметризованные тесты включаются без изменения workflow.
+Отдельного collect-only manifest, digest и сверки независимого состава нет.
+Нужны хотя бы один собранный тест и успех всех собранных сценариев.
+Каждая следующая попытка содержит ровно разрешённые failed node IDs предыдущей.
+Original result.json содержит фазы, булевы статусы и факты завершения fixtures.
+Verifier сверяет оригинальные JUnit/cleanup, process exit, SHA и итоговый JUnit.
+Пропуски/xfail/xpass, несогласованные фазы/JUnit, ошибки collection/teardown/
+cleanup и неподтверждённый SHA не дают success независимо от passed count.
+JSON input run_settings фиксируется trusted prepare и передаётся исполнителю
+и verifier; локально используется E2E_RUN_SETTINGS. Параметры: timeout_seconds,
+max_attempts, retry_delay_seconds, termination_grace_seconds,
+termination_kill_seconds, cleanup_timeout_seconds, orphan_cleanup_timeout_seconds,
+workflow_overhead_seconds. Все бюджеты — положительные целые; пауза может быть 0.
+Повторные ключи/неизвестные поля запрещены. Настройки применяются при dispatch
+без предварительного мержа значений; изменение источников тестов остаётся PR.
+Timeouts шагов выводятся из снимка с запасом на остановку, cleanup и upload;
+hosted job не длиннее 360 минут. Default CI: 3600 секунд на все попытки,
+4 попытки, пауза 10 секунд. Local default: 1800 секунд.
+run-settings.json в артефактах не заменяет доверенный снимок.
+
+## Запуск и очистка
+
 Live hook до fixture пишет flush-прогресс: attempt N [index/selected_count]
-и node ID. Повторы считают только выбранный subset; прогресс не evidence.
-Локально вывод в реальном времени включается E2E_ARGS="-s" (CI уже использует -s).
+и node ID. Повторы считают только выбранные упавшие тесты; прогресс не evidence.
+Локально потоковый вывод включается E2E_ARGS="-s" (CI уже использует -s).
 Супервизор запускает scripts.sandbox_retry в одной группе процессов/run ID
-под общей блокировкой и общим E2E_TIMEOUT. До трёх дополнительных попыток
-только failed cases при DEADLINE_EXCEEDED/UNAVAILABLE; пауза 10s в том же
-бюджете времени. Assertions/auth/закрытые торги/INTERNAL/collection/teardown/
-cleanup/отмена/общий тайм-аут не повторять. Любая постоянная ошибка стоп.
-Каждая попытка свежий pytest/счета, предыдущая очистка обязательна. После
-входа в сессию искать неизвестные созданные ID только по текущему run ID;
+под общей блокировкой и общим таймаутом. Каждая попытка — свежий pytest и новые
+счета; перед повтором предыдущая очистка должна завершиться.
+После входа в сессию искать неизвестные созданные ID только по текущему run ID;
 ошибка первого read-only preflight допускает пустую cleanup без нового RPC.
-Cleanup доказывать структурными facts, не видимостью stdout при capture.
-retry-v2: collection.json полного набора проверяемого SHA создаётся отдельным
-collect-only процессом до live fixtures, без inherited pytest filters/plugins.
-Dirty source, deselection, пустая коллекция и collection errors запрещены.
-Исходные attempts/NN/report.json+junit.xml+cleanup.log и дампы, retry.json
-и итоговый уникальный junit.xml сохраняются. GitHub независимо выводит
-законность всех попыток/итогов из originals: первая попытка содержит ровно
-полную коллекцию, повторные — только допустимый failed subset. SHA каждой
-попытки совпадает с collection и SHA, зафиксированным trusted workflow.
-Skipped/xfail/xpass, лишние/повторные/недостающие cases, ошибки teardown,
-collection или cleanup не дают success. Passed count — только диагностика.
-В протоколе v2 инициатор задаёт E2E_EVIDENCE_PROTOCOL=retry-v2
-и E2E_TESTED_SHA, trusted verifier — --evidence-format retry-v2 с --collection
-и --sha. Отсутствие выбора сохраняет retry-v1 и его фиксированный набор 17
-сценариев; в v1 report нет sha и новых полей. Это позволяет проверить сам
-инфраструктурный PR действующим master workflow без обхода защиты.
-После мержа новый trusted master включает v2; расширенные наборы требуют v2.
-Подготовленный `retry-v3` сохраняет независимую полную коллекцию и точный SHA.
-Он выбирается только инициатором через E2E_EVIDENCE_PROTOCOL=retry-v3 и trusted
-verifier --evidence-format retry-v3, не по полям недоверенного артефакта.
-Поддержка v3 и auth-fix выпущены в master 1b015c6 (5.2.2, PR #42).
-Activation PR #43 проверен и вмержен в b4044a0 (5.2.3): trusted master
-принимает evidence_protocol=retry-v3 для полного запуска PR #40 с ref master.
-Его default и master push остаются v2. Candidate 5.3.0 сохраняет future default
-v3 для guard 180s и использует тот же validated output в producer и verifier.
-Candidate workflow PR сам по себе не переключает trusted dispatcher master.
-Старый master 0492181 отвергает v3. Не проверять evidence кодом PR.
-V3 повторяет только eligible failed cases даже при постоянных ошибках других
-сценариев. Их результаты сохраняются в итоговом JUnit и запрещают общий success;
-пройденные и постоянно упавшие сценарии не запускаются повторно.
-Кроме прежних transport timeouts, допустим только market_time_stale:
-исключение из известной загруженной точки валидации, совпадающие UID,
-aware market/observed timestamps и возраст строго больше 180 секунд.
-Текущий producer пишет limit=180; verifier также читает архивные v3-факты
-с limit=90/120 и пересчитывает их возраст по соответствующей строгой границе.
-Verifier сам проверяет возраст и идентичность; ValueError по тексту и логи
-не дают retry. Классификатор не импортирует будущие валютные модули приложения.
-Future/missing/naive/invalid timestamps, UID mismatch и assertions не повторяются.
-Auth останавливает все повторы. Неполный auth-разбор тоже запрещает все повторы:
-цикл или остаток raw-цепочки после восьми исключений, либо восемь и более
-сохранённых SandboxFailure.api_facts (окончание цепочки не доказано).
-Collection/teardown/cleanup/cancellation/deadline
-и ошибки протокола сохраняют прежние стоп-проверки. Лимит — те же три
-дополнительных процесса с общим бюджетом и подтверждённой очисткой.
-Local -k в legacy режиме допускается, не даёт full-suite acceptance.
 Linux /proc проверяет остановку всей группы перед аварийной очисткой;
 неподтверждённая остановка запрещает cleanup. Raw run.log не публиковать.
+Локальный -k допускается, но не является полным CI-прогоном.
+
 Диагностика отказа выбора инструмента выводится одной строкой stdout:
 query, заданные ticker/type/currency, исходное число кандидатов, число
 прошедших отбор и причины отсева. Не более 20 записей UID/ticker/
