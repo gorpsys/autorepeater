@@ -3,14 +3,17 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal as D
 import logging
+from types import SimpleNamespace
 from test.test_fx_funding import NOW, market
 from test.test_order_plan import destination, leaf, parent, rules
-from unittest.mock import create_autospec
+from unittest.mock import call, create_autospec
 
 import pytest
 
 from autorepeater.cash_facts import MoneyAmount, OrderAmounts, SecurityQuote, SecurityQuoteUnit
 from autorepeater.cash_pools import CashPools
+from autorepeater import execution as execution_module
+from autorepeater import execution_market as market_module
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError, OrderExecutor
 from autorepeater.execution_data import ExecutionData
 from autorepeater.execution_market import ExecutionMarket, _Ledger, _credit_sales, _purchase_cash
@@ -19,6 +22,23 @@ from autorepeater.order_plan import build_order_plan
 from autorepeater.order_plan import OrderIntent
 from autorepeater.strategy_plan import exact_product, exact_sum
 from autorepeater.valuation import SecurityData
+
+
+@pytest.fixture(name='settlement_clock')
+def fixture_settlement_clock(monkeypatch):
+    """Exercise the normal polling window without wall-clock waits."""
+    clock = SimpleNamespace(now=0)
+
+    def advance(seconds):
+        assert seconds > 0
+        clock.now += seconds
+
+    clock.sleep = create_autospec(execution_module.sleep, spec_set=True, side_effect=advance)
+    monkeypatch.setattr(execution_module, 'SETTLEMENT_TIMEOUT', 30)
+    for module in (execution_module, market_module):
+        monkeypatch.setattr(module, 'monotonic', lambda: clock.now)
+        monkeypatch.setattr(module, 'sleep', clock.sleep)
+    return clock
 
 
 def runtime():
@@ -108,19 +128,19 @@ def test_fx_fill_refreshes_real_native_caps_before_dependent_buy():
 
 
 @pytest.mark.parametrize('status', ['NEW', 'PARTIALLYFILL'])
-def test_pending_fx_is_polled_by_broker_id_without_second_submission(status, monkeypatch):
+def test_pending_fx_is_polled_by_broker_id_without_second_submission(status, settlement_clock):
     """FX BUY has bounded confirmation polling just like FX SELL."""
     broker, value, plan, data, executor, _, _ = setup_plan()
     exchange = plan.funding.exchanges[0]
     executor.submit_order.return_value = receipt(exchange, status=status)
     executor.get_order_state.side_effect = OrderExecutionError('read failed')
-    monkeypatch.setattr('autorepeater.execution.sleep', lambda delay: None)
-    monkeypatch.setattr('autorepeater.execution.SETTLEMENT_TIMEOUT', 30)
     with pytest.raises(OrderExecutionError, match='read failed'):
         broker.execute('dst', plan, data, executor, value)
     executor.submit_order.assert_called_once()
     executor.get_order_state.assert_called_once_with('dst', 'broker-cny-rub')
     data.get_destination.assert_not_called()
+    settlement_clock.sleep.assert_called_once_with(2)
+    assert settlement_clock.now == 2
 
 
 @pytest.mark.parametrize('change', [{'uid': 'wrong'}, {'side': 'SELL'},
@@ -357,28 +377,47 @@ def test_transport_uncertainty_never_retries_fx_or_reads_balances():
 
 
 @pytest.mark.parametrize('status', ['NEW', 'PARTIALLYFILL'])
-def test_fx_confirmation_timeout_does_not_repeat_or_cancel(status):
-    """The existing bounded window applies to either currency direction."""
+def test_fx_confirmation_timeout_does_not_repeat_or_cancel(status, settlement_clock):
+    """Unconfirmed FX cannot be resubmitted or fund a dependent paper BUY."""
     broker, value, plan, data, executor, _, _ = setup_plan()
-    executor.submit_order.return_value = receipt(plan.funding.exchanges[0], status=status)
+    exchange = plan.funding.exchanges[0]
+    executor.submit_order.return_value = receipt(exchange, status=status)
+    polls = []
+
+    def pending(account_id, order_id):
+        assert (account_id, order_id) == ('dst', 'broker-cny-rub')
+        executor.submit_order.assert_called_once()
+        polls.append(settlement_clock.now)
+        return executor.submit_order.return_value
+
+    executor.get_order_state.side_effect = pending
     with pytest.raises(OrderExecutionError, match='not fully confirmed'):
         broker.execute('dst', plan, data, executor, value)
-    executor.submit_order.assert_called_once()
-    executor.get_order_state.assert_not_called()
+    executor.submit_order.assert_called_once_with('dst', OrderIntent(
+        exchange.uid, exchange.side, exchange.lots, exchange.lot_size,
+        dict(exchange.base_contributions)))
+    assert executor.get_order_state.call_args_list == [
+        call('dst', 'broker-cny-rub')] * 14
+    assert polls == list(range(2, 30, 2))
+    assert settlement_clock.sleep.call_args_list == [call(2)] * 15
+    assert settlement_clock.now == 30
+    assert [item[0] for item in executor.mock_calls] == [
+        'submit_order', *(['get_order_state'] * 14)]
     data.get_destination.assert_not_called()
 
 
-def test_fx_poll_rejects_changed_broker_id(monkeypatch):
+def test_fx_poll_rejects_changed_broker_id(settlement_clock):
     """The poll identifies the broker order, never the original client request."""
     broker, value, plan, data, executor, _, _ = setup_plan()
     exchange = plan.funding.exchanges[0]
     executor.submit_order.return_value = receipt(exchange, status='NEW')
     executor.get_order_state.return_value = replace(receipt(exchange), order_id='other')
-    monkeypatch.setattr('autorepeater.execution.SETTLEMENT_TIMEOUT', 30)
-    monkeypatch.setattr('autorepeater.execution.sleep', lambda delay: None)
     with pytest.raises(OrderExecutionError, match='ID mismatch'):
         broker.execute('dst', plan, data, executor, value)
     executor.submit_order.assert_called_once()
+    executor.get_order_state.assert_called_once_with('dst', 'broker-cny-rub')
+    settlement_clock.sleep.assert_called_once_with(2)
+    assert settlement_clock.now == 2
 
 
 @pytest.mark.parametrize('change', [{'buy_max_lots': 0}, {'buy_money_amount': D(59)},
@@ -396,35 +435,61 @@ def test_fresh_native_caps_after_fx_can_defer_without_rollback(change):
     executor.submit_order.assert_called_once()
 
 
-def test_delayed_fx_cash_waits_only_with_reads(monkeypatch):
+def test_delayed_fx_cash_waits_only_with_reads(settlement_clock):
     """FILL then insufficient money then available cash, with newly read own limits."""
     broker, value, plan, data, executor, _, _ = setup_plan()
     empty = replace(plan.snapshot, available_cash={'rub': D(172), 'cny': D(0)})
     settled = replace(empty, available_cash={'rub': D(172), 'cny': D(69)})
-    data.get_destination.side_effect = [empty, settled]
+    polls = []
+
+    def fresh(account_id, *, valuation):
+        assert account_id == 'dst' and valuation is value
+        executor.submit_order.assert_called_once()
+        polls.append(settlement_clock.now)
+        return empty if settlement_clock.now < 4 else settled
+
+    data.get_destination.side_effect = fresh
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(
         order, '828' if order.uid == 'cny-rub' else '60',
         currency='rub' if order.uid == 'cny-rub' else 'cny')
-    delays = []
-    monkeypatch.setattr('autorepeater.execution_market.sleep', delays.append)
     result = broker.execute('dst', plan, data, executor, value)
     assert [item.uid for item in result] == ['cny-rub', 'C']
-    assert delays == [2]
-    assert data.get_destination.call_count == 2
-    assert data.get_trade_rules.call_count == 2
+    assert settlement_clock.sleep.call_args_list == [call(2), call(2)]
+    assert settlement_clock.now == 4
+    assert polls == [0, 2, 4]
+    assert data.get_destination.call_count == 3
+    assert data.get_trade_rules.call_count == 3
+    executor.get_order_state.assert_not_called()
+    assert [item[0] for item in executor.mock_calls] == ['submit_order', 'submit_order']
 
 
-def test_fx_cash_timeout_defers_dependent_buy(monkeypatch):
+def test_fx_cash_timeout_defers_dependent_buy(settlement_clock):
     """No calendar wait for TOM; actual availability determines this timeout."""
     broker, value, plan, data, executor, _, _ = setup_plan()
-    data.get_destination.return_value = replace(
-        plan.snapshot, available_cash={'rub': D(172), 'cny': D(0)})
+    exchange = plan.funding.exchanges[0]
+    polls = []
+
+    def unavailable(account_id, *, valuation):
+        assert account_id == 'dst' and valuation is value
+        executor.submit_order.assert_called_once()
+        polls.append(settlement_clock.now)
+        return replace(plan.snapshot, available_cash={'rub': D(172), 'cny': D(0)})
+
+    data.get_destination.side_effect = unavailable
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(order, '828')
-    monkeypatch.setattr('autorepeater.execution_market.SETTLEMENT_TIMEOUT', 0)
     assert len(broker.execute('dst', plan, data, executor, value)) == 1
-    executor.submit_order.assert_called_once()
+    executor.submit_order.assert_called_once_with('dst', OrderIntent(
+        exchange.uid, exchange.side, exchange.lots, exchange.lot_size,
+        dict(exchange.base_contributions)))
+    assert data.get_destination.call_args_list == [call('dst', valuation=value)] * 16
+    assert data.get_trade_rules.call_args_list == [call('dst', ['C'])] * 16
+    assert polls == list(range(0, 31, 2))
+    assert settlement_clock.sleep.call_args_list == [call(2)] * 15
+    assert settlement_clock.now == 30
+    assert [item[0] for item in executor.mock_calls] == ['submit_order']
+    executor.get_order_state.assert_not_called()
 
 
 def test_incomplete_fx_cash_never_becomes_exact_receipt_or_isolated_credit():
@@ -611,7 +676,7 @@ def test_wrong_buy_monetary_currency_defers_following_orders_without_guessing_fx
 
 
 @pytest.mark.parametrize('status', ['NEW', 'PARTIALLYFILL'])
-def test_pending_fx_fill_then_buy_uses_polled_facts_and_one_request(status, monkeypatch):
+def test_pending_fx_fill_then_buy_uses_polled_facts_and_one_request(status, settlement_clock):
     """Successful delayed confirmation also keeps the physical submission count fixed."""
     broker, value, plan, data, executor, _, _ = setup_plan()
     exchange = plan.funding.exchanges[0]
@@ -621,13 +686,26 @@ def test_pending_fx_fill_then_buy_uses_polled_facts_and_one_request(status, monk
     executor.submit_order.side_effect = lambda account, order: (
         receipt(order, status=status) if order.uid == 'cny-rub'
         else receipt(order, '60', currency='cny'))
-    executor.get_order_state.return_value = receipt(exchange, '828')
-    monkeypatch.setattr('autorepeater.execution.SETTLEMENT_TIMEOUT', 30)
-    monkeypatch.setattr('autorepeater.execution.sleep', lambda delay: None)
+    polls = []
+
+    def pending(account_id, order_id):
+        assert (account_id, order_id) == ('dst', 'broker-cny-rub')
+        executor.submit_order.assert_called_once()
+        data.get_destination.assert_not_called()
+        polls.append(settlement_clock.now)
+        return receipt(exchange, status=status) if settlement_clock.now < 4 else receipt(
+            exchange, '828')
+
+    executor.get_order_state.side_effect = pending
     result = broker.execute('dst', plan, data, executor, value)
     assert [item.uid for item in result] == ['cny-rub', 'C']
-    executor.get_order_state.assert_called_once_with('dst', 'broker-cny-rub')
+    assert executor.get_order_state.call_args_list == [call('dst', 'broker-cny-rub')] * 2
     assert executor.submit_order.call_count == 2
+    assert polls == [2, 4]
+    assert settlement_clock.sleep.call_args_list == [call(2), call(2)]
+    assert settlement_clock.now == 4
+    assert [item[0] for item in executor.mock_calls] == [
+        'submit_order', 'get_order_state', 'get_order_state', 'submit_order']
 
 
 def test_composite_preflight_unions_two_foreign_leaves_before_rub_buy():
