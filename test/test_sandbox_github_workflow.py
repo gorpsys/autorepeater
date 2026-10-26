@@ -246,3 +246,16 @@ def test_dispatch_protocol_default_and_selection_are_owned_by_prepare() -> None:
     assert '- retry-v1' not in inputs
     assert 'evidence_protocol: ${{ steps.target.outputs.evidence_protocol }}' in job('prepare')
     assert 'inputs.evidence_protocol' not in job('live') + job('verify')
+
+
+def test_v4_transition_skips_only_the_retired_independent_collector() -> None:
+    """V4 collects during its first pytest; old producer runs remain unchanged."""
+    text = WORKFLOW.read_text(encoding='utf-8')
+    assert '- retry-v4' in text.split('  push:', 1)[0]
+    collector = job('live').split(
+        '      - name: Collect the full suite of the exact tested SHA without live fixtures',
+        1)[1].split('      - name:', 1)[0]
+    assert "if: ${{ needs.prepare.outputs.evidence_protocol != 'retry-v4' }}" in collector
+    assert 'scripts.sandbox_collection' in collector
+    assert '--evidence-format "$E2E_EVIDENCE_PROTOCOL"' in job('verify')
+    assert 'ref: ${{ needs.prepare.outputs.trusted_sha }}' in job('verify')

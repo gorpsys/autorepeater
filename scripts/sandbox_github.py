@@ -13,6 +13,8 @@ import xml.etree.ElementTree as ET
 from scripts.sandbox_retry_evidence import (
     EXPECTED_SCENARIOS, RetryFailure, read_collection, verify_history,
 )
+from scripts import retry_evidence
+from scripts.retry_settings import RunSettings
 MAX_EVIDENCE_BYTES = 2_000_000
 BOOTSTRAP_PR_NUMBER = 28
 
@@ -113,7 +115,7 @@ def select_protocol(event: object, event_name: str) -> str:
     if event_name != 'workflow_dispatch':
         return 'retry-v3'
     protocol = record(record(event).get('inputs')).get('evidence_protocol', 'retry-v3')
-    if not isinstance(protocol, str) or protocol not in ('retry-v2', 'retry-v3'):
+    if not isinstance(protocol, str) or protocol not in ('retry-v2', 'retry-v3', 'retry-v4'):
         raise GitHubFailure('unsupported dispatch evidence protocol')
     return protocol
 
@@ -233,6 +235,9 @@ def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
     if junit.name != 'junit.xml':
         raise GitHubFailure('retry evidence requires the fixed merged JUnit path')
     try:
+        if format_name == 'retry-v4':
+            return SuiteEvidence(retry_evidence.verify_history(
+                junit.parent, RunSettings(timeout_seconds=3600), expected_sha=commit_sha(sha)))
         if format_name in ('retry-v2', 'retry-v3'):
             if collection is None:
                 raise GitHubFailure('independent full collection required')
@@ -242,7 +247,7 @@ def evidence_result(junit: Path, run_log: Path | None, format_name: str, *,
         if format_name != 'retry-v1':
             raise GitHubFailure('unsupported evidence protocol')
         return SuiteEvidence(verify_history(junit.parent, require_full=True))
-    except RetryFailure:
+    except (RetryFailure, ValueError):
         raise GitHubFailure('retry history does not prove full sandbox acceptance') from None
 
 
@@ -257,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     evidence.add_argument('--collection', type=Path)
     evidence.add_argument('--sha', default='')
     evidence.add_argument('--evidence-format',
-                          choices=('retry-v1', 'retry-v2', 'retry-v3', 'single-v1'),
+                          choices=('retry-v1', 'retry-v2', 'retry-v3', 'retry-v4', 'single-v1'),
                           default='retry-v1')
     args = parser.parse_args(argv)
     try:
