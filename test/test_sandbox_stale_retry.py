@@ -15,7 +15,7 @@ from t_tech.invest import RequestError
 from t_tech.invest.services import MarketDataService
 
 from autorepeater.strategy_data import DataAccessError
-from scripts.sandbox_lifecycle import SandboxFailure, list_exception_facts
+from scripts.sandbox_lifecycle import SandboxFailure, list_exception_facts, safe_call
 from scripts import sandbox_github, sandbox_retry, sandbox_retry_evidence as evidence
 from scripts import sandbox_retry_report as reporting
 
@@ -120,7 +120,9 @@ def trusted_master_verifier(monkeypatch):
     (90.000001, 'uid', False), (90, 'uid', False), (-1, 'uid', False),
     (181, 'other', False), (None, 'uid', False), ('naive', 'uid', False),
 ])
-def test_security_stale_requires_actual_validation_and_identity(reads, age, uid, eligible):
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_security_stale_requires_actual_validation_and_identity(
+        reads, age, uid, eligible, wrapped):
     """A known adapter exception and exact raw timestamp facts are both required."""
     client, data = reads
     book = client.market_data.get_order_book.return_value
@@ -128,13 +130,94 @@ def test_security_stale_requires_actual_validation_and_identity(reads, age, uid,
     book.orderbook_ts = (None if age is None else NOW.replace(tzinfo=None) if age == 'naive'
                          else NOW - timedelta(seconds=age))
     try:
-        data.get_security_quote('uid')
-    except ValueError as error:
+        if wrapped:
+            safe_call(data.get_security_quote, uid='uid')
+        else:
+            data.get_security_quote('uid')
+    except (ValueError, SandboxFailure) as error:
         fact = reporting.stale_book_facts(error)
     else:
         fact = None
     assert fact == (stale_fact(age) if eligible else None)
     client.market_data.get_order_book.assert_called_once_with(instrument_id='uid', depth=1)
+
+
+@pytest.mark.parametrize('boundary', ['security', 'fx'])
+@pytest.mark.parametrize('wrapper', ['known', 'unknown', 'auth'])
+def test_safe_call_stale_phase_preserves_retry_and_denials(
+        reads, tmp_path, monkeypatch, boundary, wrapper):
+    """Only the known guard through safe_call grants retry, never an opaque or auth error."""
+    monkeypatch.setenv('E2E_EVIDENCE_PROTOCOL', 'retry-v3')
+    client, data = reads
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=181)
+
+    def query():
+        try:
+            if boundary == 'security':
+                data.get_security_quote('uid')
+            else:
+                FxGuard().validate_fresh(NOW)
+        except ValueError as error:
+            if wrapper == 'unknown':
+                raise RuntimeError('private') from error
+            if wrapper == 'auth':
+                raise RequestError(StatusCode.UNAUTHENTICATED, 'private', {}) from error
+            raise
+
+    with pytest.raises(SandboxFailure) as caught:
+        safe_call(query)
+    assert caught.value.__suppress_context__
+    recorder = reporting.AttemptRecorder(tmp_path / 'report.json')
+    recorder.phase(NODE, 'call', 'failed', caught.value)
+    assert len(recorder.phases) == 1
+    phase = recorder.phases[0]
+    assert phase.stale_book == (stale_fact() if wrapper == 'known' else None)
+    assert phase.auth_failure == (wrapper == 'auth')
+    first = v3_attempt()
+    first = replace(first, phases=(first.phases[0], phase, first.phases[2]))
+    assert evidence.retry_nodes(first, protocol='retry-v3') == (
+        (NODE,) if wrapper == 'known' else ())
+    assert 'private' not in json.dumps(asdict(phase))
+
+
+@pytest.mark.parametrize('wrappers', [1, 7, 8, 9])
+def test_safe_call_stale_context_keeps_the_chain_bound(reads, wrappers):
+    """The setup wrapper does not extend the existing eight-exception inspection budget."""
+    client, data = reads
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=181)
+    with pytest.raises(ValueError) as caught:
+        data.get_security_quote('uid')
+    error = caught.value
+
+    def query(error):
+        raise error
+
+    for _ in range(wrappers):
+        with pytest.raises(SandboxFailure) as caught:
+            safe_call(query, error=error)
+        error = caught.value
+    assert reporting.stale_book_facts(error) == (stale_fact() if wrappers < 8 else None)
+
+
+def test_safe_call_does_not_hide_incomplete_auth_inspection(reads, tmp_path, monkeypatch):
+    """A real stale guard cannot grant retry when its wrapped cause chain is cyclic."""
+    monkeypatch.setenv('E2E_EVIDENCE_PROTOCOL', 'retry-v3')
+    client, data = reads
+    client.market_data.get_order_book.return_value.orderbook_ts = NOW - timedelta(seconds=181)
+    with pytest.raises(ValueError) as caught:
+        data.get_security_quote('uid')
+    original = caught.value
+    original.__cause__ = original
+
+    def query():
+        raise original
+
+    with pytest.raises(SandboxFailure) as wrapped:
+        safe_call(query)
+    recorder = reporting.AttemptRecorder(tmp_path / 'report.json')
+    recorder.phase(NODE, 'call', 'failed', wrapped.value)
+    assert recorder.phases[0].auth_failure
+    assert recorder.phases[0].stale_book is None
 
 
 @pytest.mark.parametrize('wrapper', [None, DataAccessError, AssertionError, ValueError])
