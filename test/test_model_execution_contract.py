@@ -12,7 +12,7 @@ from t_tech.invest.services import OrdersService
 
 from autorepeater.cash_facts import MoneyAmount, SecurityQuote, SecurityQuoteUnit, order_cash_bound
 from autorepeater.execution import OrderExecutionError, OrderExecutor
-from autorepeater.execution_data import ExecutionData
+from autorepeater.execution_data import AccountReadiness, ExecutionData
 from autorepeater.fx import FxSnapshot
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.order_plan import OrderIntent
@@ -24,6 +24,7 @@ def test_model_implements_both_neutral_ports_with_valuation_and_broker_id_poll()
     """Strict port doubles forward exactly the call shapes used by the real engine."""
     model = ModelExecution({}, {'R': D(450)}, {'R': 1}, D(1000), D('.01'))
     reads = create_autospec(ExecutionData, instance=True, spec_set=True)
+    reads.get_readiness.side_effect = model.get_readiness
     orders = create_autospec(OrderExecutor, instance=True, spec_set=True)
     reads.get_destination.side_effect = model.get_destination
     reads.get_trade_rules.side_effect = model.get_trade_rules
@@ -33,6 +34,7 @@ def test_model_implements_both_neutral_ports_with_valuation_and_broker_id_poll()
     books.get_security_quote.return_value = SecurityQuote(
         'rub', D(450), D(450), SecurityQuoteUnit.MONEY_PER_PIECE)
     value = Valuation(FxSnapshot({}, NOW), books, clock=lambda: NOW)
+    assert reads.get_readiness('MODEL', timeout=1) == AccountReadiness(False, False, False, 0)
     before = reads.get_destination('MODEL', valuation=value)
     assert before.fx_snapshot is value.fx
     assert before.budget == D(1000) and before.available_cash == {'rub': D(1000)}
@@ -40,6 +42,7 @@ def test_model_implements_both_neutral_ports_with_valuation_and_broker_id_poll()
     result = orders.submit_order('MODEL', OrderIntent('R', 'BUY', 1, 1, {(): D(1)}))
     assert orders.get_order_state('MODEL', result.order_id) is result
     assert model.orders == [('R', 'BUY', 1, 1)]
+    assert reads.get_readiness('MODEL', timeout=1).ready
     after = reads.get_destination('MODEL', valuation=value)
     assert after.quantities == {'R': D(1)}
     assert after.available_cash == {'rub': D('545.5')} and after.budget == D('995.5')
@@ -47,6 +50,21 @@ def test_model_implements_both_neutral_ports_with_valuation_and_broker_id_poll()
     assert after.marks == {'R': D(450)}
     with pytest.raises(OrderExecutionError, match='unknown model order'):
         orders.get_order_state('MODEL', 'unsubmitted')
+
+
+def test_model_readiness_needs_no_marks_or_full_snapshot():
+    """Readiness is explicit and independent of valuation, even for missing marks."""
+    model = ModelExecution({'unpriced': D(1)}, {}, {}, D(0))
+    assert model.get_readiness('MODEL', timeout=1) == AccountReadiness(False, False, False, 0)
+    assert not model.orders and not model.receipts
+
+
+@pytest.mark.parametrize('timeout', [None, True, 0, -1, float('nan'), float('inf'), '1'])
+def test_model_readiness_requires_positive_finite_timeout(timeout):
+    """The offline model respects the same budget argument contract as the SDK."""
+    model = ModelExecution({}, {}, {}, D(0))
+    with pytest.raises(ValueError, match='timeout'):
+        model.get_readiness('MODEL', timeout=timeout)
 
 
 @pytest.mark.parametrize('side', ['BUY', 'SELL'])

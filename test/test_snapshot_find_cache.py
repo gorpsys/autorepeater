@@ -3,6 +3,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import inspect
+from test.test_order_plan import destination
 from unittest.mock import Mock, call, create_autospec
 
 import pytest
@@ -17,7 +18,7 @@ from autorepeater.composite_strategy import (
 )
 from autorepeater.fx import FxSnapshot
 from autorepeater.execution import OrderExecutor
-from autorepeater.execution_data import ExecutionData
+from autorepeater.execution_data import AccountReadiness, ExecutionData
 from autorepeater.index_strategy import IndexStrategy
 from autorepeater.repeater import AutoRepeater
 from autorepeater.strategies import create_strategy, prepare_strategy
@@ -319,7 +320,9 @@ def test_each_sync_invalidates_search_and_full_metadata(client):
         sdk.LastPrice(instrument_uid=uid, price=sdk.Quotation(price, 0))])
         for uid, price in [('old', 10), ('new', 20)]]
     execution = create_autospec(ExecutionData, instance=True, spec_set=True)
-    execution.get_destination.side_effect = RuntimeError('stop before effects')
+    execution.get_readiness.return_value = AccountReadiness(False, False, False, 0)
+    execution.get_destination.return_value = destination()
+    execution.get_trade_rules.side_effect = RuntimeError('stop before effects')
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     data = TInvestStrategyData(client)
     engine = AutoRepeater(create_strategy(prepare_strategy('INDEX', 'GOLD')),

@@ -12,6 +12,29 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountReadiness:
+    """Validated account blockers without prices, cash or a financial plan."""
+    loading: bool
+    portfolio_blocked: bool
+    positions_blocked: bool
+    active_order_count: int
+
+    def __post_init__(self):
+        for name in ('loading', 'portfolio_blocked', 'positions_blocked'):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f'{name} must be bool')
+        if (isinstance(self.active_order_count, bool)
+                or not isinstance(self.active_order_count, int) or self.active_order_count < 0):
+            raise ValueError('active_order_count must be a nonnegative integer')
+
+    @property
+    def ready(self) -> bool:
+        """All explicit blockers must be clear before planning can begin."""
+        return not (self.loading or self.portfolio_blocked or self.positions_blocked
+                    or self.active_order_count)
+
+
+@dataclass(frozen=True, slots=True)
 class ActiveOrder:
     """An outstanding order without SDK enums or monetary estimates."""
     order_id: str
@@ -53,6 +76,9 @@ class ExecutionDataError(Exception):
 
 class ExecutionData(Protocol):
     """Account-dependent reads only; never submits or cancels orders."""
+
+    def get_readiness(self, account_id: str, *, timeout: float) -> AccountReadiness:
+        """Read blockers only, within one positive finite timeout for all reads."""
 
     def get_destination(self, account_id: str, *,
                         valuation: 'Valuation | None' = None) -> ExecutionSnapshot:

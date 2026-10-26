@@ -1,14 +1,17 @@
 """Neutral orchestration of fresh strategy checks and finite execution passes."""
 from dataclasses import replace
 from decimal import Decimal
+from time import monotonic, sleep
 
 from autorepeater.execution import (
     ExecutionReceipt, OrderExecutionError, OrderExecutor, execute_plan,
 )
-from autorepeater.execution_data import ExecutionData, ExecutionDataError, ExecutionSnapshot
+from autorepeater.execution_data import (
+    AccountReadiness, ExecutionData, ExecutionDataError, ExecutionSnapshot,
+)
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.logging_config import logger
-from autorepeater.order_plan import build_order_plan
+from autorepeater.order_plan import build_order_plan, ready
 from autorepeater.purchase_plan import nodes
 from autorepeater.strategy_allocation import build_marks, recovered_capital
 from autorepeater.strategy_contract import Strategy, validate_event_accounts, validate_strategy
@@ -16,6 +19,13 @@ from autorepeater.strategy_data import DataAccessError, InstrumentType, Portfoli
 from autorepeater.strategy_plan import StrategyContext, StrategyPlan, exact_sum, validate_plan
 from autorepeater.valuation import Valuation
 from autorepeater import reporting
+
+READINESS_TIMEOUT = 30
+READINESS_RETRY_INTERVAL = 5
+
+
+class AccountNotReadyError(Exception):
+    """Confirmed account blockers stopped this pass, independently of transport errors."""
 
 
 def plan_ownership(plan: StrategyPlan) -> dict[tuple[int, ...], dict[str, Decimal]]:
@@ -82,22 +92,60 @@ class AutoRepeater:
         validate_plan(plan, context)
         return replace(plan, unassigned={**plan.unassigned, **unassigned}), marks
 
+    def _wait_for_readiness(self, dst_account_id: str) -> None:
+        started = monotonic()
+        deadline = started + READINESS_TIMEOUT
+        next_check = started
+        last = None
+        while (now := monotonic()) < deadline:
+            if now < next_check:
+                sleep(min(next_check, deadline) - now)
+                continue
+            last = self.execution_data.get_readiness(dst_account_id, timeout=deadline - now)
+            if not isinstance(last, AccountReadiness):
+                raise ValueError('readiness must be AccountReadiness')
+            now = monotonic()
+            if last.ready and now <= deadline:
+                return
+            # Skip elapsed slots, including one occupied by a slow read.
+            next_check = started + ((now - started) // READINESS_RETRY_INTERVAL + 1) * (
+                READINESS_RETRY_INTERVAL)
+        if last is None:
+            raise ExecutionDataError('readiness read deadline expired') from TimeoutError(
+                'readiness read deadline expired')
+        raise AccountNotReadyError(
+            f'account not ready within {READINESS_TIMEOUT} seconds: '
+            f'loading={last.loading} portfolio_blocked={last.portfolio_blocked} '
+            f'positions_blocked={last.positions_blocked} '
+            f'active_order_count={last.active_order_count}')
+
+    def _load_destination(self, dst_account_id: str,
+                          valuation: Valuation | None) -> ExecutionSnapshot:
+        destination = (self.execution_data.get_destination(dst_account_id)
+                       if valuation is None else self.execution_data.get_destination(
+                           dst_account_id, valuation=valuation))
+        if valuation is not None and destination.fx_snapshot is not valuation.fx:
+            raise ValueError('destination must share the pass FX snapshot')
+        if not ready(destination):
+            raise AccountNotReadyError('account became not ready after preflight')
+        return destination
+
     def sync_accounts(self, dst_account_id: str, *,
                       valuation: Valuation | None = None) -> tuple[ExecutionReceipt, ...]:
         """Validate every main target before reading rules or sending any order."""
         try:
+            self._wait_for_readiness(dst_account_id)
             self.data.begin_snapshot()
             if valuation is None and self.market is not None:
                 valuation = self.market.valuation()
             if valuation is not None:
                 valuation.begin_pass()
+            destination = self._load_destination(dst_account_id, valuation)
             data = self.data if valuation is None else valuation.strategy_data(self.data)
             snapshot = self.strategy.load_snapshot(data)
-            destination = (self.execution_data.get_destination(dst_account_id)
-                           if valuation is None else self.execution_data.get_destination(
-                               dst_account_id, valuation=valuation))
-            if valuation is not None and destination.fx_snapshot is not valuation.fx:
-                raise ValueError('destination must share the pass FX snapshot')
+            if valuation is not None:
+                # Source discovery extends the same rates without revaluing the destination.
+                destination = replace(destination, fx_snapshot=valuation.fx)
             plan, marks = self._build_strategy_plan(snapshot, destination)
             uids = sorted(set(destination.quantities) | {
                 uid for node in nodes(plan) for uid in node.target.quantities})
@@ -127,22 +175,44 @@ class AutoRepeater:
     def _local_pass(self, dst: str) -> None:
         try:
             self.sync_accounts(dst)
-        except (DataAccessError, ExecutionDataError, OrderExecutionError) as error:
+        except (AccountNotReadyError, DataAccessError, ExecutionDataError,
+                OrderExecutionError) as error:
             logger.error('Current pass stopped for destination %s: %s', dst, error)
 
+    def _handle_position_event(self, event, dst: str) -> None:
+        triggered = self.strategy.should_rebalance(event, dst)
+        if not isinstance(triggered, bool):
+            raise ValueError('strategy should_rebalance must return bool')
+        if triggered:
+            self._local_pass(dst)
+        else:
+            reporting.print_skipped_strategy_event(event)
+
     def mainflow(self, dst: str) -> None:
-        """Initial pass and events only; a submission stop does not end the stream."""
+        """Reconcile after stream loss; healthy subscriptions remain event-driven."""
         self._local_pass(dst)
+        delay = 1
         while True:
+            accounts = validate_event_accounts(self.strategy.event_accounts(dst))
             try:
-                accounts = validate_event_accounts(self.strategy.event_accounts(dst))
-                for event in self.data.position_events(accounts):
-                    triggered = self.strategy.should_rebalance(event, dst)
-                    if not isinstance(triggered, bool):
-                        raise ValueError('strategy should_rebalance must return bool')
-                    if triggered:
-                        self._local_pass(dst)
-                    else:
-                        reporting.print_skipped_strategy_event(event)
-            except DataAccessError as error:
-                logger.error('Position stream stopped for destination %s: %s', dst, error)
+                events = iter(self.data.position_events(accounts))
+            except DataAccessError:
+                logger.error('Position stream stopped for destination %s', dst)
+            else:
+                subscribed = monotonic()
+                while True:
+                    try:
+                        event = next(events)
+                    except StopIteration:
+                        logger.warning('Position stream ended for destination %s', dst)
+                        break
+                    except DataAccessError:
+                        logger.error('Position stream stopped for destination %s', dst)
+                        break
+                    if event.has_position and monotonic() - subscribed >= 60:
+                        delay = 1
+                    self._handle_position_event(event, dst)
+            logger.warning('Position stream reconnect for destination %s in %s seconds', dst, delay)
+            sleep(delay)
+            self._local_pass(dst)
+            delay = min(delay * 2, 30)
