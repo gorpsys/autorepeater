@@ -55,6 +55,17 @@ MANIFEST_FIELDS = {'schema_version', 'name', 'version', 'filename', 'size', 'sha
                    'official_hash_verified', 'approvals'}
 APPROVAL_FIELDS = {'version', 'reserve_sha256', 'index_sha256', 'approved_by',
                    'approved_at_utc', 'evidence'}
+# Exact diagnostics only: arbitrary exception strings never cross worker boundaries.
+SAFE_WORKER_ERRORS = frozenset({
+    'invalid SDK TLS', 'invalid SDK transport', 'invalid SDK HTTP status',
+    'invalid SDK response URL', 'invalid SDK response size', 'invalid SDK official URL',
+    'invalid SDK index media type', 'invalid SDK index format', 'invalid SDK index document',
+    'invalid SDK index filename', 'invalid SDK index wheel', 'invalid SDK ambiguous index wheel',
+    'invalid SDK wheel size', 'invalid SDK wheel hash', 'invalid SDK wheel structure',
+    'invalid SDK metadata format', 'invalid SDK metadata identity',
+    'invalid SDK license hash/size', 'invalid SDK local files',
+    'invalid SDK worker result', 'invalid SDK worker phase',
+})
 
 
 class WheelError(ValueError):
@@ -603,6 +614,9 @@ def _worker_error(value: object) -> None:
         record = _record(value, {'error'}, 'worker error')
         if record['error'] == 'approval_required':
             raise WheelError('SDK approval_required')
+        reason = record['error']
+        if isinstance(reason, str) and reason in SAFE_WORKER_ERRORS:
+            raise WheelError(reason)
         raise WheelError('invalid SDK acquisition worker')
 
 
@@ -724,6 +738,9 @@ def worker_main() -> None:
     except AvailabilityError as error:
         value = {'availability': error.reason.value}
     except (WheelError, sdk_worker.WorkerError) as error:
-        value = {'error': 'approval_required' if str(error) == 'SDK approval_required'
-                 else 'validation_failed'}
+        reason = str(error)
+        if reason not in SAFE_WORKER_ERRORS:
+            reason = ('approval_required' if reason == 'SDK approval_required'
+                      else 'validation_failed')
+        value = {'error': reason}
     print(json.dumps(value, separators=(',', ':')))
