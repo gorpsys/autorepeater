@@ -492,7 +492,7 @@ def assert_launch_execution(launch, streaming):
     sdk_client.return_value.__enter__.assert_called_once_with()
     sdk_client.return_value.__exit__.assert_called_once()
     adapter.assert_called_once_with(client)
-    count = 2 if streaming else 1
+    count = 3 if streaming else 1
     assert data.get_last_prices.call_args_list == [call(['uid'])] * count
     assert data.position_events.call_args_list == ([call(('dst',))] * 2 if streaming else [])
     assert client.users.get_accounts.call_args_list == ([call()] if streaming else [])

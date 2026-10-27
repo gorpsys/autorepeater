@@ -15,6 +15,8 @@ from autorepeater.strategy_data import InstrumentType, PortfolioEntry, Portfolio
 from autorepeater.tinvest_fx_data import TInvestFxData
 from autorepeater.tinvest_security_data import TInvestSecurityData
 from autorepeater.valuation import Valuation
+from scripts.sandbox_lifecycle import SandboxFailure, safe_call
+from scripts.sandbox_retry_report import stale_book_facts
 
 D = Decimal
 NOW = datetime(2026, 10, 15, tzinfo=timezone.utc)
@@ -82,6 +84,20 @@ def test_stale_or_unknown_security_book_rejected(reads, timestamp):
     client.market_data.get_order_book.return_value.orderbook_ts = timestamp
     with pytest.raises(ValueError):
         data.get_security_quote('uid')
+
+
+def test_safe_call_preserves_real_security_stale_guard_facts(reads):
+    """The live failure's actual adapter traceback survives the neutral setup wrapper."""
+    client, data = reads
+    stamp = NOW - timedelta(seconds=181, microseconds=602310)
+    client.market_data.get_order_book.return_value.orderbook_ts = stamp
+    with pytest.raises(SandboxFailure) as caught:
+        safe_call(data.get_security_quote, uid='uid')
+    assert stale_book_facts(caught.value) == {
+        'reason': 'market_time_stale', 'expected_uid': 'uid', 'received_uid': 'uid',
+        'market_time': stamp.isoformat(), 'observed_utc': NOW.isoformat(),
+        'freshness_limit_seconds': 180}
+    client.market_data.get_order_book.assert_called_once_with(instrument_id='uid', depth=1)
 
 
 @pytest.mark.parametrize('ahead', [timedelta(microseconds=1), timedelta(milliseconds=50),

@@ -114,7 +114,7 @@ def test_permissions_concurrency_and_cloud_parameters_match_original(workflows):
         'contents': 'read', 'checks': 'read', 'statuses': 'read'}
     assert reserve['jobs']['deploy']['env'] == original['jobs']['deploy']['env']
     assert reserve['jobs']['deploy']['env']['FUNCTION_MEMORY'] == '256MB'
-    assert reserve['jobs']['deploy']['env']['FUNCTION_TIMEOUT'] == '60s'
+    assert reserve['jobs']['deploy']['env']['FUNCTION_TIMEOUT'] == '90s'
 
 
 def test_both_workflows_pin_the_same_existing_function_id(workflows):

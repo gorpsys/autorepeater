@@ -13,7 +13,7 @@
 | *_config.py, config_catalog.py, strategies.py | [Подготовка и конфиги](contracts.md#подготовка-и-конфиги) | [H02–H05](history.md#конфигурация-и-стратегии) |
 | *_strategy.py, strategy_contract.py, strategy_data.py, адаптеры | [Контракт и слои](contracts.md#контракт-и-слои), [SDK-преобразования](../execution-adapter.md) | [H06–H07](history.md#конфигурация-и-стратегии) |
 | strategy_budget/allocation/plan, order_plan, purchase_plan, money | [Финансовые правила](contracts.md#финансовые-правила) | [H08–H11, H17](history.md#деньги-и-исполнение) |
-| execution, order_execution, execution_data, repeater, runner | [Исполнение, ошибки и события](contracts.md#исполнение-ошибки-и-события) | [H12–H16](history.md#деньги-и-исполнение) |
+| execution, order_execution, execution_data, repeater, runner | [Исполнение, ошибки и события](contracts.md#исполнение-ошибки-и-события) | [H12–H16](history.md#деньги-и-исполнение), [H42](history.md#разработка-и-приёмка) |
 | Тесты, Make, типизация, облачный архив, runtime lock и vendor | [Разработка и проверки](development.md), [источники и резерв](../../scripts/README.md#источники-и-резерв), [сборка](../../scripts/README.md#сборка-облачного-архива) | [H23–H24, H29–H32](history.md#разработка-и-приёмка) |
 | test/e2e, sandbox helpers, E2E workflows | [Live E2E](sandbox.md), [локальные команды](../../scripts/README.md#песочница-локально), [GitHub](../../scripts/README.md#песочница-в-github) | [H26–H28](history.md#разработка-и-приёмка) |
 | deploy helpers, deploy-prod.yml и deploy-prod-reserve.yml | [Контракт деплоя](deployment.md), [процедура](../../scripts/README.md#production-деплой) | [H18–H22, H33](history.md#деплой) |
@@ -27,7 +27,7 @@
 технические команды и workflow. Исторические таблицы и снимки объясняют
 прежние решения и не являются самостоятельной спецификацией runtime.
 
-[История находок](history.md) содержит индекс H01–H41 и порядок добавления записей.
+[История находок](history.md) содержит индекс H01–H42 и порядок добавления записей.
 [Снимок инструкций от 2026-10-10](history/2026-10-10-guidance.md) сохраняет
 исходный текст для проверки переноса; он не загружается как AGENTS.md.
 

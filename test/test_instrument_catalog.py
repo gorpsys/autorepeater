@@ -10,7 +10,9 @@ from t_tech import invest
 from t_tech.invest.services import InstrumentsService, MarketDataService
 
 from autorepeater import strategies
-from autorepeater.execution_data import ExecutionData, ExecutionSnapshot, TradeRules
+from autorepeater.execution_data import (
+    AccountReadiness, ExecutionData, ExecutionSnapshot, TradeRules,
+)
 from autorepeater.repeater import AutoRepeater
 from autorepeater.strategy_data import DataAccessError, PortfolioSnapshot
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
@@ -73,6 +75,7 @@ def test_cloud_composite_avoids_per_instrument_quota(catalog_client):
     configure_catalog(catalog_client, strategy)
     data = TInvestStrategyData(catalog_client)
     reads = create_autospec(ExecutionData, instance=True, spec_set=True)
+    reads.get_readiness.return_value = AccountReadiness(False, False, False, 0)
     reads.get_destination.return_value = ExecutionSnapshot(
         PortfolioSnapshot(()), Decimal(154000), {}, {}, {'rub': Decimal(154000)}, {}, (), True)
     reads.get_trade_rules.side_effect = lambda account_id, uids: {

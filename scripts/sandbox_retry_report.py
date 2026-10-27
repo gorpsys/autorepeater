@@ -76,7 +76,9 @@ def stale_book_facts(error: BaseException | None) -> dict[str, object] | None:
             return _stale_validation_facts(error)
         if type(error) not in KNOWN_ERRORS or isinstance(error, RequestError):
             return None
-        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+        # safe_call hides SDK text, but its original guard remains available in memory.
+        suppressed = error.__suppress_context__ and error.__class__ is not SandboxFailure
+        error = error.__cause__ or (None if suppressed else error.__context__)
     return None
 
 
@@ -93,7 +95,8 @@ def auth_failure(error: BaseException | None) -> bool:
                 fact.get('grpc_status') in ('UNAUTHENTICATED', 'PERMISSION_DENIED')
                 for fact in error.api_facts[:8])):
             return True
-        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+        suppressed = error.__suppress_context__ and error.__class__ is not SandboxFailure
+        error = error.__cause__ or (None if suppressed else error.__context__)
     return error is not None
 
 

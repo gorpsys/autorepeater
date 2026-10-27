@@ -191,7 +191,7 @@ def test_sandbox_wiring_finite_public_sync(wiring, source_id):
         current_price=sdk.MoneyValue(currency='rub', units=1, nano=0),
         blocked=False, blocked_lots=sdk.Quotation(units=0, nano=0))])
     # Exhaustion detects any additional orchestration pass or unplanned read.
-    services.operations.get_portfolio.side_effect = [source, destination]
+    services.operations.get_portfolio.side_effect = [destination, destination, source]
     services.operations.get_positions.return_value = sdk.PositionsResponse(
         money=[sdk.MoneyValue(currency='rub', units=100, nano=0)], blocked=[],
         securities=[], futures=[], options=[], limits_loading_in_progress=False)
@@ -221,11 +221,12 @@ def test_sandbox_wiring_finite_public_sync(wiring, source_id):
     wiring.production.assert_not_called()
     wiring.report.assert_not_called()
     assert services.operations.mock_calls == [
-        call.get_portfolio(account_id=source_id), call.get_portfolio(account_id='dst'),
-        call.get_positions(account_id='dst')]
+        call.get_positions(account_id='dst'), call.get_portfolio(account_id='dst'),
+        call.get_portfolio(account_id='dst'), call.get_positions(account_id='dst'),
+        call.get_portfolio(account_id=source_id)]
     assert services.instruments.mock_calls == [
-        call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid'),
         call.currency_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='cash'),
+        call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid'),
         call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid'),
         call.get_instrument_by(id_type=sdk.InstrumentIdType.INSTRUMENT_ID_TYPE_UID, id='uid')]
     assert services.market_data.mock_calls == [
@@ -233,6 +234,7 @@ def test_sandbox_wiring_finite_public_sync(wiring, source_id):
         call.get_trading_status(instrument_id='uid'),
         call.get_order_book(instrument_id='uid', depth=1)]
     assert services.orders.mock_calls == [
+        call.get_orders(account_id='dst'),
         call.get_orders(account_id='dst'),
         call.get_max_lots(request=ANY),
         call.post_order(account_id='dst', instrument_id='uid', quantity=9,

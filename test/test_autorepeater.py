@@ -71,7 +71,7 @@ from autorepeater.portfolio import get_portfolio
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.portfolio import validate_target
 from autorepeater.repeater import AutoRepeater
-from autorepeater.execution_data import ExecutionData
+from autorepeater.execution_data import AccountReadiness, ExecutionData, ExecutionSnapshot
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.tinvest_execution_data import TInvestExecutionData
 from autorepeater.reporting import GetInstrumentException
@@ -872,8 +872,12 @@ def test_mainflow_consumes_events_lazily_and_reports_each_skip_once(target_strat
     engine = AutoRepeater(
         target_strategy, data, create_autospec(ExecutionData, instance=True), Mock())
     with patch.object(engine, 'sync_accounts', autospec=True) as sync, \
+            patch('autorepeater.repeater.sleep', autospec=True, spec_set=True) as pause, \
+            patch('autorepeater.repeater.monotonic', autospec=True, spec_set=True,
+                  return_value=0), \
             patch.object(reporting, 'print_skipped_strategy_event', autospec=True) as skipped:
         timeline.attach_mock(sync, 'sync')
+        timeline.attach_mock(pause, 'pause')
         with pytest.raises(TestException):
             engine.mainflow('5')
     assert timeline.mock_calls == [
@@ -881,6 +885,7 @@ def test_mainflow_consumes_events_lazily_and_reports_each_skip_once(target_strat
         call.data.position_events(('00123', '5')),
         call.strategy.should_rebalance(events[0], '5'),
         call.strategy.should_rebalance(events[1], '5'), call.sync('5'),
+        call.pause(1), call.sync('5'),
         call.strategy.event_accounts('5'), call.data.position_events(('00123', '5')),
     ]
     skipped.assert_called_once_with(events[0])
@@ -910,7 +915,7 @@ def test_mainflow_event_method_value_error_is_not_retried(target_strategy, failu
 @pytest.mark.parametrize('error_type', [DataAccessError])
 def test_common_event_stream_recovers_transport_failures(
         client, target_strategy, failure, error_type, caplog):
-    """The consumer recovers both transport error types at each stream/sync boundary."""
+    """Stream failures reconcile after a pause; pass failures keep consuming events."""
     data = create_autospec(StrategyData, instance=True, spec_set=True)
     event = PositionEvent(True, '5', (), (), 'ready')
     error = (RequestError(StatusCode.UNAVAILABLE, 'common stream failed', ())
@@ -924,15 +929,20 @@ def test_common_event_stream_recovers_transport_failures(
                     'event_sync': iter((event, event)), 'end': iter(())}[failure]
     data.position_events.side_effect = [first_stream, iter((event,)), TestException()]
     target_strategy.should_rebalance.side_effect = lambda incoming, _dst: incoming.has_position
-    results = ([error, None] if failure == 'initial_sync' else
-               [None, error, None, None] if failure == 'event_sync' else [None, None])
+    results = ([error, None, None, None] if failure == 'initial_sync' else
+               [None, error, None, None, None, None] if failure == 'event_sync'
+               else [None] * 4)
     engine = AutoRepeater(
         target_strategy, data, create_autospec(ExecutionData, instance=True), Mock())
     with patch.object(engine, 'sync_accounts', autospec=True, side_effect=results) as sync, \
+            patch('autorepeater.repeater.sleep', autospec=True, spec_set=True) as pause, \
+            patch('autorepeater.repeater.monotonic', autospec=True, spec_set=True,
+                  return_value=0), \
             caplog.at_level(logging.ERROR, logger=logging_config.LOGGER_NAME), \
             pytest.raises(TestException):
         engine.mainflow('5')
     assert sync.call_args_list == [call('5')] * len(results)
+    assert pause.call_args_list == [call(1), call(2)]
     assert data.position_events.call_args_list == [call(('5',))] * 3
     assert target_strategy.event_accounts.call_args_list == [call('5')] * 3
     expected_events = ([PositionEvent(False, '', (), (), 'ping'), event] if failure == 'read'
@@ -941,7 +951,9 @@ def test_common_event_stream_recovers_transport_failures(
         call(incoming, '5') for incoming in expected_events]
     if failure == 'event_sync':
         assert not list(first_stream)
-    if failure == 'end':
+    if failure in ('open', 'read'):
+        assert caplog.messages == ['Position stream stopped for destination 5']
+    elif failure == 'end':
         assert not caplog.messages
     else:
         assert any(str(error) in message for message in caplog.messages)
@@ -2158,11 +2170,17 @@ def test_configured_index_entrypoints(configured_indexes, monkeypatch, entrypoin
     monkeypatch.setenv('ALGORITM', 'INDEX')
     monkeypatch.setenv('DST_ACCOUNT', '5')
     monkeypatch.setattr(sys, 'argv', ['main.py', '--algoritm', 'INDEX', '-s', name, '-d', '5'])
+    execution = create_autospec(ExecutionData, instance=True, spec_set=True)
+    execution.get_readiness.return_value = AccountReadiness(False, False, False, 0)
+    execution.get_destination.return_value = ExecutionSnapshot(
+        PortfolioSnapshot(()), Decimal(100), {}, {}, {'rub': Decimal(100)}, {}, (), True)
     with patch.object(IndexStrategy, 'load_snapshot', autospec=True,
                       side_effect=TestException()) as snapshot, \
             patch.object(runner_module, 'Client', autospec=True) as sdk_client, \
             patch.object(runner_module, 'TInvestStrategyData',
                          autospec=True) as data_class, \
+            patch.object(runner_module, 'TInvestExecutionData', autospec=True,
+                         return_value=execution), \
             patch.object(runner_module, 'print_all_portfolio', autospec=True), \
             patch.object(runner_module, 'configure_local_logging', autospec=True), \
             patch.object(serverless, 'configure_yc_logging', autospec=True):

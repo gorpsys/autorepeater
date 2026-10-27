@@ -1,5 +1,6 @@
 """The real sync gRPC interceptor bounds unary calls before their first attempt."""
 from collections import namedtuple
+from contextvars import Context, copy_context
 from unittest.mock import Mock
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import grpc
 import pytest
 
 from autorepeater.grpc_deadline import UnaryDeadlineInterceptor
+from autorepeater import grpc_deadline
 from autorepeater import runner as runner_module
 from autorepeater.strategy_contract import PreparedStrategy
 from scripts import check_imoex_strategy as calibration
@@ -108,3 +110,124 @@ def test_actual_grpc_channel_applies_timeout_and_leaves_stream_alone(stream_time
     assert list(intercepted.unary_stream('/service/stream')(
         'request', timeout=stream_timeout)) == ['event']
     channel.unary_stream.return_value.assert_called_once_with('request', timeout=stream_timeout)
+
+
+@pytest.mark.parametrize('timeout', [None, True, False, 0, -1, float('nan'),
+                                     float('inf'), '30'])
+def test_invalid_read_budget_does_not_install_scope(timeout):
+    """Reject invalid durations before installing a deadline in this context."""
+    with pytest.raises(ValueError, match='timeout'):
+        with grpc_deadline.read_deadline(timeout):
+            pytest.fail('invalid budget entered')
+    assert grpc_deadline.remaining_read_timeout() is None
+
+
+@pytest.mark.parametrize('default,explicit,remaining,expected', [
+    (10, None, 30, 10), (10, 2, 4, 2), (10, 30, 4, 4),
+    (3, None, 4, 3), (10, 0, 4, 0),
+])
+def test_scoped_timeout_uses_smallest_limit(monkeypatch, default, explicit, remaining, expected):
+    """A scope only tightens existing default and explicit unary deadlines."""
+    now = [100.0]
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: now[0], raising=False)
+    details = Details('/service/read', explicit, (('key', 'value'),), object(),
+                      True, grpc.Compression.Gzip)
+    continuation = Mock(return_value='response')
+    with grpc_deadline.read_deadline(30):
+        now[0] += 30 - remaining
+        assert UnaryDeadlineInterceptor(default).intercept_unary_unary(
+            continuation, details, 'request') == 'response'
+    forwarded = continuation.call_args.args[0]
+    assert forwarded.timeout == expected
+    assert tuple(forwarded)[0:1] + tuple(forwarded)[2:] == tuple(details)[0:1] + tuple(details)[2:]
+    continuation.assert_called_once_with(forwarded, 'request')
+
+
+def test_multiple_unary_reads_share_absolute_deadline(monkeypatch):
+    """Later RPCs receive only the remainder; no new RPC starts at exactly 30s."""
+    clock = iter([100, 100, 110, 129.5, 130])
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: next(clock), raising=False)
+    continuation = Mock(return_value='response')
+    interceptor = UnaryDeadlineInterceptor()
+    details = Details('/service/read', None, None, None, None, None)
+    with grpc_deadline.read_deadline(30):
+        for _ in range(3):
+            assert interceptor.intercept_unary_unary(continuation, details, None) == 'response'
+        with pytest.raises(TimeoutError, match='^SDK read deadline expired$') as raised:
+            interceptor.intercept_unary_unary(continuation, details, None)
+    assert raised.value.__cause__ is None
+    assert [item.args[0].timeout for item in continuation.call_args_list] == [10, 10, 0.5]
+    assert grpc_deadline.remaining_read_timeout() is None
+
+
+@pytest.mark.parametrize('failure', [RuntimeError, KeyboardInterrupt])
+def test_nested_deadlines_restore_parent_and_finally_clear_scope(monkeypatch, failure):
+    """A longer child cannot extend the parent, even when unwinding an exception."""
+    now = [100.0]
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: now[0], raising=False)
+    with pytest.raises(failure):
+        with grpc_deadline.read_deadline(30):
+            now[0] = 105
+            with grpc_deadline.read_deadline(100):
+                assert grpc_deadline.remaining_read_timeout() == 25
+            with pytest.raises(ValueError, match='inner failure'):
+                with grpc_deadline.read_deadline(2):
+                    now[0] = 106
+                    assert grpc_deadline.remaining_read_timeout() == 1
+                    raise ValueError('inner failure')
+            assert grpc_deadline.remaining_read_timeout() == 24
+            raise failure()
+    assert grpc_deadline.remaining_read_timeout() is None
+    with grpc_deadline.read_deadline(7):
+        assert grpc_deadline.remaining_read_timeout() == 7
+    assert grpc_deadline.remaining_read_timeout() is None
+
+
+def test_contexts_keep_deadlines_isolated(monkeypatch):
+    """A child context inherits its deadline but cannot change its parent's value."""
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: 100, raising=False)
+
+    def child():
+        assert grpc_deadline.remaining_read_timeout() == 30
+        with grpc_deadline.read_deadline(2):
+            assert grpc_deadline.remaining_read_timeout() == 2
+
+    with grpc_deadline.read_deadline(30):
+        copy_context().run(child)
+        assert Context().run(grpc_deadline.remaining_read_timeout) is None
+        assert grpc_deadline.remaining_read_timeout() == 30
+    assert grpc_deadline.remaining_read_timeout() is None
+
+
+def test_expired_parent_cannot_be_reopened_by_nested_scope(monkeypatch):
+    """A child cannot restart an exhausted budget."""
+    now = [100.0]
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: now[0], raising=False)
+    continuation = Mock()
+    with grpc_deadline.read_deadline(30):
+        now[0] = 131
+        with grpc_deadline.read_deadline(30):
+            with pytest.raises(TimeoutError, match='^SDK read deadline expired$'):
+                UnaryDeadlineInterceptor().intercept_unary_unary(
+                    continuation, Details('/s/read', None, None, None, None, None), None)
+    continuation.assert_not_called()
+
+
+def test_actual_grpc_channel_honors_scope_without_intercepting_streams(monkeypatch):
+    """An expired read scope stops unary transport but never bounds a stream."""
+    now = [100.0]
+    monkeypatch.setattr(grpc_deadline, 'monotonic', lambda: now[0], raising=False)
+    channel = Mock(spec=grpc.Channel)
+    channel.unary_unary.return_value.with_call.return_value = ('response', Mock(spec=grpc.Call))
+    channel.unary_stream.return_value.return_value = iter(['event'])
+    intercepted = grpc.intercept_channel(channel, UnaryDeadlineInterceptor())
+    unary = intercepted.unary_unary('/service/read')
+    with grpc_deadline.read_deadline(4):
+        assert unary.with_call('request')[0] == 'response'
+        assert channel.unary_unary.return_value.with_call.call_args.kwargs['timeout'] == 4
+        now[0] = 104
+        with pytest.raises(TimeoutError, match='^SDK read deadline expired$'):
+            unary.with_call('never')
+        assert list(intercepted.unary_stream('/service/stream')('request')) == ['event']
+    channel.unary_unary.return_value.with_call.assert_called_once()
+    channel.unary_stream.return_value.assert_called_once_with('request')

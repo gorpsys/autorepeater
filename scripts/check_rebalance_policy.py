@@ -9,6 +9,7 @@ from dataclasses import replace
 from decimal import Decimal
 import hashlib
 import json
+from math import isfinite
 from pathlib import Path
 import random
 from typing import Any
@@ -20,7 +21,7 @@ from autorepeater.composite_strategy import (
     CompositeSnapshot, CompositeStrategy, PreparedCompositeComponent, PreparedCompositeSource,
 )
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError, execute_plan
-from autorepeater.execution_data import ExecutionSnapshot, TradeRules
+from autorepeater.execution_data import AccountReadiness, ExecutionSnapshot, TradeRules
 from autorepeater.index_config import (
     AllocationDriftRange, IndexConfig, IndexInstrument, load_index_config,
 )
@@ -198,6 +199,13 @@ class ModelExecution:
         self.prices, self.lots, self.cash, self.rate = prices, lots, cash, rate
         self.orders = []
         self.receipts = {}
+
+    def get_readiness(self, _account_id: str, *, timeout: float) -> AccountReadiness:
+        """Model fills settle immediately and have no outstanding blocking state."""
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not isfinite(timeout) or timeout <= 0):
+            raise ValueError('read timeout must be positive and finite')
+        return AccountReadiness(False, False, False, 0)
 
     def get_destination(self, _account_id, *, valuation=None):
         """Ready model state; money and quotes are deterministic and unblocked."""

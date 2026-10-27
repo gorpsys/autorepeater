@@ -157,8 +157,9 @@ get_last_prices/position_events; свои DTO/enum, units+nano без округ
 PortfolioEntry сохраняет брокерские current_price/currency отдельно от
 native_price/settlement_currency и rub_price; mark выбирает rub_price,
 если он явно вычислен. Valuation передаёт один FxSnapshot всему дереву
-и назначению, читает один native midpoint на UID за проход. Начало прохода
-очищает локальные книги и проверяет свежесть FX. Получение native-книг
+и назначению, читает один native midpoint на UID за проход. После ready
+Valuation.begin_pass очищает локальные книги и проверяет свежесть FX. Readiness не
+создаёт FX-снимок и не наполняет кеш источников стратегии. Получение native-книг
 отделено от SDK-порта стратегий через SecurityData; TInvestSecurityData
 проверяет UID, единицы и возраст рыночного стакана до 180 секунд включительно.
 FX-котировки, preflight исполнения и диагностика используют тот же общий
@@ -167,7 +168,7 @@ ORDER_BOOK_MAX_AGE_SECONDS. Рыночный timestamp бумаг/FX может 
 большее опережение и неизвестное время отклоняются. Исходные timestamps и
 отрицательный возраст сохраняются без подмены. Допуск не применяется к receipt,
 source или времени заявок; порядок receipt относительно проверки остаётся строгим.
-Движок вызывает begin_snapshot перед каждым пересчётом. SDK-адаптер лениво
+Движок вызывает begin_snapshot после ready перед каждым пересчётом. SDK-адаптер лениво
 читает полные Shares/Etfs с INSTRUMENT_STATUS_ALL один раз за проход,
 использует порядок FindInstrument и полный api_trade_available_flag,
 кэширует метаданные UID только до следующего begin_snapshot. Неизвестный
@@ -176,7 +177,13 @@ source или времени заявок; порядок receipt относит
 по точному query внутри снимка, с исходным порядком и дубликатами кандидатов;
 каждый вызов получает отдельный список DTO. Пустой ответ и ошибка не кешируются.
 Цены, портфели, разрешения текущего статуса и собственные лимиты не кэшируются.
-ExecutionData: get_destination(account_id), get_trade_rules(account_id,uids);
+ExecutionData: get_readiness(account_id, *, timeout), get_destination(account_id),
+get_trade_rules(account_id,uids). AccountReadiness — frozen DTO: строгие bool
+loading/portfolio_blocked/positions_blocked и неотрицательный int без bool
+active_order_count; ready означает отсутствие всех четырёх препятствий.
+SDK читает GetPositions, GetOrders и блокировки GetPortfolio без финансовой
+оценки, источников стратегии, FX и GetMaxLots. Активны только NEW/PARTIALLYFILL;
+невалидные ответы не превращаются в not-ready.
 ExecutionSnapshot/TradeRules собственные деньги, позиции, caps и flags.
 SDK-преобразования подтверждены в [docs/execution-adapter.md](../execution-adapter.md).
 
@@ -328,6 +335,26 @@ FX и купленные UID не отправляются повторно. О�
 ## Исполнение, ошибки и события
 
 Готовность: нет active orders/loading/числовых/depository/exchange blockers.
+Перед загрузкой финансовых снимков и расчётом плана sync_accounts ожидает
+готовности назначения до 30s с проверками по слотам 5s от начала окна.
+Готовый счёт не ждёт; медленные чтения не догоняют пропущенные слоты.
+Единый monotonic deadline включает все readiness RPC, quota sleep/retry;
+timeout порта — оставшийся бюджет всего чтения, не каждого RPC. SDK scope
+ограничивает unary минимумом прежнего timeout и остатка, восстанавливается
+в finally и не затрагивает stream. После deadline новые RPC не начинаются.
+До ready нет снимков стратегии/FX, расчёта плана, торговых правил и заявок;
+статическая подготовка конфига по-прежнему выполняется до Client.
+Первый корректный ready завершает scope: begin_snapshot, FX и полные
+финансовые чтения выполняются заново с прежними unary/quota правилами,
+без общего ограничения 30s. Полный снимок назначения снова not-ready даёт
+AccountNotReadyError('account became not ready after preflight') до плана,
+без нового окна/reload-loop и без сообщения об истечении 30s.
+Постоянный корректный not-ready даёт AccountNotReadyError после окна.
+Ошибка чтения остаётся ExecutionDataError с cause: локальное исчерпание
+сохраняет TimeoutError, quota — исходный RESOURCE_EXHAUSTED. Ни фиктивного
+DEADLINE_EXCEEDED, ни нового retry INTERNAL/DEADLINE_EXCEEDED нет.
+_local_pass логирует эти ошибки и останавливает только текущий проход;
+run_sync/handler пробрасывают их без Success.
 Доступность API/BESTPRICE по полным данным/статусу и own GetMaxLots,
 без NORMAL_TRADING-only. Рублёвое исполнение, не неявный FX=1.
 Не использовать недоказанную money-blocked/balance/total_order_amount
@@ -366,7 +393,8 @@ Deadline/прочие ошибки не повторяются. Общий та�
 После всех SELL FILL отдельно ожидать readiness и совпадения фиксированного
 владения с позициями: чтение каждые 2s в окне 30s, затем WARNING и отложенный BUY.
 Это не доказательство полного поступления выручки; own money/caps обязательны.
-Окна не прерывают текущий RPC/квотный retry; общий таймаут облака учитывает ожидания.
+Окна исполнения/settlement 30s/2s не прерывают текущий RPC/квотный retry;
+они не используют начальный readiness scope. Общий таймаут облака учитывает ожидания.
 INFO: этап, loading, конкретные блокировки, active order_id/UID/status/лоты,
 expected/actual quantities, отправка/подтверждение сделки и итоговые числа SELL/BUY.
 Только загруженные поля, без токенов/raw DTO/дополнительных запросов ради логов.
@@ -402,7 +430,14 @@ Cause не гарантирует очистки стороннего traceback;
 из issue #16 не входит в этот контракт.
 Event_accounts непустой tuple уникальных непустых строк без пробелов;
 should_rebalance строго bool, это инициатор проверки, не разрешение сделки.
-Начальная синхронизация до подписки, одно position_events, повтор после конца/
-транспортного сбоя. COMPOSITE вызывает всех детей без short-circuit.
+Начальная синхронизация до подписки, одно position_events. После EOF или
+DataAccessError открытия/чтения потока: пауза, свежий _local_pass, новая подписка.
+Defaults пауз: 1/2/4/8/16/30s с потолком 30s. Сброс только при реальном
+позиционном событии в подписке возрастом >=60s; service events/EOF не сбрасывают.
+Свежий проход не требует следующего события и не повторяет старый intent.
+ValueError и сигналы остановки не перехватываются этим циклом.
+COMPOSITE вызывает всех детей без short-circuit.
 Непустой dst: все money/security blockers проверяются.
 Таймера цен CLI нет; внешний облачный таймер остаётся.
+Snapshot+subscribe не атомарны; порт не имеет курсора/replay, гарантии доставки
+каждого события и exactly-once нет.

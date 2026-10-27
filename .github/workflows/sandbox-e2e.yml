@@ -16,6 +16,7 @@ on:
         options:
           - retry-v2
           - retry-v3
+          - retry-v4
   push:
     branches: [master]
 
@@ -114,6 +115,7 @@ jobs:
         timeout-minutes: 6
         run: make setup
       - name: Collect the full suite of the exact tested SHA without live fixtures
+        if: ${{ needs.prepare.outputs.evidence_protocol != 'retry-v4' }}
         timeout-minutes: 1
         run: .venv/bin/python -m scripts.sandbox_collection --sha "$E2E_TESTED_SHA" --output sandbox-results/collection.json
       - name: Run all real sandbox scenarios

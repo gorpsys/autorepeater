@@ -132,7 +132,8 @@ def test_nested_tree_launches_through_actual_engine(execution, monkeypatch, entr
         result = invoke()
     if entrypoint in ('query', 'environment'):
         assert result['body'] == 'Success sync, ROOT dst!'
-    count = 2 if streaming else 1
+    # Initial pass, position event, then fresh reconciliation after EOF.
+    count = 3 if streaming else 1
     assert client.orders.post_order.call_args_list == expected_orders(include_buys=streaming)
     assert any('Defer scoped purchases' in message for message in caplog.messages)
     assert client.operations.get_positions.call_count >= count
@@ -329,7 +330,7 @@ def test_single_stream_recovery_uses_same_tree(execution, failure):
         if failure == 'execution' else expected_orders())
     assert [item for item in data.get_portfolio.call_args_list
             if item.args == ('00123',)] == [call('00123')] * (
-        3 if failure in ('recalc', 'execution') else 2)
+        5 if failure in ('recalc', 'execution') else 4)
     prepare.assert_called_once()
     create.assert_called_once()
 

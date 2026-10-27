@@ -394,6 +394,13 @@ V1/v2 сохраняют прежние поля и поведение. Новы
 
 `sandbox_collection.py` фиксирует полный набор без исполнения fixtures;
 
+Для перехода к PR #47 доверенный dispatcher дополнительно принимает
+`evidence_protocol=retry-v4`. В этом режиме collect-only шаг не запускается;
+первый pytest определяет непустой набор, а verifier из master требует успеха
+каждого сценария и проверяет исходные результаты, SHA и очистку. Общий лимит
+запуска — 3600 секунд. Producer и default v3 пока не меняются; #47 завершает
+переход и удаляет старые форматы.
+
 `sandbox_github.py` реализует GitHub-обвязку;
 `sandbox_lifecycle.py` управляет жизненным циклом счетов;
 `sandbox_evidence.py` и `sandbox_retry_evidence.py` проверяют отчёты
@@ -563,12 +570,20 @@ E2E на коммите, отправленном в master, либо вручн
 | Folder ID | `b1gdgrp5bnth11phova8` |
 | Function ID (`FUNCTION_ID`) | `d4e6d0l53hkivgrmfano` |
 | Runtime / entrypoint | `python312` / `handler.handler` |
-| Память / тайм-аут | 256 МБ / 60 секунд |
+| Память / тайм-аут новой версии | 256 МБ / 90 секунд |
 | Runtime SA | `ajelpbq7as5bpe499962` |
 | Бакет | `autorepeater-deploy` |
 | Lockbox secret / version / key | `e6qc2ghhip6925lllhm7` / `e6qqshm7lkthgotpdqf6` / `t_token` |
 
 Источник ID — [read-only проверка метаданных от 2026-10-16](../docs/history/versioning.md#выбор-функции-по-id-pr-39).
+
+Обычный и резервный workflow задают `FUNCTION_TIMEOUT=90s`; строгая проверка
+settings требует это значение. К прежним 60 секундам добавлено начальное
+окно readiness 30s/5s, которое заканчивается при ready. Финансовые чтения
+после ready сохраняют прежние unary/quota правила; settlement остаётся 30s/2s.
+Unit-тесты проверяют переход существующей версии 60s -> новой 90s и её
+read-only проверку, сохраняя память и ID. Деплой и live-приёмка этих изменений
+ещё не выполнены; активные 90 секунд в облаке не подтверждены.
 
 Архив загружается под уникальным ключом SHA/run ID/attempt;
 SHA-256 проверяется при создании версии. Оба workflow используют общую очередь
