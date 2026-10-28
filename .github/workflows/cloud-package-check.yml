@@ -1,4 +1,4 @@
-name: Cloud package check
+name: Temporary CNY liquidity research
 
 on:
   workflow_dispatch:
@@ -7,21 +7,56 @@ permissions:
   contents: read
 
 jobs:
-  package-smoke:
-    name: Cloud package smoke
+  market-research:
+    name: Read sandbox CNY market data
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
     - uses: actions/checkout@v4
       with:
         ref: ${{ github.sha }}
         persist-credentials: false
     - name: Set up Python 3.12
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - name: Network package smoke
-      timeout-minutes: 20
+    - name: Inventory CNY settlement instruments
       env:
-        CLOUD_PACKAGE_SHA: ${{ github.sha }}
-      run: make check-cloud-package
+        SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+      run: >-
+        python scripts/research_cny_liquidity.py --phase inventory
+        --output cny-research/inventory.json
+    - name: Preserve initial inventory
+      uses: actions/upload-artifact@v4
+      with:
+        name: cny-inventory-${{ github.run_id }}
+        path: cny-research/inventory.json
+        retention-days: 7
+    - name: Screen trading permissions and five-level books
+      timeout-minutes: 12
+      env:
+        SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+      run: >-
+        python scripts/research_cny_liquidity.py --phase screen
+        --inventory cny-research/inventory.json --output cny-research/screen.json
+    - name: Preserve screened candidates
+      uses: actions/upload-artifact@v4
+      with:
+        name: cny-screen-${{ github.run_id }}
+        path: cny-research/*.json
+        retention-days: 7
+    - name: Observe shortlist for fifteen minutes
+      timeout-minutes: 18
+      env:
+        SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+      run: >-
+        python scripts/research_cny_liquidity.py --phase sample
+        --inventory cny-research/screen.shortlist.json
+        --output cny-research/observations.jsonl --seconds 900 --interval 10
+    - name: Preserve all research data, including partial observations
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: cny-research-${{ github.run_id }}
+        path: cny-research/
+        retention-days: 7
