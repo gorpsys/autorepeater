@@ -3,14 +3,20 @@ name: Temporary SDK TLS inspection
 on:
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   inspect-tls:
     name: Inspect public SDK TLS
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
+    - name: Checkout the exact SDK restoration commit
+      uses: actions/checkout@v4
+      with:
+        ref: 2e6ebeb2dfed283e88d0fe8498544ec1fde31705
+        persist-credentials: false
     - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
@@ -79,4 +85,66 @@ jobs:
                                       certificate.stdout.splitlines()[:8]}), flush=True)
             except subprocess.TimeoutExpired:
                 print(json.dumps({'host': host, 'openssl_result': 'timeout'}), flush=True)
+        PY
+    - name: Verify SDK byte identity and inspect cloud package sources
+      timeout-minutes: 4
+      run: |
+        python - <<'PY'
+        from datetime import datetime, timezone
+        from io import BytesIO
+        import json
+        from pathlib import Path
+        import ssl
+        from tempfile import TemporaryDirectory
+        from zipfile import ZipFile
+
+        from scripts import build_yandex_archive, sdk_wheel
+
+        root = Path.cwd()
+        reserve = sdk_wheel.load_vendored_wheel(root)
+        with ZipFile(BytesIO(reserve.data)) as archive:
+            ca = archive.read('t_tech/invest/certs/RussianTrustedRootCA.pem').decode('ascii')
+        root_digest = sdk_wheel.sha256(ssl.PEM_cert_to_DER_cert(ca)).hexdigest()
+        default_roots = ssl.create_default_context().get_ca_certs(binary_form=True)
+        print(json.dumps({
+            'event': 'default_trust_store', 'sdk_root_sha256': root_digest,
+            'sdk_root_present': any(sdk_wheel.sha256(item).hexdigest() == root_digest
+                                    for item in default_roots),
+        }), flush=True)
+
+        index = sdk_wheel.request_bytes(sdk_wheel.SIMPLE_URL)
+        url, index_digest = sdk_wheel.parse_index(index.data)
+        official = sdk_wheel.request_bytes(url)
+        official_digest = sdk_wheel.sha256(official.data).hexdigest()
+        saved_digest = sdk_wheel.sha256(reserve.data).hexdigest()
+        assert official_digest == index_digest == saved_digest
+        assert official.data == reserve.data
+        sdk_wheel.validate_wheel(official.data, reserve.manifest, reserve.license_bytes)
+        print(json.dumps({
+            'event': 'sdk_byte_identity', 'observed_utc': datetime.now(timezone.utc).isoformat(),
+            'version': sdk_wheel.VERSION, 'filename': sdk_wheel.FILENAME,
+            'saved_sha256': saved_digest, 'index_sha256': index_digest,
+            'fresh_official_sha256': official_digest, 'bytes': len(official.data),
+            'byte_for_byte_equal': official.data == reserve.data, 'download_url': official.url,
+        }), flush=True)
+
+        selected = sdk_wheel.acquire_sdk(root)
+        print(json.dumps({'event': 'bounded_acquisition', 'source': selected.source,
+                          'reason': selected.reason,
+                          'wheel_sha256': selected.wheel.manifest.sha256}), flush=True)
+        with TemporaryDirectory(prefix='sdk-deploy-proof-') as directory:
+            for label, vendored in (('default', False), ('vendored', True)):
+                path = build_yandex_archive.build_archive(
+                    root, Path(directory) / (label + '.zip'), use_vendored_sdk=vendored)
+                with ZipFile(path) as archive:
+                    requirements = archive.read('requirements.txt').decode('utf-8')
+                    wheels = [name for name in archive.namelist()
+                              if name.endswith(sdk_wheel.FILENAME)]
+                    print(json.dumps({
+                        'event': 'cloud_package_sources', 'mode': label,
+                        'uses_tbank_index': 'opensource.tbank.ru' in requirements,
+                        'local_sdk_wheel_count': len(wheels),
+                        'local_sdk_sha256': (sdk_wheel.sha256(archive.read(wheels[0])).hexdigest()
+                                             if wheels else None),
+                    }), flush=True)
         PY
