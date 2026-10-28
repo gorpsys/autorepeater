@@ -20,6 +20,36 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
+    - name: Inspect public TLS chain without credentials
+      run: |
+        python - <<'PY'
+        import json
+        import ssl
+        import subprocess
+        print(json.dumps({'openssl': ssl.OPENSSL_VERSION,
+                          'ca_counts': ssl.create_default_context().cert_store_stats()}), flush=True)
+        for host in ('sandbox-invest-public-api.tbank.ru', 'pypi.org'):
+            try:
+                probe = subprocess.run([
+                    'openssl', 's_client', '-connect', host + ':443', '-servername', host,
+                    '-verify_return_error', '-verify_hostname', host, '-showcerts',
+                ], input='', capture_output=True, text=True, timeout=18)
+                facts = [line[:500] for line in (probe.stdout + probe.stderr).splitlines()
+                         if line.strip().startswith(('depth=', 'verify error:',
+                                                     'Verification error:', 'Verify return code:'))]
+                print(json.dumps({'host': host, 'openssl_exit': probe.returncode,
+                                  'verification': facts[:16]}), flush=True)
+                certificate = subprocess.run([
+                    'openssl', 'x509', '-noout', '-subject', '-issuer', '-dates',
+                    '-fingerprint', '-sha256',
+                ], input=probe.stdout, capture_output=True, text=True, timeout=5)
+                if certificate.returncode == 0:
+                    print(json.dumps({'host': host,
+                                      'public_certificate_metadata':
+                                      certificate.stdout.splitlines()[:8]}), flush=True)
+            except subprocess.TimeoutExpired:
+                print(json.dumps({'host': host, 'result': 'timeout'}), flush=True)
+        PY
     - name: Inventory CNY settlement instruments
       env:
         SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
