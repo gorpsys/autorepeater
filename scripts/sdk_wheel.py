@@ -40,6 +40,11 @@ LICENSE_PATH = DIST_INFO + 'licenses/LICENSE'
 PROJECT_URL = 'https://opensource.tbank.ru/invest/invest-python'
 INDEX_URL = 'https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple'
 SIMPLE_URL = INDEX_URL + '/t-tech-investments/'
+RESTORED_INDEX_ORIGIN = 'https://tbank-restore.gitlab.yandexcloud.net/'
+# The index omits its intermediate. Public bytes were verified against the
+# root shipped in the pinned SDK wheel; the digest prevents adding a new CA.
+SDK_ISSUER_URL = 'http://nuc-cdp.voskhod.ru/cdp/subca_ssl_rsa2024.crt'
+SDK_ISSUER_SHA256 = '6f9d829c8e6712444fce3624658d8788672849c5d5b7b53fd9cf7e83eac4193e'
 MAX_WHEEL_BYTES = 2 * 1024 * 1024
 MAX_EXPANDED_BYTES = 32 * 1024 * 1024
 MAX_ENTRIES = 512
@@ -479,6 +484,9 @@ def parse_index(data: bytes) -> tuple[str, str] | None:
     matches: list[tuple[str, str]] = []
     for href, label, yanked in parser.links:
         link, separator, fragment = href.partition('#')
+        if link.startswith(RESTORED_INDEX_ORIGIN):
+            # The public index leaks its upstream host; requests stay on the official origin.
+            link = 'https://opensource.tbank.ru/' + link[len(RESTORED_INDEX_ORIGIN):]
         url = official_url(link)
         filename = urlsplit(url).path.rsplit('/', 1)[-1]
         identity = re.fullmatch(
@@ -664,11 +672,33 @@ def _transport_error(reason: object) -> NoReturn:
     raise WheelError('invalid SDK transport') from None
 
 
+def sdk_tls_context() -> ssl.SSLContext:
+    """Complete the official index chain without changing system or fallback policy."""
+    wheel = load_vendored_wheel(Path(__file__).resolve().parents[1])
+    try:
+        with zipfile.ZipFile(BytesIO(wheel.data)) as archive:
+            root = archive.read('t_tech/invest/certs/RussianTrustedRootCA.pem').decode('ascii')
+        opener = build_opener(ProxyHandler({}), NoRedirect())
+        with opener.open(SDK_ISSUER_URL, timeout=5) as response:
+            issuer = response.read(32769)
+            if (response.geturl() != SDK_ISSUER_URL or len(issuer) > 32768
+                    or sha256(issuer).hexdigest() != SDK_ISSUER_SHA256):
+                raise WheelError('invalid SDK TLS')
+        context = ssl.create_default_context()
+        context.load_verify_locations(cadata=root + '\n' + issuer.decode('ascii'))
+        return context
+    except HTTPError as error:
+        error.close()
+        raise WheelError('invalid SDK TLS') from None
+    except (OSError, UnicodeError, KeyError, zipfile.BadZipFile):
+        raise WheelError('invalid SDK TLS') from None
+
+
 def request_bytes(url: str) -> Response:
     """Fixed official origin, verified certificates, bounded body, no proxy overrides."""
     url = official_url(url)
     opener = build_opener(
-        ProxyHandler({}), HTTPSHandler(context=ssl.create_default_context()), NoRedirect())
+        ProxyHandler({}), HTTPSHandler(context=sdk_tls_context()), NoRedirect())
     request = Request(url, headers={
         'Accept': 'text/html' if url == SIMPLE_URL else 'application/octet-stream'})
     try:

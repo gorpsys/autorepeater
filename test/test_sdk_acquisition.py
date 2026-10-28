@@ -62,6 +62,31 @@ def test_auto_official_first():
         result.source = sdk.Source.VENDORED
 
 
+def test_restored_index_links_download_from_the_existing_official_origin():
+    """The restored GitLab hostname does not extend allowed download hosts."""
+    restored = URL.replace('https://opensource.tbank.ru/',
+                           'https://tbank-restore.gitlab.yandexcloud.net/')
+    anchor = f'<a href="{restored}#sha256={sdk.SDK_HASH}">{sdk.FILENAME}</a>'
+    port = transport(body=index(anchors=anchor))
+    result = sdk.select_source(ROOT, 'auto', port)
+    assert result.source == sdk.Source.OFFICIAL
+    assert [item.args[0] for item in port.fetch.call_args_list] == [sdk.SIMPLE_URL, URL]
+
+
+@pytest.mark.parametrize('origin', [
+    'http://tbank-restore.gitlab.yandexcloud.net',
+    'https://tbank-restore.gitlab.yandexcloud.net:443',
+    'https://tbank-restore.gitlab.yandexcloud.net.example.org',
+    'https://user@tbank-restore.gitlab.yandexcloud.net',
+])
+def test_restored_index_does_not_accept_other_origins(origin):
+    """Only the exact observed HTTPS origin may map back to the allowed host."""
+    link = origin + '/files/' + sdk.FILENAME
+    anchor = f'<a href="{link}#sha256={sdk.SDK_HASH}">{sdk.FILENAME}</a>'
+    with pytest.raises(sdk.WheelError, match='invalid SDK official URL'):
+        sdk.parse_index(index(anchors=anchor))
+
+
 @pytest.mark.parametrize('version', ['1.52.0rc1', '1.52.0.post1', '1.52.0.dev1', '1.52.0+local'])
 @pytest.mark.parametrize('mode', ['auto', 'vendored'])
 @pytest.mark.parametrize('present', [False, True])
@@ -379,6 +404,9 @@ def opener_port(monkeypatch):
     port = create_autospec(OpenerDirector, instance=True, spec_set=True)
     build = create_autospec(sdk.build_opener, spec_set=True, return_value=port)
     monkeypatch.setattr(sdk, 'build_opener', build)
+    context = create_autospec(sdk.sdk_tls_context, spec_set=True,
+                              return_value=ssl.create_default_context())
+    monkeypatch.setattr(sdk, 'sdk_tls_context', context)
     return port, build
 
 
