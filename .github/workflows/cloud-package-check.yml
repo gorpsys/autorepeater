@@ -1,27 +1,82 @@
-name: Cloud package check
+name: Temporary SDK TLS inspection
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  package-smoke:
-    name: Cloud package smoke
+  inspect-tls:
+    name: Inspect public SDK TLS
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 5
     steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: ${{ github.sha }}
-        persist-credentials: false
     - name: Set up Python 3.12
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - name: Network package smoke
-      timeout-minutes: 20
-      env:
-        CLOUD_PACKAGE_SHA: ${{ github.sha }}
-      run: make check-cloud-package
+    - name: Inspect verified public connections and presented certificate metadata
+      timeout-minutes: 4
+      run: |
+        python - <<'PY'
+        import json
+        import os
+        import re
+        import socket
+        import ssl
+        import subprocess
+        import sys
+
+        print(json.dumps({
+            'python': sys.version.split()[0], 'openssl': ssl.OPENSSL_VERSION,
+            'runner_os': os.environ.get('RUNNER_OS'),
+            'runner_arch': os.environ.get('RUNNER_ARCH'),
+            'ca_counts': ssl.create_default_context().cert_store_stats(),
+            'proxy_environment_present': any(name in os.environ for name in (
+                'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY',
+                'https_proxy', 'http_proxy', 'all_proxy')),
+        }), flush=True)
+
+        hosts = ('opensource.tbank.ru', 'pypi.org')
+        for attempt in range(1, 4):
+            for host in hosts:
+                fact = {'host': host, 'attempt': attempt}
+                try:
+                    context = ssl.create_default_context()
+                    with socket.create_connection((host, 443), timeout=12) as stream:
+                        with context.wrap_socket(stream, server_hostname=host) as secure:
+                            fact.update(result='verified', tls_version=secure.version())
+                except ssl.SSLCertVerificationError as error:
+                    fact.update(result='certificate_verification_failed',
+                                verify_code=error.verify_code)
+                except ssl.SSLError as error:
+                    reason = getattr(error, 'reason', '')
+                    fact.update(result='tls_failed', reason=reason if isinstance(reason, str)
+                                and re.fullmatch(r'[A-Z0-9_]{1,80}', reason) else 'unknown')
+                except OSError as error:
+                    fact.update(result='transport_failed', errno=error.errno)
+                print(json.dumps(fact), flush=True)
+
+        for host in hosts:
+            try:
+                # Strict validation stays enabled. Public certificate bytes are not logged.
+                probe = subprocess.run([
+                    'openssl', 's_client', '-connect', host + ':443', '-servername', host,
+                    '-verify_return_error', '-verify_hostname', host, '-showcerts',
+                ], input='', capture_output=True, text=True, timeout=18)
+                facts = [line[:500] for line in (probe.stdout + probe.stderr).splitlines()
+                         if line.startswith(('depth=', 'verify error:',
+                                             'Verification error:', 'Verify return code:'))]
+                print(json.dumps({'host': host, 'openssl_exit': probe.returncode,
+                                  'verification': facts[:16]}), flush=True)
+                certificate = subprocess.run([
+                    'openssl', 'x509', '-noout', '-subject', '-issuer', '-dates',
+                    '-fingerprint', '-sha256',
+                ], input=probe.stdout, capture_output=True, text=True, timeout=5)
+                if certificate.returncode == 0:
+                    print(json.dumps({'host': host,
+                                      'public_certificate_metadata':
+                                      certificate.stdout.splitlines()[:8]}), flush=True)
+            except subprocess.TimeoutExpired:
+                print(json.dumps({'host': host, 'openssl_result': 'timeout'}), flush=True)
+        PY
