@@ -12,6 +12,7 @@ files = [
     "scripts/install_dependencies.py",
     "scripts/package_wheels.py",
     "scripts/cloud_dependencies.py",
+    "scripts/cloud_build_tls.py",
     "scripts/check_cloud_bundle.py",
     "scripts/sandbox_token.py",
     "scripts/sandbox_e2e.py",

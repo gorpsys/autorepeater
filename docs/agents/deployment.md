@@ -11,6 +11,10 @@ Sandbox live E2E либо вручную только на master и испол�
 с установкой зависимостей в облаке. deploy-prod-reserve.yml запускается
 только вручную после отдельного согласования: mode=vendored включает локальный
 SDK, mode=offline дополнительно упаковывает установленный runtime.
+Default-архив включает исполняемую обёртку pip3.12 и CA-бандл, подготовленный
+из hash-verified certifi/SDK wheel и hash-pinned промежуточного сертификата.
+Обёртка сохраняет аргументы облачного pip и проверку TLS; credentials и
+сами сертификаты в Git не добавляются. Vendored/offline эту обёртку не включают.
 Резерв не включается автоматически при ошибке обычного деплоя.
 Оба workflow допускают только gorpsys/autorepeater/master.
 scripts/deploy_gate.py

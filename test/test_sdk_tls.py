@@ -52,6 +52,13 @@ def test_sdk_tls_context_uses_verified_wheel_and_pinned_issuer(tls_ports):
     assert isinstance(handlers[1], sdk.NoRedirect)
 
 
+def test_sdk_tls_certificates_use_selected_project_without_mutating_trust(tls_ports, tmp_path):
+    """Cloud packaging reuses the same verified bytes and the requested reserve."""
+    assert sdk.sdk_tls_certificates(tmp_path) == 'pinned SDK root\npinned issuer'
+    tls_ports.reserve.assert_called_once_with(tmp_path)
+    tls_ports.default.assert_not_called()
+
+
 @pytest.mark.parametrize('failure', ['hash', 'url', 'size', 'encoding'])
 def test_sdk_tls_context_rejects_unpinned_or_malformed_issuer(tls_ports, failure, monkeypatch):
     """No transport-provided certificate may become a new trust anchor."""

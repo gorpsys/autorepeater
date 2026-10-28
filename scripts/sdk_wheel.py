@@ -672,9 +672,9 @@ def _transport_error(reason: object) -> NoReturn:
     raise WheelError('invalid SDK transport') from None
 
 
-def sdk_tls_context() -> ssl.SSLContext:
-    """Complete the official index chain without changing system or fallback policy."""
-    wheel = load_vendored_wheel(Path(__file__).resolve().parents[1])
+def sdk_tls_certificates(project_root: Path | None = None) -> str:
+    """Share authenticated public CA bytes with the SDK client and cloud packager."""
+    wheel = load_vendored_wheel(project_root or Path(__file__).resolve().parents[1])
     try:
         with zipfile.ZipFile(BytesIO(wheel.data)) as archive:
             root = archive.read('t_tech/invest/certs/RussianTrustedRootCA.pem').decode('ascii')
@@ -684,13 +684,22 @@ def sdk_tls_context() -> ssl.SSLContext:
             if (response.geturl() != SDK_ISSUER_URL or len(issuer) > 32768
                     or sha256(issuer).hexdigest() != SDK_ISSUER_SHA256):
                 raise WheelError('invalid SDK TLS')
-        context = ssl.create_default_context()
-        context.load_verify_locations(cadata=root + '\n' + issuer.decode('ascii'))
-        return context
+        return root.rstrip() + '\n' + issuer.decode('ascii').rstrip()
     except HTTPError as error:
         error.close()
         raise WheelError('invalid SDK TLS') from None
     except (OSError, UnicodeError, KeyError, zipfile.BadZipFile):
+        raise WheelError('invalid SDK TLS') from None
+
+
+def sdk_tls_context() -> ssl.SSLContext:
+    """Complete the official index chain without changing system or fallback policy."""
+    certificates = sdk_tls_certificates()
+    try:
+        context = ssl.create_default_context()
+        context.load_verify_locations(cadata=certificates)
+        return context
+    except OSError:
         raise WheelError('invalid SDK TLS') from None
 
 
