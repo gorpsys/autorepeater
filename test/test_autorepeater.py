@@ -1570,6 +1570,11 @@ def test_cloud_entrypoint(event, environment, expected, invest_environment):
         }
 
 
+CLOUD_TLS_ENTRIES = {
+    'pip3.12': b'wrapper', 'cloud-ca/ca-bundle.pem': b'public CA test double',
+    'cloud-ca/manifest.json': b'{}', 'cloud-ca/LICENSE.certifi': b'license'}
+
+
 def test_cloud_archive(tmp_path):
     """All packaged configs work by their JSON names from an isolated archive."""
     repository = Path(__file__).resolve().parents[1]
@@ -1583,6 +1588,8 @@ def test_cloud_archive(tmp_path):
     (project / 'scripts').mkdir()
     shutil.copyfile(repository / 'scripts/build_yandex_archive.py',
                     project / 'scripts/build_yandex_archive.py')
+    (project / 'scripts/cloud_build_tls.py').write_text(
+        f'def prepare(root):\n    return {CLOUD_TLS_ENTRIES!r}\n')
     for source in (repository / 'autorepeater').glob('*.py'):
         shutil.copyfile(source, project / 'autorepeater' / source.name)
     for source in (repository / 'autorepeater/configs').rglob('*.json'):
@@ -1599,6 +1606,7 @@ def test_cloud_archive(tmp_path):
     assert build.returncode == 0, build.stdout + build.stderr
     extracted = tmp_path / 'extracted'
     expected = {'main.py', 'handler.py', 'requirements.txt', 'requirements-runtime.txt'}
+    expected.update(CLOUD_TLS_ENTRIES)
     expected.update(path.relative_to(project).as_posix() for path in config_dir.rglob('*.json'))
     expected.update(f'autorepeater/{path.name}'
                     for path in (repository / 'autorepeater').glob('*.py'))

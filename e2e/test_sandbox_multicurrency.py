@@ -152,7 +152,7 @@ def catalog(session: SandboxSession) -> CurrencyCatalog:
     session.market = ExecutionMarket(sources.fx, sources.securities)
     rub = _unique(session, 'SBER', ticker='SBER', expected=(InstrumentType.SHARE, 'rub'),
                   preferred_currency=PREFERRED_CURRENCY)
-    bond = _unique(session, 'RU000A105104', expected=(InstrumentType.BOND, 'cny'),
+    bond = _unique(session, 'RU000A10CP52', expected=(InstrumentType.BOND, 'cny'),
                    preferred_currency=PREFERRED_CURRENCY)
     currency = _unique(session, 'CNYRUB_TOM', ticker='CNYRUB_TOM',
                        expected=(InstrumentType.CURRENCY, 'rub'))
@@ -163,8 +163,8 @@ def catalog(session: SandboxSession) -> CurrencyCatalog:
                       **{role: {**instrument_facts(item), 'lot': scalar_fact(item.lot)}
                          for role, item in (('rub', rub), ('bond', bond), ('currency', currency))},
                       'bond_full': sdk_metadata_facts(full)}, level=logging.INFO)
-    require(full.uid == bond.uid and full.isin == 'RU000A105104'
-            and full.currency.lower() == 'cny', 'wrong RUSAL bond identity')
+    require(full.uid == bond.uid and full.isin == 'RU000A10CP52'
+            and full.currency.lower() == 'cny', 'wrong CNY bond identity')
     with requested_pair(currency.uid):
         pairs = [pair for pair in sources.fx.list_pairs() if pair.uid == currency.uid]
     require(len(pairs) == 1, 'missing CNYRUB_TOM full currency metadata')
