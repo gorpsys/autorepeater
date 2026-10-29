@@ -67,7 +67,13 @@ Debug строит и проверяет планы с чтением данны
 Облако по умолчанию COMPOSITE/BALANCED, run_sync без стрима и без debug.
 Query algoritm/src при отсутствии ключа использует ALGORITM/SRC_ACCOUNT;
 BALANCED default только для COMPOSITE. Пустой ключ не заменять окружением.
-Token fallback INVEST_TOKEN/t_token, dst DST_ACCOUNT/DEFAULT_DST_ACCOUNT.
+Token fallback INVEST_TOKEN/t_token сохраняется и для пустого token.
+Dst при отсутствии query-ключа: DST_ACCOUNT/DEFAULT_DST_ACCOUNT.
+Явный dst: непустая строка, не только пробелы; не преобразовывать ID.
+Пустой/null/нестроковый dst отвергать до SDK-клиента, без fallback.
+Event и queryStringParameters — JSON-объекты; event=None, отсутствие query
+и query=None означают отсутствие параметров. Timer messages/details.payload
+не являются query-параметрами; таймер сохраняет выбор из окружения/defaults.
 
 ## Разработка и приёмка
 
