@@ -7,7 +7,7 @@
 
 ## Не выпущено
 
-## [6.0.0](https://github.com/gorpsys/autorepeater/compare/v5.3.5...v6.0.0) - 2026-10-28
+## [6.0.0](https://github.com/gorpsys/autorepeater/compare/v5.3.5...v6.0.0) - 2026-10-29
 
 - Облачный запуск отклоняет явно пустой, пробельный, `null` или нестроковый
   `dst` до создания SDK-клиента. Для выбора счёта через окружение/defaults
