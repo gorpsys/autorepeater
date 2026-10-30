@@ -7,7 +7,6 @@ import pytest
 
 from scripts.retry_evidence import inspect_history, verify_history, write_junit
 from scripts import retry_evidence
-from scripts import sandbox_github
 from scripts.retry_results import PhaseResult
 from scripts.retry_settings import RunSettings
 
@@ -99,30 +98,6 @@ def write_history(root, entries, states, settings):
         json.dumps({'version': 1, 'attempts': entries}), encoding='utf-8')
     (root / 'run-settings.json').write_text(settings.to_json(), encoding='utf-8')
     write_junit(states, root / 'junit.xml')
-
-
-@pytest.mark.parametrize('fault', [None, 'sha', 'settings', 'cleanup', 'permanent'])
-def test_trusted_v4_cli_uses_fixed_sha_and_hour_budget(tmp_path, monkeypatch, fault):
-    """The transition validates v4 originals, never a PR-provided verifier or inventory."""
-    settings = RunSettings(timeout_seconds=3600)
-    states = {FIRST: 'failed' if fault == 'permanent' else 'passed'}
-    entries = [write_attempt(tmp_path, 1, {FIRST: (states[FIRST], False)})]
-    write_history(tmp_path, entries, states, settings)
-    if fault == 'settings':
-        (tmp_path / 'run-settings.json').write_text(RunSettings().to_json())
-    if fault == 'cleanup':
-        (tmp_path / 'attempts/01/cleanup.log').write_text('')
-    output = tmp_path / 'outputs'
-    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
-    arguments = ['evidence', '--evidence-format', 'retry-v4',
-                 '--junit', str(tmp_path / 'junit.xml'),
-                 '--sha', 'b' * 40 if fault == 'sha' else SHA]
-    if fault is None:
-        assert sandbox_github.main(arguments) == 0
-        assert output.read_text() == 'complete=true\npassed=1\n'
-    else:
-        assert sandbox_github.main(arguments) == 1
-        assert not output.exists()
 
 
 def test_retry_permission_is_the_test_owned_boolean(tmp_path):

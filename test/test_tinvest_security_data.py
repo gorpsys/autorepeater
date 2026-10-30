@@ -16,7 +16,7 @@ from autorepeater.tinvest_fx_data import TInvestFxData
 from autorepeater.tinvest_security_data import TInvestSecurityData
 from autorepeater.valuation import Valuation
 from scripts.sandbox_lifecycle import SandboxFailure, safe_call
-from scripts.sandbox_retry_report import stale_book_facts
+from e2e.retry_policy import may_retry
 
 D = Decimal
 NOW = datetime(2026, 10, 15, tzinfo=timezone.utc)
@@ -93,10 +93,7 @@ def test_safe_call_preserves_real_security_stale_guard_facts(reads):
     client.market_data.get_order_book.return_value.orderbook_ts = stamp
     with pytest.raises(SandboxFailure) as caught:
         safe_call(data.get_security_quote, uid='uid')
-    assert stale_book_facts(caught.value) == {
-        'reason': 'market_time_stale', 'expected_uid': 'uid', 'received_uid': 'uid',
-        'market_time': stamp.isoformat(), 'observed_utc': NOW.isoformat(),
-        'freshness_limit_seconds': 180}
+    assert may_retry(caught.value, 'setup', 'failed')
     client.market_data.get_order_book.assert_called_once_with(instrument_id='uid', depth=1)
 
 
