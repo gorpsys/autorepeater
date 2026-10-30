@@ -1,6 +1,7 @@
 """Failure semantics belong to the tests, never to the CI result consumer."""
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from functools import partial
 
 import pytest
 from grpc import StatusCode
@@ -8,7 +9,8 @@ from t_tech.invest import RequestError
 
 from autorepeater import fx_data
 from autorepeater.fx_data import FxPair, FxQuote
-from e2e.retry_policy import may_retry
+from e2e.retry_policy import auth_failure, may_retry
+from scripts.sandbox_lifecycle import SandboxFailure, safe_call
 
 
 NOW = datetime(2026, 10, 23, tzinfo=timezone.utc)
@@ -80,3 +82,34 @@ def test_fx_future_receipt_and_unknown_error_chain_are_not_stale():
     error = RuntimeError()
     error.__cause__ = caught.value
     assert not may_retry(error, 'call', 'failed')
+
+
+@pytest.mark.parametrize('boundary', ['security', 'fx'])
+@pytest.mark.parametrize('wrapper', ['known', 'unknown', 'auth', 'cycle'])
+def test_safe_call_preserves_guard_provenance_and_retry_denials(security, boundary, wrapper):
+    """Setup wrappers retain real stale guards without hiding auth or cyclic causes."""
+    client, adapter = security
+    client.market_data.get_order_book.return_value.orderbook_ts -= timedelta(seconds=181)
+    operation = partial(adapter.get_security_quote, 'uid')
+    if boundary == 'fx':
+        value = FxQuote(FxPair('uid', 'cny', 'rub', Decimal(1), 1000, True, True, True),
+                        Decimal(10), Decimal(11), NOW - timedelta(seconds=181), NOW)
+        operation = partial(value.validate_fresh, NOW)
+
+    def query():
+        try:
+            operation()
+        except ValueError as error:
+            if wrapper == 'unknown':
+                raise RuntimeError('private') from error
+            if wrapper == 'auth':
+                raise RequestError(StatusCode.UNAUTHENTICATED, 'private', {}) from error
+            if wrapper == 'cycle':
+                error.__cause__ = error
+            raise
+
+    with pytest.raises(SandboxFailure) as caught:
+        safe_call(query)
+    assert caught.value.__suppress_context__
+    assert auth_failure(caught.value) is (wrapper in ('auth', 'cycle'))
+    assert may_retry(caught.value, 'setup', 'failed') is (wrapper == 'known')

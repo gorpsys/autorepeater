@@ -421,6 +421,102 @@ def test_cloud_defaults_to_balanced(monkeypatch, event):
     assert result['body'] == f'Success sync, BALANCED {serverless.DEFAULT_DST_ACCOUNT}!'
 
 
+@pytest.mark.parametrize('event', [False, True, 0, 1, '', 'event', [], ['event']])
+def test_cloud_rejects_invalid_event_before_credentials(event):
+    """Malformed envelopes fail at the transport boundary, not in SDK code."""
+    with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
+            patch.object(serverless, 'configure_yc_logging'), \
+            patch.object(serverless, 'get_param', side_effect=AssertionError('credentials read')):
+        with pytest.raises(ValueError, match='event must be an object or null'):
+            serverless.handler(event, None)
+        runner.assert_not_called()
+
+
+@pytest.mark.parametrize('query', [False, True, 0, 1, '', 'query', [], ['dst']])
+def test_cloud_rejects_invalid_query_before_credentials(query):
+    """Even falsey non-object query values are invalid, rather than missing."""
+    with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
+            patch.object(serverless, 'configure_yc_logging'), \
+            patch.object(serverless, 'get_param', side_effect=AssertionError('credentials read')):
+        with pytest.raises(ValueError, match='queryStringParameters must be an object or null'):
+            serverless.handler({'queryStringParameters': query}, None)
+        runner.assert_not_called()
+
+
+@pytest.mark.parametrize('dst', ['', ' ', '\t\n', None, False, True, 0, 1, [], {}, ['dst']])
+def test_cloud_rejects_explicit_invalid_destination(monkeypatch, dst):
+    """An explicit invalid destination cannot silently choose another account."""
+    monkeypatch.setenv('DST_ACCOUNT', 'another-owned-account')
+    with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
+            patch.object(serverless, 'configure_yc_logging'), \
+            patch.object(serverless, 'get_param', side_effect=AssertionError('credentials read')):
+        with pytest.raises(ValueError, match='dst must be a nonempty string'):
+            serverless.handler({'queryStringParameters': {'dst': dst}}, None)
+        runner.assert_not_called()
+
+
+@pytest.mark.parametrize('dst', ['0', '00123', 'sandbox-account-uid', ' 00123 '])
+def test_cloud_destination_is_an_opaque_string(monkeypatch, dst):
+    """Valid account identifiers are neither parsed nor stripped."""
+    monkeypatch.setenv('DST_ACCOUNT', 'another-owned-account')
+    monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
+    with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
+            patch.object(serverless, 'configure_yc_logging'):
+        serverless.handler({'queryStringParameters': {'dst': dst}}, None)
+    assert runner.call_args.kwargs['dst'] == dst
+    runner.return_value.run_sync.assert_called_once_with()
+
+
+@pytest.mark.parametrize('destination', [None, '', 'configured-account'])
+@pytest.mark.parametrize('payload', ['', '{"queryStringParameters":{"dst":""}}'])
+def test_cloud_timer_event_keeps_destination_defaults(monkeypatch, destination, payload):
+    """The documented YC timer envelope has no top-level query parameters."""
+    # https://yandex.cloud/ru/docs/functions/concepts/trigger/timer#format
+    event = {'messages': [{
+        'event_metadata': {
+            'event_id': 'synthetic-event',
+            'event_type': 'yandex.cloud.events.serverless.triggers.TimerMessage',
+            'created_at': '2026-10-24T12:00:00Z',
+            'cloud_id': 'synthetic-cloud',
+            'folder_id': 'synthetic-folder',
+        },
+        'details': {'trigger_id': 'synthetic-trigger', 'payload': payload},
+    }]}
+    monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
+    if destination is not None:
+        monkeypatch.setenv('DST_ACCOUNT', destination)
+    with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
+            patch.object(serverless, 'configure_yc_logging'):
+        serverless.handler(event, None)
+    prepared = runner.call_args.kwargs['prepared_strategy']
+    assert prepared.prepared_source.name == 'BALANCED'
+    assert runner.call_args.kwargs['dst'] == (destination or serverless.DEFAULT_DST_ACCOUNT)
+    runner.return_value.run_sync.assert_called_once_with()
+
+
+@pytest.mark.parametrize('query', [None, {}, {'dst': '00123'}])
+def test_cloud_http_event_keeps_destination_selection(monkeypatch, query):
+    """An HTTP envelope uses only its top-level queryStringParameters."""
+    # https://yandex.cloud/ru/docs/functions/concepts/function-invoke#request
+    event = {
+        'httpMethod': 'GET',
+        'headers': {'Accept': '*/*'},
+        'multiValueHeaders': {'Accept': ['*/*']},
+        'queryStringParameters': query,
+        'multiValueQueryStringParameters': {'dst': ['00123']} if query else {},
+        'requestContext': {'httpMethod': 'GET', 'requestId': 'synthetic-request'},
+        'body': '',
+        'isBase64Encoded': False,
+    }
+    monkeypatch.setenv('DST_ACCOUNT', 'configured-account')
+    monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
+    with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
+            patch.object(serverless, 'configure_yc_logging'):
+        serverless.handler(event, None)
+    assert runner.call_args.kwargs['dst'] == ('00123' if query else 'configured-account')
+    runner.return_value.run_sync.assert_called_once_with()
+
+
 @pytest.mark.parametrize('location', ['query', 'environment'])
 @pytest.mark.parametrize('source', [None, 'GOLD', 'BALANCED'])
 def test_cloud_partial_index_selection(monkeypatch, location, source):

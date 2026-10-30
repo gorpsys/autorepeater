@@ -43,7 +43,8 @@ def auth_failure(error: BaseException | None) -> bool:
                 fact.get('grpc_status') in ('UNAUTHENTICATED', 'PERMISSION_DENIED')
                 for fact in error.api_facts[:8])):
             return True
-        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+        suppressed = error.__suppress_context__ and error.__class__ is not SandboxFailure
+        error = error.__cause__ or (None if suppressed else error.__context__)
     return error is not None
 
 
@@ -92,7 +93,9 @@ def validation_trace(error: BaseException | None) -> TracebackType | None:
             break
         if type(error) not in KNOWN_ERRORS or isinstance(error, RequestError):
             return None
-        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+        # safe_call hides SDK text while retaining the known validation context in memory.
+        suppressed = error.__suppress_context__ and error.__class__ is not SandboxFailure
+        error = error.__cause__ or (None if suppressed else error.__context__)
     if error is None or error.__class__ is not ValueError or error.__traceback__ is None:
         return None
     trace = error.__traceback__

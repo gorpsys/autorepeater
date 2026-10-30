@@ -5,6 +5,40 @@
 Действующие правила выпуска — в [техническом README](../../scripts/README.md#версии-и-выпуск).
 Результаты калибровки вынесены в [исторический отчёт](../reports/2026-10-06-calibration.md).
 
+## v5.3.5: штатная сборка YC с проверкой TLS, 2026-10-29
+
+[PR #49](https://github.com/gorpsys/autorepeater/pull/49) влит squash-коммитом
+`c9e7ea66e0ec2a74b7f65e07e13ea52da575a748`; аннотированный тег `v5.3.5`
+создан автоматически на этом SHA. Lint и Offline checks master прошли:
+5978 тестов, покрытие 99,47%, network package smoke — `ok`.
+[PR E2E](https://github.com/gorpsys/autorepeater/actions/runs/40722435174/attempts/2)
+и [master E2E](https://github.com/gorpsys/autorepeater/actions/runs/40848374951)
+завершились с итогом 26 прошедших, 0 упавших и 0 пропущенных сценариев.
+В PR повторён один сценарий, в master — пять: подтверждённое устаревание
+стакана свыше 180 секунд. Все повторы прошли, очистка подтверждена.
+
+[Штатный deploy-prod](https://github.com/gorpsys/autorepeater/actions/runs/40852436459)
+успешно установил зависимости облачным pip из default-архива с CA-бандлом
+и обёрткой `pip3.12`; резервный режим не понадобился. Read-only проверка
+подтвердила ACTIVE-версию `d4ebvo04b29uj0uhffmd` для SHA мержа и сохранение
+runtime-настроек функции. SHA-256 ZIP:
+`a308fe850b65eedef53baca0233e82cdd3c4b18aeaeff3fe1e3fc5521231cd39`.
+Production handler для проверки не вызывался; cold start этим не подтверждён.
+
+## v5.3.3: готовность счёта и CLI, 2026-10-26
+
+[PR #48](https://github.com/gorpsys/autorepeater/pull/48) влит squash-коммитом
+`878dafc5e370c1063f964d2f8257b209fa89d21f`; тег `v5.3.3` создан автоматически.
+PR E2E `40283900422` прошёл все 26 сценариев. Master E2E `40288275242`,
+попытка 4: итог 26 прошедших, 0 упавших и 0 пропущенных, очистка подтверждена.
+Lint и Offline checks на master прошли.
+
+Штатный деплой `40313528944` упал при создании версии с `invalid_argument`;
+точная причина облачной сборки не установлена. Согласованный резервный
+offline-деплой `40314046505` завершился успешно. Read-only проверка подтвердила
+ACTIVE-версию `d4ec88b04rduie46j16j` функции `d4e6d0l53hkivgrmfano`
+и тайм-аут 90 секунд. Production handler для проверки не вызывался.
+
 ## v5.3.1: обновление зависимостей и резервный деплой, 2026-10-23
 
 [PR #46](https://github.com/gorpsys/autorepeater/pull/46) влит squash-коммитом

@@ -164,11 +164,10 @@ def validate_xml_counts(root: ET.Element, suites: list[ET.Element]) -> None:
     """Suite counters corroborate the actual case elements, not a green summary."""
     for suite in [root, *suites] if root.tag == 'testsuites' else suites:
         cases = list(suite.iter('testcase'))
-        expected = {'tests': len(cases),
-                    'failures': sum(case.find('failure') is not None for case in cases),
-                    'errors': sum(case.find('error') is not None for case in cases),
-                    'skipped': sum(case.find('skipped') is not None for case in cases)}
-        for key, number in expected.items():
+        for key, tag in {'tests': None, 'failures': 'failure',
+                         'errors': 'error', 'skipped': 'skipped'}.items():
+            number = len(cases) if tag is None else sum(
+                case.find(tag) is not None for case in cases)
             value = suite.get(key)
             if (value is not None or suite.tag == 'testsuite') and value != str(number):
                 raise ValueError('JUnit counters disagree with original cases')

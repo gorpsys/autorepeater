@@ -37,7 +37,7 @@ class OfflineBroker:
             'R': sdk.Instrument(uid='R', ticker='SBER', name='Sber', instrument_type='share',
                                 class_code='T', currency='rub', lot=10,
                                 api_trade_available_flag=True),
-            'C': sdk.Instrument(uid='C', ticker='RU000A105104', name='Rusal',
+            'C': sdk.Instrument(uid='C', ticker='RU000A10CP52', name='Gazprom',
                                 instrument_type='bond',
                                 class_code='T', currency='cny', lot=1,
                                 api_trade_available_flag=True),
@@ -64,7 +64,7 @@ class OfflineBroker:
             uid='R', ticker='SBER', name='Sber', class_code='T', currency='rub', lot=10,
             api_trade_available_flag=True)])
         client.instruments.bond_by.return_value = sdk.BondResponse(instrument=sdk.Bond(
-            uid='C', isin='RU000A105104', currency='cny', nominal=money('cny', 1000),
+            uid='C', isin='RU000A10CP52', currency='cny', nominal=money('cny', 1000),
             aci_value=money('cny', 7)))
         client.instruments.currencies.return_value = sdk.CurrenciesResponse(instruments=[
             sdk.Currency(uid='F', iso_currency_name='CNY', currency='rub', lot=1000,

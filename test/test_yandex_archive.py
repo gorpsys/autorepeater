@@ -1,6 +1,6 @@
 """Direct, coverage-visible checks of archive selection, writing and entrypoint."""
 import json
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import replace
 import runpy
 import shutil
@@ -13,7 +13,27 @@ from zipfile import ZipFile
 import pytest
 
 from scripts import build_yandex_archive as builder
-from scripts import runtime_lock, sdk_wheel
+from scripts import cloud_build_tls, runtime_lock, sdk_wheel
+
+
+TLS_ENTRIES = {'pip3.12': b'wrapper', 'cloud-ca/ca-bundle.pem': b'public CA test double',
+               'cloud-ca/manifest.json': b'{}', 'cloud-ca/LICENSE.certifi': b'license'}
+
+
+@pytest.fixture(name='cloud_ca_double', autouse=True)
+def fixture_cloud_ca_double(monkeypatch):
+    """Archive layout tests isolate the CA acquisition tested in test_cloud_build_tls."""
+    port = create_autospec(cloud_build_tls.prepare, spec_set=True, return_value=TLS_ENTRIES)
+    monkeypatch.setattr(cloud_build_tls, 'prepare', port)
+    return port
+
+
+def copy_archive_builder(repository, root):
+    """Isolated CLI tests use the same strict boundary without real CA downloads."""
+    for relative in ('Makefile', 'scripts/build_yandex_archive.py'):
+        shutil.copyfile(repository / relative, root / relative)
+    (root / 'scripts/cloud_build_tls.py').write_text(
+        f'def prepare(root):\n    return {TLS_ENTRIES!r}\n')
 
 
 @pytest.fixture(name='project')
@@ -79,9 +99,12 @@ def test_archive_files_and_bytes(project, monkeypatch, tmp_path):
     archive_path = builder.build_archive(project)
     assert archive_path == project / 'build/yandex-function.zip'
     with ZipFile(archive_path) as archive:
-        assert set(archive.namelist()) == EXPECTED
+        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys()
         for name in EXPECTED:
             assert archive.read(name) == (project / name).read_bytes()
+        for name, data in TLS_ENTRIES.items():
+            assert archive.read(name) == data
+        assert archive.getinfo('pip3.12').external_attr >> 16 == 0o100755
     assert not (project / 'build/yandex-function').exists()
 
 
@@ -92,7 +115,8 @@ def test_custom_output_and_rebuild(project, tmp_path):
     (project / 'autorepeater/new_strategy.py').unlink()
     builder.build_archive(project, output)
     with ZipFile(output) as archive:
-        assert set(archive.namelist()) == EXPECTED - {'autorepeater/new_strategy.py'}
+        expected = EXPECTED - {'autorepeater/new_strategy.py'} | TLS_ENTRIES.keys()
+        assert set(archive.namelist()) == expected
 
 
 def test_import_does_not_build():
@@ -109,7 +133,7 @@ def test_entrypoint_in_process(project, tmp_path, monkeypatch):
                                      '--output', str(output)])
     runpy.run_path(str(Path(builder.__file__)), run_name='__main__')
     with ZipFile(output) as archive:
-        assert set(archive.namelist()) == EXPECTED
+        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys()
 
 
 def test_default_entrypoint(project):
@@ -123,8 +147,7 @@ def test_default_entrypoint(project):
 def test_make_archive_without_python_alias(project, tmp_path, override):
     """Make uses python3 by default and accepts an explicit interpreter."""
     repository = Path(__file__).resolve().parents[1]
-    for relative in ('Makefile', 'scripts/build_yandex_archive.py'):
-        shutil.copyfile(repository / relative, project / relative)
+    copy_archive_builder(repository, project)
     commands = tmp_path / 'commands'
     commands.mkdir()
     arguments = [f'PYTHON={sys.executable}'] if override else []
@@ -137,7 +160,7 @@ def test_make_archive_without_python_alias(project, tmp_path, override):
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     with ZipFile(project / 'build/yandex-function.zip') as archive:
-        assert set(archive.namelist()) == EXPECTED
+        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys()
 
 
 def test_missing_required_file(project):
@@ -360,12 +383,42 @@ def test_atomic_vendored_publication(vendored_project, acquisition, monkeypatch,
 
 
 def test_default_builder_never_acquires_sdk(project, monkeypatch):
-    """The ordinary bundle remains independent of vendor and network helpers."""
+    """Default cloud installation does not acquire or bundle an SDK distribution."""
     acquire = create_autospec(sdk_wheel.acquire_sdk, spec_set=True,
                               side_effect=AssertionError('network forbidden'))
     monkeypatch.setattr(sdk_wheel, 'acquire_sdk', acquire)
     builder.build_archive(project)
     acquire.assert_not_called()
+
+
+def test_default_tls_failure_preserves_existing_zip(project, cloud_ca_double):
+    """A TLS/source failure leaves the previously valid release artifact intact."""
+    output = builder.build_archive(project)
+    previous = output.read_bytes()
+    cloud_ca_double.side_effect = sdk_wheel.WheelError('invalid SDK TLS')
+    with pytest.raises(sdk_wheel.WheelError, match='invalid SDK TLS'):
+        builder.build_archive(project)
+    assert output.read_bytes() == previous
+    assert list(output.parent.iterdir()) == [output]
+
+
+def test_default_rejects_non_executable_pip_wrapper(project, monkeypatch):
+    """Losing executable ZIP metadata must fail before replacing the release ZIP."""
+    output = builder.build_archive(project)
+    previous = output.read_bytes()
+    original_getinfo = ZipFile.getinfo
+
+    def wrong_mode(archive, name):
+        info = copy(original_getinfo(archive, name))
+        if name == 'pip3.12':
+            info.external_attr = 0o100644 << 16
+        return info
+
+    monkeypatch.setattr(ZipFile, 'getinfo', create_autospec(
+        ZipFile.getinfo, spec_set=True, side_effect=wrong_mode))
+    with pytest.raises(ValueError, match='cloud pip wrapper is not executable'):
+        builder.build_archive(project)
+    assert output.read_bytes() == previous
 
 
 @pytest.mark.parametrize('arguments', [['--use-vendored-sdk', '0'],
@@ -573,9 +626,13 @@ def fixture_application_bundle(tmp_path):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
     (project_root / 'scripts').mkdir()
-    for relative in ('Makefile', 'scripts/build_yandex_archive.py'):
-        shutil.copyfile(repository / relative, project_root / relative)
+    copy_archive_builder(repository, project_root)
     expected = {source.relative_to(repository).as_posix() for source in sources}
+    for name, data in TLS_ENTRIES.items():
+        target = project_root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        expected.add(name)
     config_root = project_root / 'autorepeater/configs/new/deep'
     documents = {
         'composites/first-file.json': {
@@ -862,7 +919,7 @@ class IndependentStrategy:
 INDEPENDENT_PROBE = '''
 import sys
 from decimal import Decimal
-from unittest.mock import Mock, patch
+from unittest.mock import create_autospec, patch
 sys.path.insert(0, sys.argv[1])
 with patch('socket.socket.connect', side_effect=AssertionError('network forbidden')), \
         patch('grpc.secure_channel', side_effect=AssertionError('gRPC forbidden')):
@@ -870,21 +927,24 @@ with patch('socket.socket.connect', side_effect=AssertionError('network forbidde
     import handler
     from autorepeater import runner
     from autorepeater.strategies import prepare_strategy, create_strategy
-    from autorepeater.execution import ExecutionReceipt
-    from autorepeater.execution_data import ExecutionSnapshot, TradeRules
-    from autorepeater.strategy_data import PortfolioSnapshot
+    from autorepeater.execution import ExecutionReceipt, OrderExecutor
+    from autorepeater.execution_data import (
+        AccountReadiness, ExecutionData, ExecutionSnapshot, TradeRules,
+    )
+    from autorepeater.strategy_data import PortfolioSnapshot, StrategyData
     prepared = prepare_strategy('ARCHIVE_INDEPENDENT', 'independent-source')
     strategy = create_strategy(prepared)
     assert strategy.prepared == 'independent-source'
-    data = Mock(spec_set=['begin_snapshot', 'get_portfolio', 'position_events'])
+    data = create_autospec(StrategyData, instance=True, spec_set=True)
     data.get_portfolio.return_value = PortfolioSnapshot(())
     data.position_events.side_effect = RuntimeError('finite offline stream')
-    execution = Mock(spec_set=['get_destination', 'get_trade_rules'])
+    execution = create_autospec(ExecutionData, instance=True, spec_set=True)
     execution.get_destination.return_value = ExecutionSnapshot(
         PortfolioSnapshot(()), Decimal(100), {}, {}, {'rub': Decimal(100)}, {}, (), True)
     execution.get_trade_rules.return_value = {
         'stock': TradeRules(1, 'rub', True, True, Decimal(100), 100, 100)}
-    executor = Mock(spec_set=['submit_order'])
+    execution.get_readiness.return_value = AccountReadiness(False, False, False, 0)
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda account, intent: ExecutionReceipt(
         intent.uid, intent.side, 'offline', 'FILL', intent.lots, intent.lots, {})
     with patch.object(runner, 'Client', autospec=True), \
@@ -910,6 +970,7 @@ with patch('socket.socket.connect', side_effect=AssertionError('network forbidde
         executor.submit_order.assert_called_once()
         assert executor.submit_order.call_args.args[1].lots == 10
     assert data.get_portfolio.call_count == 2
+    assert execution.get_readiness.call_count == 2
 print('independent archive launch completed')
 '''
 

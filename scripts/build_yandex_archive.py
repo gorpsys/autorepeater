@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 from typing import Any, TYPE_CHECKING
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 if TYPE_CHECKING:
     from scripts.sdk_wheel import ValidatedWheel
@@ -88,6 +88,15 @@ def vendored_files(document: dict[str, Any], wheel: 'ValidatedWheel',
     }
 
 
+def _default_entries(root: Path) -> dict[str, bytes]:
+    """Give cloud pip pinned CA bytes; the SDK itself is still installed from its index."""
+    helper_root = Path(__file__).resolve().parents[1]
+    if str(helper_root) not in sys.path:
+        sys.path.insert(0, str(helper_root))
+    from scripts import cloud_build_tls  # pylint: disable=import-outside-toplevel
+    return cloud_build_tls.prepare(root)
+
+
 def _write_archive(root: Path, files: list[Path], entries: dict[str, bytes], output: Path) -> None:
     with ZipFile(output, 'w', compression=ZIP_DEFLATED) as archive:
         for path in files:
@@ -95,7 +104,14 @@ def _write_archive(root: Path, files: list[Path], entries: dict[str, bytes], out
             if name not in entries:
                 archive.write(path, name)
         for name, data in entries.items():
-            archive.writestr(name, data)
+            if name == 'pip3.12':
+                info = ZipInfo(name)
+                info.compress_type = ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = 0o100755 << 16
+                archive.writestr(info, data)
+            else:
+                archive.writestr(name, data)
 
 
 def _check_archive(root: Path, files: list[Path], entries: dict[str, bytes], output: Path) -> None:
@@ -106,6 +122,8 @@ def _check_archive(root: Path, files: list[Path], entries: dict[str, bytes], out
             raise ValueError('invalid cloud archive members or CRC')
         if any(archive.read(name) != data for name, data in entries.items()):
             raise ValueError('cloud archive content drift')
+        if 'pip3.12' in entries and archive.getinfo('pip3.12').external_attr >> 16 != 0o100755:
+            raise ValueError('cloud pip wrapper is not executable')
 
 
 def build_archive(project_root: str | Path, output_path: str | Path | None = None, *,
@@ -127,16 +145,13 @@ def build_archive(project_root: str | Path, output_path: str | Path | None = Non
             root, application, use_vendored_sdk=use_vendored_sdk), **application}
         files = []
     else:
-        entries = _vendored_entries(root) if use_vendored_sdk else {}
+        entries = _vendored_entries(root) if use_vendored_sdk else _default_entries(root)
     output.parent.mkdir(parents=True, exist_ok=True)
-    if use_vendored_sdk or offline_archive:
-        with TemporaryDirectory(prefix='.yandex-archive-', dir=output.parent) as directory:
-            staged = Path(directory) / output.name
-            _write_archive(root, files, entries, staged)
-            _check_archive(root, files, entries, staged)
-            staged.replace(output)
-    else:
-        _write_archive(root, files, entries, output)
+    with TemporaryDirectory(prefix='.yandex-archive-', dir=output.parent) as directory:
+        staged = Path(directory) / output.name
+        _write_archive(root, files, entries, staged)
+        _check_archive(root, files, entries, staged)
+        staged.replace(output)
     return output
 
 

@@ -67,7 +67,13 @@ Debug строит и проверяет планы с чтением данны
 Облако по умолчанию COMPOSITE/BALANCED, run_sync без стрима и без debug.
 Query algoritm/src при отсутствии ключа использует ALGORITM/SRC_ACCOUNT;
 BALANCED default только для COMPOSITE. Пустой ключ не заменять окружением.
-Token fallback INVEST_TOKEN/t_token, dst DST_ACCOUNT/DEFAULT_DST_ACCOUNT.
+Token fallback INVEST_TOKEN/t_token сохраняется и для пустого token.
+Dst при отсутствии query-ключа: DST_ACCOUNT/DEFAULT_DST_ACCOUNT.
+Явный dst: непустая строка, не только пробелы; не преобразовывать ID.
+Пустой/null/нестроковый dst отвергать до SDK-клиента, без fallback.
+Event и queryStringParameters — JSON-объекты; event=None, отсутствие query
+и query=None означают отсутствие параметров. Timer messages/details.payload
+не являются query-параметрами; таймер сохраняет выбор из окружения/defaults.
 
 ## Разработка и приёмка
 
@@ -105,6 +111,15 @@ instance=True,spec_set=True) с явными DTO; конструкторы/се�
 Проверять точное число/порядок/аргументы и отсутствие лишних вызовов.
 Стримы конечные, заканчивать контролируемым TestException, рабочий стрим
 не обязан завершаться. AST/import-тесты сохраняют границы SDK.
+
+Глобальная immediate_settlement_timeout в test/conftest.py обнуляет только
+ожидание нейтрального execution для обычных статичных снимков. Эти тесты
+проверяют финансовые ограничения и остановку при неготовности, а не polling.
+Сценарии ожидания явно восстанавливают конечное окно и подменяют monotonic/sleep
+виртуальными часами. В test_fx_execution.py локальная settlement_clock обслуживает
+и подтверждение FX-заявки в execution, и доступность денег в execution_market;
+она не применяется к остальным FX-тестам. Глобальная фикстура не влияет на
+торговые запуски или live E2E, расположенный вне дерева test/.
 
 
 ## Офлайн-модель
