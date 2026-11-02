@@ -12,7 +12,7 @@ from autorepeater.fx import FxSnapshot, build_fx_snapshot, select_direct_pair
 from autorepeater.fx_data import FxData, FxPair, FxQuote
 from autorepeater.strategy_data import PortfolioSnapshot
 from scripts.sandbox_lifecycle import SandboxFailure, safe_call
-from scripts.sandbox_retry_report import stale_book_facts
+from e2e.retry_policy import may_retry
 
 D = Decimal
 NOW = datetime(2026, 10, 15, 9, tzinfo=timezone.utc)
@@ -41,15 +41,12 @@ def state(cash, *, ready=True):
 
 
 def test_safe_call_preserves_real_fx_stale_guard_facts():
-    """A wrapped real FX guard retains its exact market and validation clocks."""
+    """A wrapped real FX stale guard keeps its test-owned retry permission."""
     stamp = NOW - timedelta(seconds=181)
     value = quote(market_time=stamp)
     with pytest.raises(SandboxFailure) as caught:
         safe_call(value.validate_fresh, now=NOW)
-    assert stale_book_facts(caught.value) == {
-        'reason': 'market_time_stale', 'expected_uid': 'cny-tom', 'received_uid': 'cny-tom',
-        'market_time': stamp.isoformat(), 'observed_utc': NOW.isoformat(),
-        'freshness_limit_seconds': 180}
+    assert may_retry(caught.value, 'setup', 'failed')
 
 
 def test_rub_identity_has_no_reads():

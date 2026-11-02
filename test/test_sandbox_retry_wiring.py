@@ -1,4 +1,4 @@
-"""The v3 recorder classifies real PR40 validators without broker connections."""
+"""Test-owned retry policy observes real validators without broker connections."""
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import inspect
@@ -11,7 +11,9 @@ from t_tech.invest.services import InstrumentsService, MarketDataService
 
 from autorepeater.fx_data import FxPair, FxQuote
 from autorepeater.tinvest_security_data import TInvestSecurityData
-from scripts import sandbox_retry_evidence as evidence
+from e2e.retry_policy import may_retry
+from scripts import retry_evidence as evidence
+from scripts.retry_results import retry_nodes
 from scripts.sandbox_retry_report import AttemptRecorder
 
 NOW = datetime(2026, 10, 19, tzinfo=timezone.utc)
@@ -34,7 +36,6 @@ def fixture_security():
     return client, TInvestSecurityData(client, clock=lambda: NOW)
 
 
-@pytest.mark.parametrize('protocol', ['retry-v2', 'retry-v3'])
 @pytest.mark.parametrize('boundary', ['security', 'fx'])
 @pytest.mark.parametrize('clock,eligible', [
     ('stale', True), ('just-stale', True), ('exact-limit', False), ('old-limit', False),
@@ -42,9 +43,9 @@ def fixture_security():
     ('exact-future-limit', False), ('future', False), ('missing', False), ('naive', False),
 ])
 def test_actual_validator_to_original_report(
-        security, tmp_path, monkeypatch, protocol, boundary, clock, eligible):
+        security, tmp_path, monkeypatch, boundary, clock, eligible):
     # pylint: disable=too-many-arguments,too-many-positional-arguments
-    """Only proven stale rejections gain retry permission, and only under v3."""
+    """Only a real stale rejection grants the boolean persisted in original results."""
     stamp = {
         'stale': NOW - timedelta(seconds=181),
         'just-stale': NOW - timedelta(seconds=180, microseconds=1),
@@ -59,9 +60,8 @@ def test_actual_validator_to_original_report(
     }[clock]
     client, adapter = security
     client.market_data.get_order_book.return_value.orderbook_ts = stamp
-    monkeypatch.setenv('E2E_EVIDENCE_PROTOCOL', protocol)
     monkeypatch.setenv('E2E_TESTED_SHA', 'a' * 40)
-    recorder = AttemptRecorder(tmp_path / 'report.json')
+    recorder = AttemptRecorder(tmp_path / 'result.json')
     recorder.selected = (NODE,)
     recorder.entered = recorder.cleaned = [NODE]
     recorder.session_cleanup = True
@@ -73,27 +73,20 @@ def test_actual_validator_to_original_report(
             FxQuote(FxPair('uid', 'cny', 'rub', Decimal(1), 1000, True, True, True),
                     Decimal(10), Decimal(11), stamp, NOW).validate_fresh(NOW)
     except ValueError as error:
-        recorder.phase(NODE, 'call', 'failed', error)
+        recorder.phase(NODE, 'call', 'failed', error,
+                       retryable=may_retry(error, 'call', 'failed'))
         status = 1
     else:
         recorder.phase(NODE, 'call', 'passed', None)
         status = 0
     recorder.phase(NODE, 'teardown', 'passed', None)
     recorder.finish(status)
-    report = evidence.read_report(recorder.path, protocol=protocol)
-    evidence.validate_report(report, status)
+    report = evidence.read_result(recorder.path)
+    evidence.validate_result(report, status)
     assert status == (0 if clock in (
         'exact-limit', 'old-limit', 'previous-limit', 'observed-case', 'exact-future-limit') else 1)
-    assert evidence.retry_nodes(report, protocol=protocol) == (
-        (NODE,) if eligible and protocol == 'retry-v3' else ())
-    fact = report.phases[1].stale_book
-    assert (fact is not None) == (eligible and protocol == 'retry-v3')
-    if fact is not None:
-        assert fact == {
-            'reason': 'market_time_stale', 'expected_uid': 'uid', 'received_uid': 'uid',
-            'market_time': stamp.isoformat(), 'observed_utc': NOW.isoformat(),
-            'freshness_limit_seconds': 180,
-        }
+    assert retry_nodes(report.phases, report.selected) == ((NODE,) if eligible else ())
+    assert report.phases[1].retryable is eligible
     assert client.market_data.mock_calls == (
         [call.get_order_book(instrument_id='uid', depth=1)] if boundary == 'security' else [])
     assert client.instruments.mock_calls == ([call.get_instrument_by(

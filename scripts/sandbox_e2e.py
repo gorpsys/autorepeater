@@ -1,5 +1,6 @@
 """Serialize sandbox processes and bound even the application's quota retry loop."""
 import argparse
+from dataclasses import replace
 from collections.abc import Callable
 import fcntl
 import os
@@ -9,6 +10,8 @@ import subprocess
 import sys
 import time
 from uuid import UUID, uuid4
+
+from scripts.retry_settings import RunSettings
 
 GROUP_GRACE_SECONDS = 15
 GROUP_KILL_SECONDS = 5
@@ -21,17 +24,6 @@ def namespace() -> str:
             raise ValueError('CI parent serialization required: SANDBOX_CI_SERIALIZED=1')
         return 'ci'
     return 'local'
-
-
-def timeout_seconds(value: str) -> int:
-    """Total live execution starts at 1800s; no unlimited override is supported."""
-    try:
-        seconds = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError('timeout must be an integer in 1..3600') from None
-    if not 1 <= seconds <= 3600:
-        raise argparse.ArgumentTypeError('timeout must be in 1..3600')
-    return seconds
 
 
 def _group_active(group_id: int) -> bool:
@@ -58,32 +50,35 @@ def _wait_group(group_id: int, seconds: float) -> bool:
     return True
 
 
-def _terminate_process_group(child: subprocess.Popen) -> None:
+def _terminate_process_group(child: subprocess.Popen, *,
+                             settings: RunSettings | None = None) -> None:
     """Confirm all owned descendants stop before cleanup, even if the leader already died."""
+    grace = GROUP_GRACE_SECONDS if settings is None else settings.termination_grace_seconds
+    kill = GROUP_KILL_SECONDS if settings is None else settings.termination_kill_seconds
     try:
         os.killpg(child.pid, signal.SIGTERM)
-        child.wait(timeout=GROUP_GRACE_SECONDS)
+        child.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         os.killpg(child.pid, signal.SIGKILL)
-        child.wait(timeout=GROUP_KILL_SECONDS)
+        child.wait(timeout=kill)
     except ProcessLookupError:
-        child.wait(timeout=GROUP_KILL_SECONDS)
-    if not _wait_group(child.pid, GROUP_GRACE_SECONDS):
+        child.wait(timeout=kill)
+    if not _wait_group(child.pid, grace):
         try:
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        if not _wait_group(child.pid, GROUP_KILL_SECONDS):
+        if not _wait_group(child.pid, kill):
             raise OSError('sandbox process group did not stop; cleanup unsafe')
 
 
-def _cleanup_run(selected_namespace: str, run_id: str) -> None:
+def _cleanup_run(selected_namespace: str, run_id: str, *, timeout: int = 60) -> None:
     """Attempt bounded cleanup of only this interrupted run's owned accounts."""
     try:
         result = subprocess.run([
             sys.executable, '-m', 'scripts.sandbox_lifecycle', 'cleanup',
             '--namespace', selected_namespace, '--run-id', run_id],
-            check=False, timeout=60)
+            check=False, timeout=timeout)
         if result.returncode:
             print('Timeout cleanup failed; owned orphans must be removed next run', flush=True)
     except (OSError, subprocess.TimeoutExpired):
@@ -92,6 +87,7 @@ def _cleanup_run(selected_namespace: str, run_id: str) -> None:
 
 def run_bounded(command: list[str], timeout: int, selected_namespace: str, run_id: str) -> int:
     """Terminate the entire process group, then attempt finite current-run cleanup."""
+    settings = RunSettings.from_json(os.environ.get('E2E_RUN_SETTINGS'))
     child = subprocess.Popen(command, start_new_session=True)  # pylint: disable=consider-using-with
     previous = {}
 
@@ -103,14 +99,14 @@ def run_bounded(command: list[str], timeout: int, selected_namespace: str, run_i
     try:
         result = child.wait(timeout=timeout)
         if result == 124:
-            _terminate_process_group(child)
-            _cleanup_run(selected_namespace, run_id)
+            _terminate_process_group(child, settings=settings)
+            _cleanup_run(selected_namespace, run_id, timeout=settings.cleanup_timeout_seconds)
             return 124
         return result
     except (subprocess.TimeoutExpired, KeyboardInterrupt):
         print('Sandbox run interrupted or timed out; attempting cleanup', flush=True)
-        _terminate_process_group(child)
-        _cleanup_run(selected_namespace, run_id)
+        _terminate_process_group(child, settings=settings)
+        _cleanup_run(selected_namespace, run_id, timeout=settings.cleanup_timeout_seconds)
         return 124
     finally:
         for signum, handler in previous.items():
@@ -121,10 +117,14 @@ def main(argv: list[str] | None = None, *,
          run_id_factory: Callable[[], UUID] | None = None) -> int:
     """Only explicit e2e collection runs live; the offline pytest default is test/."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--timeout', type=timeout_seconds, default=1800)
+    parser.add_argument('--timeout', type=int)
     parser.add_argument('pytest_args', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     try:
+        settings = RunSettings.from_json(os.environ.get('E2E_RUN_SETTINGS') or None)
+        if args.timeout is not None:
+            settings = replace(settings, timeout_seconds=args.timeout)
+        os.environ['E2E_RUN_SETTINGS'] = settings.to_json()
         selected_namespace = namespace()
         if not os.environ.get('SANDBOX_TOKEN'):
             raise ValueError('SANDBOX_TOKEN is required; launch through scripts.sandbox_token')
@@ -142,10 +142,10 @@ def main(argv: list[str] | None = None, *,
             if additional[:1] == ['--']:
                 additional = additional[1:]
             return run_bounded([sys.executable, '-m', 'scripts.sandbox_retry',
-                                '--timeout', str(args.timeout), '--', 'e2e/',
+                                '--timeout', str(settings.timeout_seconds), '--', 'e2e/',
                                 '--confcutdir=e2e', '-q', '--tb=no', '--show-capture=no',
                                 '-p', 'no:cacheprovider', *additional],
-                               args.timeout, selected_namespace, run_id)
+                               settings.timeout_seconds, selected_namespace, run_id)
     except (ValueError, OSError) as error:
         reason = str(error) if isinstance(error, ValueError) else 'cannot launch sandbox process'
         print(reason, file=sys.stderr)

@@ -29,7 +29,7 @@ from autorepeater.strategy_data import (
 )
 from autorepeater.strategy_plan import AllocationProfile
 from autorepeater.tinvest_execution_data import TInvestExecutionData
-from scripts.sandbox_retry_report import transport_facts
+from e2e.retry_policy import transport_facts
 
 __all__ = ['fixture_sdk_runtime']
 

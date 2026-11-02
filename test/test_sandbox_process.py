@@ -15,11 +15,20 @@ class ProcessSpec(subprocess.Popen):
     pid = 456
 
 
-@pytest.mark.parametrize('value', ['0', '3601', '-1', 'garbage'])
+@pytest.fixture(autouse=True)
+def isolated_run_settings(monkeypatch):
+    """A supervisor writes the effective snapshot; keep it local to each test."""
+    monkeypatch.setenv('E2E_RUN_SETTINGS', '{}')
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'garbage'])
 def test_reject_invalid_timeout(value):
     """Invalid timeout values fail before launching pytest or opening accounts."""
-    with pytest.raises(SystemExit):
-        sandbox_e2e.main(['--timeout', value])
+    if value == 'garbage':
+        with pytest.raises(SystemExit):
+            sandbox_e2e.main(['--timeout', value])
+    else:
+        assert sandbox_e2e.main(['--timeout', value]) == 2
 
 
 def test_ci_requires_parent_serialization(monkeypatch):
@@ -110,10 +119,11 @@ def test_signal_during_wait_runs_cleanup(monkeypatch):
     assert handlers[signal.SIGTERM] == signal.SIG_DFL
 
 
-@pytest.mark.parametrize('selected_timeout', [None, 12])
+@pytest.mark.parametrize('selected_timeout', [None, 12, 4200])
 def test_main_default_command_and_environment(monkeypatch, selected_timeout):
     """Only the live subtree is collected; explicit args and deadline reach the child."""
     monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+    monkeypatch.delenv('E2E_RUN_SETTINGS', raising=False)
     monkeypatch.setenv('SANDBOX_TOKEN', 'offline-marker')
     monkeypatch.setattr(sandbox_e2e.fcntl, 'flock', lambda *_: None)
     bounded = create_autospec(sandbox_e2e.run_bounded, spec_set=True, return_value=7)
