@@ -31,6 +31,53 @@ def test_valid_account_config(reserve):
     assert config.reserve == Decimal(reserve)
 
 
+@pytest.mark.parametrize('replacement', ['0.01', '0.02'])
+def test_account_loader_rejects_duplicate_reserve(tmp_path, replacement):
+    """Reading a full valid schema must not silently keep the last reserve."""
+    payload = json.dumps(document())[:-1] + f', "reserve": "{replacement}"}}'
+    path = tmp_path / 'account.json'
+    path.write_text(payload, encoding='utf-8')
+    with pytest.raises(ValueError, match='duplicate.*reserve'):
+        account_config.load_account_config(path)
+
+
+@pytest.mark.parametrize('field, value', [
+    ('reservee', '0.02'), ('allocation_drift_limt', '0'),
+    ('extra', None), ('metadata', [{'limit': 'private-value'}]),
+])
+@pytest.mark.parametrize('entrypoint', ['validate', 'load'])
+def test_account_rejects_unknown_fields(tmp_path, field, value, entrypoint):
+    """Every unknown field is invalid even alongside all correct settings."""
+    payload = {**document(), field: value}
+    path = tmp_path / 'account.json'
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    with pytest.raises(ValueError) as error:
+        if entrypoint == 'validate':
+            account_config.validate_account_config(payload)
+        else:
+            account_config.load_account_config(path)
+    assert str(error.value) == f'account config: unknown fields: {field}'
+
+
+def test_account_unknown_fields_diagnostic_names_keys_without_values():
+    """The closed schema reports all extra keys deterministically, not their values."""
+    payload = {**document(), 'note': 'private-value', 'extra': {'private-key': 'private-value'}}
+    with pytest.raises(ValueError) as error:
+        account_config.validate_account_config(payload)
+    assert str(error.value) == 'account config: unknown fields: extra, note'
+
+
+def test_account_loader_rejects_duplicate_before_unknown_field(tmp_path):
+    """The JSON reader still rejects nested duplicates before schema validation."""
+    payload = {**document(), 'extra': [{'limit': 'private-value'}]}
+    path = tmp_path / 'account.json'
+    path.write_text(json.dumps(payload).replace(
+        '"limit": "private-value"', '"limit": "private-value", "limit": "private-value"'),
+        encoding='utf-8')
+    with pytest.raises(ValueError, match='duplicate.*limit'):
+        account_config.load_account_config(path)
+
+
 @pytest.mark.parametrize('payload', [None, [], 'account', 1, True])
 def test_invalid_account_root(payload):
     """Settings require an object."""

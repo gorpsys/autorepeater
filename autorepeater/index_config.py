@@ -1,5 +1,4 @@
 """Local index composition and validation, without SDK access."""
-import json
 from collections.abc import Callable
 import os
 from dataclasses import dataclass, field
@@ -8,6 +7,7 @@ from pathlib import Path
 
 from autorepeater import reporting
 from autorepeater.config_catalog import Candidate, discover_candidates, select_candidate
+from autorepeater.config_json import read_config_document
 from autorepeater.strategy_contract import UnsupportedSourceError
 from autorepeater.cash_facts import currency_code
 from autorepeater.strategy_plan import exact_product
@@ -64,6 +64,22 @@ _INSTRUMENT_RANGES = {
     'reference_index_capitalization': lambda value: value > 0,
 }
 
+_INDEX_FIELDS = frozenset({
+    'name', 'reserve', 'max_lot_weight_error', 'instruments', 'allocation_drift_limits',
+    'min_position_value', 'reference_capitalization_currency', 'preferred_currency',
+})
+_INSTRUMENT_FIELDS = frozenset({
+    'ticker', 'effective_quantity', 'free_float', 'weight_limit', 'reference_price',
+    'reference_weight', 'reference_index_capitalization',
+    'reference_price_currency', 'reference_fx_rate',
+})
+
+
+def _check_keys(data: dict[str, object], allowed: frozenset[str], context: str) -> None:
+    unknown = data.keys() - allowed
+    if unknown:
+        raise ValueError(f'{context}: unknown fields: {", ".join(sorted(unknown))}')
+
 
 def _decimal_field(data: dict[str, object], field_name: str, context: str,
                    valid_range: Callable[[Decimal], bool]) -> Decimal:
@@ -108,6 +124,7 @@ def _load_instrument(data: object, position: int,
     context = f'instruments[{position}]'
     if not isinstance(data, dict):
         raise ValueError(f'{context}: expected an object')
+    _check_keys(data, _INSTRUMENT_FIELDS, context)
     ticker = data.get('ticker')
     if not isinstance(ticker, str) or not ticker.strip():
         raise ValueError(f'{context}.ticker: expected a nonempty string')
@@ -167,6 +184,7 @@ def validate_index_config(data: object) -> IndexConfig:
     """Validate an already parsed document without filesystem access."""
     if not isinstance(data, dict):
         raise ValueError('index config: expected an object')
+    _check_keys(data, _INDEX_FIELDS, 'index config')
     try:
         preferred_currency = _reference_currency(data.get('preferred_currency', 'rub'))
     except ValueError as error:
@@ -201,8 +219,7 @@ def validate_index_config(data: object) -> IndexConfig:
 
 def read_index_document(path: str | Path) -> object:
     """Parse one JSON document without applying schema validation."""
-    with open(path, encoding='utf-8') as config_file:
-        return json.load(config_file)
+    return read_config_document(path)
 
 
 def load_index_config(path: str | Path) -> IndexConfig:

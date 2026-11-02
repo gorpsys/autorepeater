@@ -9,6 +9,7 @@ import pytest
 
 from autorepeater import account_config, composite_config, index_config, strategies
 from autorepeater.composite_strategy import PreparedCompositeSource
+from autorepeater.index_strategy import IndexQuote, calculate_index_target
 
 
 def account_document(name='NAMED', **changes):
@@ -30,6 +31,97 @@ def index_document():
     path = Path(index_config.__file__).parent / 'configs/gold.json'
     return {**index_config.read_index_document(path),
             'allocation_drift_limits': drift_rows()}
+
+
+@pytest.mark.parametrize('field, first, second', [
+    ('reserve', '0.006', '0.01'),
+    ('reserve', '0.006', '0.006'),
+    ('reference_price', '1', '2'),
+    ('reference_price', '1', '1'),
+    ('limit', '0.05', '0.01'),
+    ('limit', '0.05', '0.05'),
+])
+def test_index_loader_rejects_duplicate_keys(tmp_path, field, first, second):
+    """Root, instrument and drift objects cannot silently replace a value."""
+    payload = json.dumps(index_document()).replace(
+        f'"{field}": "{first}"', f'"{field}": "{first}", "{field}": "{second}"')
+    path = tmp_path / 'index.json'
+    path.write_text(payload, encoding='utf-8')
+    with pytest.raises(ValueError, match=f'duplicate.*{field}'):
+        index_config.load_index_config(path)
+
+
+@pytest.mark.parametrize('field, correct', [
+    ('extra', None),
+    ('min_position_vaule', 'min_position_value'),
+    ('preferred_curreny', 'preferred_currency'),
+    ('reference_capitalization_curreny', 'reference_capitalization_currency'),
+])
+@pytest.mark.parametrize('keep_correct', [False, True])
+def test_index_unknown_root_fields(field, correct, keep_correct):
+    """Unknown extras fail even when the intended optional field is also present."""
+    payload = index_document()
+    payload.update(min_position_value='30', preferred_currency='RUB',
+                   reference_capitalization_currency='RUB')
+    payload[field] = payload[correct] if correct else {'private': 'not in diagnostics'}
+    if correct and not keep_correct:
+        del payload[correct]
+    with pytest.raises(ValueError, match=f'index config: unknown fields: {field}') as caught:
+        index_config.validate_index_config(payload)
+    assert 'not in diagnostics' not in str(caught.value)
+
+
+@pytest.mark.parametrize('field, correct', [
+    ('description', None),
+    ('reference_price_curreny', 'reference_price_currency'),
+    ('reference_fx_raet', 'reference_fx_rate'),
+    ('weight_limt', 'weight_limit'),
+])
+@pytest.mark.parametrize('keep_correct', [False, True])
+def test_index_unknown_instrument_fields(field, correct, keep_correct):
+    """Typos belong to the instrument context, before its mandatory-value checks."""
+    payload = index_document()
+    instrument = payload['instruments'][0]
+    instrument.update(reference_price_currency='RUB', reference_fx_rate='1')
+    instrument[field] = instrument[correct] if correct else 'not in diagnostics'
+    if correct and not keep_correct:
+        del instrument[correct]
+    with pytest.raises(ValueError, match=rf'instruments\[0\]: unknown fields: {field}') as caught:
+        index_config.validate_index_config(payload)
+    assert 'not in diagnostics' not in str(caught.value)
+
+
+@pytest.mark.parametrize('minimum, expected', [
+    ('min_position_value', {'uid-A': Decimal(100)}),
+    (None, {'uid-A': Decimal(75), 'uid-B': Decimal(25)}),
+    ('min_position_vaule', None),
+])
+def test_index_loader_minimum_controls_numerical_target(tmp_path, minimum, expected):
+    """A 30 minimum removes the 25% tail before renormalizing a budget of 100."""
+    payload = index_document()
+    payload.pop('min_position_value', None)
+    template = payload['instruments'][0]
+    composition = [('A', '3', '75'), ('B', '1', '25')]
+    payload['instruments'] = [dict(template, ticker=ticker, reference_price='1',
+                                   reference_index_capitalization=capitalization,
+                                   reference_weight=weight)
+                              for ticker, capitalization, weight in composition]
+    if minimum:
+        payload[minimum] = '30'
+    path = tmp_path / 'index.json'
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    if expected is None:
+        with pytest.raises(ValueError, match='unknown fields: min_position_vaule'):
+            index_config.load_index_config(path)
+        return
+    config = index_config.load_index_config(path)
+    quotes = {ticker: IndexQuote(f'uid-{ticker}', Decimal(1), 1) for ticker in ('A', 'B')}
+    target = calculate_index_target(config, quotes, Decimal(100)).target
+    assert target.quantities == expected
+    assert config.reserve == Decimal(payload['reserve'])
+    assert config.min_position_value == (Decimal(30) if minimum else Decimal(0))
+    assert [item.reference_weight for item in config.instruments] == [Decimal(75), Decimal(25)]
+    assert [quote.lot for quote in quotes.values()] == [1, 1]
 
 
 @pytest.mark.parametrize('field', [

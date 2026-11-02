@@ -679,7 +679,6 @@ import sysconfig
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import call, patch
-
 extracted, repository, source_tree = map(Path, sys.argv[1:4])
 scenario, path_style = sys.argv[4:]
 dependency_paths = {Path(sysconfig.get_path(key)).resolve() for key in ('purelib', 'platlib')}
@@ -702,9 +701,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
     from autorepeater.strategy_data import InstrumentType, PortfolioEntry
     from autorepeater.strategy_plan import StrategyContext
     from autorepeater.strategies import create_strategy, prepare_strategy
-    assert Path(handler.__file__).resolve() == extracted / 'handler.py'
-    assert Path(main.__file__).resolve() == extracted / 'main.py'
-
+    assert all(Path(m.__file__).resolve() == extracted / f'{m.__name__}.py' for m in (handler, main))
     with patch.object(runner.TInvestOrderExecutor, 'submit_order',
                       side_effect=AssertionError('trading forbidden')) as trade:
         # Exercise the actual handler and its saved prepared default, with no SDK lifecycle.
@@ -723,10 +720,10 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                 ('INDEX', 'OBLG', Decimal('0.210526316')),
                 ('INDEX', 'GOLD', Decimal('0.105263158'))]
             assert launch.return_value.method_calls == [call.run_sync()]
-
         account = create_strategy(prepare_strategy('ACCOUNT', '2193248994'))
         assert account.src == '2193248994' and account.config.reserve == Decimal('0.01')
-
+        for name in ('IMOEX', 'OBLG', 'GOLD', 'TMON'):
+            assert create_strategy(prepare_strategy('INDEX', name)).config.name == name
         # Discover by JSON name through configured paths, independently of cwd.
         configs = extracted / 'autorepeater/configs/new/deep'
         for variable, path in [
@@ -784,6 +781,8 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                     'missing-child': ('ABSENT_CHILD', 'unsupported src'),
                     'invalid-index': ('unrelated-filename.json', 'reserve'),
                     'invalid-account': ('different-name.json', 'reserve'),
+                    'duplicate-index': ('unrelated-filename.json', 'unsupported src: ARCHIVE_INDEX'),
+                    'unknown-index': ('unrelated-filename.json', 'min_position_vaule'),
                 }[scenario]
                 try:
                     # No token supplied: config failure must precede even credential lookup.
@@ -795,7 +794,6 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                     raise AssertionError('invalid selected child accepted')
                 launch.assert_not_called()
         trade.assert_not_called()
-
     for name, module in list(sys.modules.items()):
         if name == 'autorepeater' or name.startswith('autorepeater.'):
             assert Path(module.__file__).resolve().is_relative_to(extracted), name
@@ -842,26 +840,28 @@ def damage_archive_child(project_root, scenario):
     """Corrupt only a selected field, preserving the rest of each valid document."""
     configs = project_root / 'autorepeater/configs/new/deep'
     changes = {
-        'invalid-composite': ('composites/third-file.json',
-                              {'component_drift_limit': '0.20',
-                                  'name': 'ARCHIVE_LEAF', 'components': []}),
-        'missing-child': ('composites/third-file.json',
-                          {'component_drift_limit': '0.20', 'name': 'ARCHIVE_LEAF', 'components': [
-                              {'algoritm': 'INDEX', 'src': 'ABSENT_CHILD', 'weight': '1'}]}),
-        'invalid-index': ('indexes/unrelated-filename.json',
-                          {'name': 'ARCHIVE_INDEX', 'reserve': 1}),
+        'invalid-composite': ('composites/third-file.json', {'components': []}),
+        'missing-child': ('composites/third-file.json', {'components': [
+            {'algoritm': 'INDEX', 'src': 'ABSENT_CHILD', 'weight': '1'}]}),
+        'invalid-index': ('indexes/unrelated-filename.json', {'reserve': 1}),
         'invalid-account': ('settings/different-name.json', {'reserve': 1}),
+        'unknown-index': ('indexes/unrelated-filename.json', {'min_position_vaule': '30'}),
     }
     if scenario in changes:
         relative, document = changes[scenario]
         path = configs / relative
         original = json.loads(path.read_text(encoding='utf-8'))
         path.write_text(json.dumps(dict(original, **document)), encoding='utf-8')
+    elif scenario == 'duplicate-index':
+        path = configs / 'indexes/unrelated-filename.json'
+        path.write_text(path.read_text(encoding='utf-8')[:-2] + ', "reserve": "0.01"}\n',
+                        encoding='utf-8')
 
 
 @pytest.mark.parametrize('path_style', ['relative', 'absolute'])
 @pytest.mark.parametrize('scenario', [
-    'valid', 'invalid-composite', 'missing-child', 'invalid-index', 'invalid-account'])
+    'valid', 'invalid-composite', 'missing-child', 'invalid-index', 'invalid-account',
+    'duplicate-index', 'unknown-index'])
 def test_nested_application_archive(application_bundle, tmp_path, scenario, path_style):
     """Make preserves the bundle path and extracted JSON trees work without the repo."""
     project_root, expected = application_bundle

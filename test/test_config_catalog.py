@@ -1,6 +1,7 @@
 """Catalog mechanics preserve schema-specific parsing, warnings and strict loads."""
 import subprocess
 import sys
+import json
 from pathlib import Path
 from decimal import Decimal
 from unittest.mock import Mock, call, patch
@@ -103,6 +104,22 @@ def test_index_implicit_selection_and_strict_load_are_unchanged():
             index_config.load_index_configs()
         load.assert_called_once_with(paths[0])
         warn.assert_not_called()
+
+
+@pytest.mark.parametrize('instrument', [False, True])
+def test_index_strict_catalog_load_rejects_unknown_fields(tmp_path, monkeypatch, instrument):
+    """The load-all entry point uses the same closed root and instrument schema."""
+    payload = index_config.read_index_document(
+        Path(index_config.__file__).parent / 'configs/gold.json')
+    record = payload['instruments'][0] if instrument else payload
+    record['description'] = 'unsupported metadata'
+    (tmp_path / 'index.json').write_text(json.dumps(payload), encoding='utf-8')
+    monkeypatch.setenv('INDEX_CONFIG_DIR', str(tmp_path))
+    with patch.object(index_config.reporting, 'print_index_config_warning',
+                      autospec=True, spec_set=True) as warn:
+        with pytest.raises(ValueError, match='unknown fields: description'):
+            index_config.load_index_configs()
+    warn.assert_not_called()
 
 
 def test_catalog_import_and_execution_without_sdk_schemas_or_io(guarded_import_script):

@@ -1,3 +1,3 @@
 """Application release identifier, also included in cloud archives."""
 
-__version__ = '6.0.1'
+__version__ = '7.0.0'
