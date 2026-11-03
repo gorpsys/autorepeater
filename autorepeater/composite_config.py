@@ -1,5 +1,4 @@
 """Local COMPOSITE schema and exact-name selection, independent of algorithms."""
-import json
 import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
@@ -7,6 +6,7 @@ from pathlib import Path
 
 from autorepeater import reporting
 from autorepeater.config_catalog import Candidate, discover_candidates, select_candidate
+from autorepeater.config_json import read_config_document
 
 
 @dataclass(frozen=True)
@@ -87,8 +87,7 @@ def validate_composite_config(data: object) -> CompositeConfig:
 
 def read_composite_document(path: str | Path) -> object:
     """Parse one document without extracting names from invalid JSON."""
-    with open(path, encoding='utf-8') as config_file:
-        return json.load(config_file)
+    return read_config_document(path)
 
 
 def load_composite_config(path: str | Path) -> CompositeConfig:

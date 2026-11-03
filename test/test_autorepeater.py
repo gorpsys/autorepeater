@@ -3349,6 +3349,13 @@ def test_index_public_snapshot_main_exclusions(public_index_snapshot):
     assert IndexStrategy(packaged).build_target(snapshot, Decimal('154000')) == result.target
 
 
+def rub_index_document(config):
+    """RUB calibration fixtures use external JSON keys rather than internal DTO fields."""
+    assert config.reference_units == index_config_module.IndexReferenceUnits()
+    fields = {key: value for key, value in asdict(config).items() if key != 'reference_units'}
+    return json.loads(json.dumps(fields, default=str))
+
+
 @pytest.fixture(name='calibration_cli')
 def fixture_calibration_cli(client, index_sdk_config, monkeypatch, tmp_path):
     """Use real snapshot loading with SDK autospecs and only synthetic credentials."""
@@ -3356,8 +3363,7 @@ def fixture_calibration_cli(client, index_sdk_config, monkeypatch, tmp_path):
         Share(uid=f'uid-{ticker}', ticker=ticker, name=ticker, class_code='TQBR',
               lot=lot, currency='rub', api_trade_available_flag=True)
         for ticker, lot in [('A', 2), ('B', 1)]])
-    path = write_index_config(
-        tmp_path, json.loads(json.dumps(asdict(index_sdk_config), default=str)))
+    path = write_index_config(tmp_path, rub_index_document(index_sdk_config))
     monkeypatch.setattr(calibration.os, 'environ', {
         'READ_ONLY_INVEST_TOKEN': 'synthetic-read-only-token', 'IMOEX_CONFIG_PATH': str(path),
     })
@@ -3424,7 +3430,10 @@ def test_index_calibration_cli(defaults, calibration_cli, client, tmp_path, monk
         assert report['comparisons'][-1]['reserve'] == '0'
     else:
         assert not output.exists()
-    config = load_index_config(write_index_config(tmp_path, report['config']))
+    config = dict(report['config'])
+    assert config.pop('reference_units') == {
+        'capitalization_currency': 'rub', 'price_currencies': {}, 'fx_rates': {}}
+    config = load_index_config(write_index_config(tmp_path, config))
     snapshot = {ticker: IndexQuote(
         uid=row['uid'], price=Decimal(row['price']), lot=row['lot'], currency=row['currency'],
         time=datetime.fromisoformat(row['time'])) for ticker, row in report['snapshot'].items()}
@@ -3517,7 +3526,7 @@ def test_single_fund_calibration(single_fund, client, monkeypatch, caplog, tmp_p
                                  expected_reserve, budget, lots):
     """Calibration uses config reserve on gross inputs and leaves available budgets alone."""
     config = replace(single_fund.config, reserve=Decimal(expected_reserve))
-    path = write_index_config(tmp_path, json.loads(json.dumps(asdict(config), default=str)))
+    path = write_index_config(tmp_path, rub_index_document(config))
     monkeypatch.setenv('IMOEX_CONFIG_PATH', str(path))
     monkeypatch.setenv('READ_ONLY_INVEST_TOKEN', 'synthetic-read-only-token')
     with patch.object(calibration, 'Client', autospec=True) as sdk_client, \
@@ -3601,7 +3610,7 @@ def test_index_calibration_cli_minimum(calibration_cli, tmp_path, caplog):
     config, _ = index_calculation_case([('A', '1', '10', 2), ('B', '1', '20', 1)])
     config.min_position_value = Decimal('51')
     config.reserve = Decimal('0')
-    write_index_config(tmp_path, json.loads(json.dumps(asdict(config), default=str)))
+    write_index_config(tmp_path, rub_index_document(config))
     with caplog.at_level(25, logger='tinkoffBot'):
         calibration.main(['--gross-values', '100', '--budgets', '100'])
     report = json.loads(next(record.message for record in caplog.records if record.levelno == 25))

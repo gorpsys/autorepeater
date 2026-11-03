@@ -20,6 +20,34 @@ def document(name='GOOD', weights=('0.6', '0.3')):
     ]}
 
 
+@pytest.mark.parametrize('field, first, second', [
+    ('component_drift_limit', '0.20', '0.10'),
+    ('component_drift_limit', '0.20', '0.20'),
+    ('weight', '0.6', '0.5'),
+    ('weight', '0.6', '0.6'),
+])
+def test_composite_loader_rejects_duplicate_keys(tmp_path, field, first, second):
+    """Root and nested component duplicates fail before DTO construction."""
+    payload = json.dumps(document()).replace(
+        f'"{field}": "{first}"', f'"{field}": "{first}", "{field}": "{second}"')
+    path = tmp_path / 'composite.json'
+    path.write_text(payload, encoding='utf-8')
+    with pytest.raises(ValueError, match=f'duplicate.*{field}'):
+        composite_config.load_composite_config(path)
+
+
+@pytest.mark.parametrize('nested', [False, True])
+def test_composite_loader_still_rejects_extra_fields(tmp_path, nested):
+    """The shared reader does not loosen either level of COMPOSITE's schema."""
+    payload = document()
+    target = payload['components'][0] if nested else payload
+    target['extra'] = 'unused'
+    path = tmp_path / 'composite.json'
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    with pytest.raises(ValueError, match='unknown fields: extra'):
+        composite_config.load_composite_config(path)
+
+
 @pytest.fixture(name='documents')
 def fixture_documents(tmp_path, monkeypatch):
     """Write catalogs only into a controlled temporary directory."""

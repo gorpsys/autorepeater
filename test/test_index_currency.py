@@ -35,6 +35,38 @@ def test_omitted_reference_currency_always_means_rub():
     assert config.reference_units.capitalization_currency == 'rub'
     assert not config.reference_units.price_currencies
     assert not config.reference_units.fx_rates
+    assert config.min_position_value == 0
+    assert config.preferred_currency == 'rub'
+
+
+@pytest.mark.parametrize('capitalization_currency, price_currency, rate', [
+    ('RUB', 'RUB', None), ('RUB', 'RUB', '1'), ('RUB', 'CNY', '10'),
+    ('CNY', 'CNY', '1'), ('CNY', 'RUB', '0.1'),
+])
+def test_all_optional_fields_preserve_reference_units(
+        tmp_path, capitalization_currency, price_currency, rate):
+    """Closed INDEX keys accept historical units, explicit FX and execution preference."""
+    payload = document()
+    payload.update(min_position_value='30', preferred_currency='CNY',
+                   reference_capitalization_currency=capitalization_currency)
+    for item in payload['instruments']:
+        item['reference_price_currency'] = price_currency
+        if rate is not None:
+            item['reference_fx_rate'] = rate
+    path = tmp_path / 'optional.json'
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    config = load_index_config(path)
+    assert config.min_position_value == D(30)
+    assert config.preferred_currency == 'cny'
+    units = config.reference_units
+    assert units.capitalization_currency == capitalization_currency.lower()
+    assert units.price_currencies == ({'RUB': 'cny', 'CNY': 'cny'}
+                                      if price_currency == 'CNY' else {})
+    assert units.fx_rates == ({'RUB': D(rate), 'CNY': D(rate)}
+                              if capitalization_currency != 'RUB' or price_currency != 'RUB'
+                              else {})
+    assert config.instruments[0].reference_price == D(100)
+    assert config.instruments[0].reference_index_capitalization == D(1000)
 
 
 def test_mixed_index_historical_currency_changes_weights_and_targets():

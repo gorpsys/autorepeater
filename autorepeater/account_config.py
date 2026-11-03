@@ -1,5 +1,4 @@
 """Local ACCOUNT settings, independent of index catalogs and the SDK."""
-import json
 import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -7,6 +6,7 @@ from pathlib import Path
 
 from autorepeater import reporting
 from autorepeater.config_catalog import discover_candidates, select_candidate
+from autorepeater.config_json import read_config_document
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,9 @@ def validate_account_config(data: object) -> AccountConfig:
     """Validate a parsed document without accessing files or services."""
     if not isinstance(data, dict):
         raise ValueError('account config: expected an object')
+    unknown = data.keys() - {'name', 'source_account_id', 'reserve', 'allocation_drift_limit'}
+    if unknown:
+        raise ValueError(f'account config: unknown fields: {", ".join(sorted(unknown))}')
     name = data.get('name')
     if not isinstance(name, str) or not name or any(char.isspace() for char in name):
         raise ValueError('account config.name: expected a nonempty name without whitespace')
@@ -71,8 +74,7 @@ def _account_paths() -> list[Path]:
 
 def read_account_document(path: str | Path) -> object:
     """Parse one JSON document, without guessing names from malformed text."""
-    with open(path, encoding='utf-8') as config_file:
-        return json.load(config_file)
+    return read_config_document(path)
 
 
 def load_account_config(path: str | Path) -> AccountConfig:

@@ -261,7 +261,9 @@ def test_old_creation_interface_is_removed():
 
 
 @pytest.mark.parametrize('entrypoint', ['cli', 'cloud', 'runner'])
-@pytest.mark.parametrize('foreign', ['schema', 'syntax', 'missing_name', 'duplicate'])
+@pytest.mark.parametrize('foreign', [
+    'schema', 'syntax', 'missing_name', 'duplicate',
+    'duplicate_key', 'unknown_root', 'unknown_instrument'])
 def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog,
                                         entrypoint, foreign):
     """All application launches use one preparation, read pass, and warning pass."""
@@ -273,6 +275,17 @@ def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog
         (tmp_path / 'bad.json').write_text('{', encoding='utf-8')
     elif foreign == 'missing_name':
         (tmp_path / 'bad.json').write_text('{}', encoding='utf-8')
+    elif foreign == 'duplicate_key':
+        path = documents('bad.json', 'GOOD')
+        path.write_text(path.read_text(encoding='utf-8')[:-1] + ', "reserve": "0.01"}',
+                        encoding='utf-8')
+    elif foreign == 'unknown_root':
+        documents('bad.json', 'BAD', min_position_vaule='30')
+    elif foreign == 'unknown_instrument':
+        path = documents('bad.json', 'BAD')
+        path.write_text(path.read_text(encoding='utf-8').replace(
+            '"ticker": "ONE"', '"ticker": "ONE", "reference_price_curreny": "RUB"'),
+            encoding='utf-8')
     else:
         documents('bad.json', 'BAD')
         documents('duplicate.json', 'BAD')
@@ -312,6 +325,77 @@ def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog
             engine.return_value.mainflow.assert_called_once_with('dst')
         else:
             engine.return_value.sync_accounts.assert_called_once_with('dst')
+
+
+def write_strict_selection_document(tmp_path, monkeypatch, algoritm, problem, diagnostic):
+    """Keep valid fields intact while damaging one selected file before preparation."""
+    module = Path(index_config.__file__).parent
+    relative, variable = {
+        'ACCOUNT': ('configs/account/account.json', 'ACCOUNT_CONFIG_PATH'),
+        'COMPOSITE': ('configs/composite/balanced.json', 'COMPOSITE_CONFIG_DIR'),
+        'INDEX': ('configs/gold.json', 'INDEX_CONFIG_DIR'),
+    }[algoritm]
+    if algoritm == 'ACCOUNT':
+        monkeypatch.delenv('ACCOUNT_CONFIG_DIR', raising=False)
+        payload = {'name': 'GOOD', 'source_account_id': '00123', 'reserve': '0.01',
+                   'allocation_drift_limit': '0.0092'}
+    else:
+        payload = json.loads((module / relative).read_text(encoding='utf-8'))
+        payload['name'] = 'GOOD'
+    encoded = json.dumps(payload)
+    if problem == 'duplicate':
+        encoded = encoded[:-1] + f', "{diagnostic}": "{payload[diagnostic]}"}}'
+    elif problem == 'unknown_root':
+        encoded = encoded[:-1] + f', "{diagnostic}": "30"}}'
+    else:
+        payload['instruments'][0][diagnostic] = 'RUB'
+        encoded = json.dumps(payload)
+    path = tmp_path / 'different-filename.json'
+    path.write_text(encoded, encoding='utf-8')
+    monkeypatch.setenv(variable, str(path if algoritm == 'ACCOUNT' else tmp_path))
+    return path
+
+
+@pytest.mark.parametrize('entrypoint', ['cli', 'cloud'])
+@pytest.mark.parametrize('algoritm, problem, diagnostic', [
+    ('ACCOUNT', 'duplicate', 'reserve'),
+    ('ACCOUNT', 'unknown_root', 'allocation_drift_limt'),
+    ('COMPOSITE', 'duplicate', 'component_drift_limit'),
+    ('INDEX', 'duplicate', 'reserve'),
+    ('INDEX', 'unknown_root', 'min_position_vaule'),
+    ('INDEX', 'unknown_instrument', 'reference_price_curreny'),
+])
+def test_strict_config_failure_precedes_credentials_and_construction(
+        tmp_path, monkeypatch, caplog, entrypoint, algoritm, problem, diagnostic):
+    """Both entrypoints reject ambiguity before credentials, Runner, or SDK effects."""
+    path = write_strict_selection_document(tmp_path, monkeypatch, algoritm, problem, diagnostic)
+    monkeypatch.setattr(sys, 'argv', ['main.py', '--algoritm', algoritm, '-s', 'GOOD'])
+    with patch.object(cli if entrypoint == 'cli' else serverless, 'Runner',
+                      autospec=True, spec_set=True) as launch, \
+            patch.object(runner_module, 'Client', autospec=True, spec_set=True) as client, \
+            patch.object(cli, 'os', autospec=True, spec_set=True) as credentials, \
+            patch.object(serverless, 'get_param', autospec=True, spec_set=True,
+                         side_effect=AssertionError('credentials read')) as parameters, \
+            patch.object(serverless, 'configure_yc_logging', autospec=True, spec_set=True), \
+            patch('builtins.open', wraps=open) as read:
+        with pytest.raises(ValueError) as error:
+            if entrypoint == 'cli':
+                cli.main()
+            else:
+                serverless.handler({'queryStringParameters': {
+                    'algoritm': algoritm, 'src': 'GOOD'}}, None)
+        assert str(path) in str(error.value)
+        if problem == 'duplicate':
+            assert 'unsupported src: GOOD' in str(error.value)
+            assert any('duplicate' in message and diagnostic in message
+                       and str(path) in message for message in caplog.messages)
+        else:
+            assert diagnostic in str(error.value)
+        assert [item.args[0] for item in read.call_args_list] == [path]
+        launch.assert_not_called()
+        client.assert_not_called()
+        assert credentials.mock_calls == []
+        parameters.assert_not_called()
 
 
 @pytest.mark.parametrize('arguments', [[], ['-s', '123'], ['--algoritm', 'ACCOUNT']])

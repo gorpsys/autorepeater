@@ -25,8 +25,20 @@ INDEX_CONFIG_DIR либо IMOEX_CONFIG_PATH (configs/); COMPOSITE_CONFIG_DIR
 в дубликатах, из битого JSON имя не восстанавливать. load_index_configs строгий.
 Пути разных алгоритмов независимы; настройки фиксируются при подготовке.
 
-ACCOUNT обязательные name/source_account_id/reserve/allocation_drift_limit;
-дополнительные поля загрузчик не использует.
+Все три reader используют общий строгий JSON parser: повторное декодированное
+имя ключа в одном объекте любой глубины — ValueError, даже при равных значениях
+или внутри списка/неизвестного поля. Одинаковое имя в разных объектах допустимо.
+Обычные JSON-типы, порядок и ошибки I/O/синтаксиса сохранены. Ошибка повтора
+называет ключ без значений/документа, полный JSON Pointer не обещается.
+При parse error имя неизвестно: не восстанавливать его из текста или filename;
+такой кандидат не участвует в дублях name и не блокирует корректный чужой выбор.
+Путь и предупреждения остаются обязанностью каталога. Проверки выполняются
+до credentials/Runner/Client; [миграция прямая](../../scripts/README.md#миграция-конфигов-на-700).
+
+ACCOUNT закрытая схема: только обязательные
+name/source_account_id/reserve/allocation_drift_limit.
+Любое неизвестное поле — ValueError с именем ключа, без дампа значений;
+дополнительные поля не принимаются, даже рядом с правильными обязательными.
 Встроенные reserve="0.01", limit="0.0092"; source_account_id непустая строка
 без пробельных символов (включая числовой ID или UUID), не произвольный src.
 Ведущие нули и регистр сохраняются. Reserve/limit конечные строки [0,1).
@@ -35,6 +47,14 @@ COMPOSITE строгие name/component_drift_limit/components; limit [0,1),
 порядку при Decimal prec28 <=1, без нормализации. Собственного reserve нет.
 INDEX обязательные name/reserve/max_lot_weight_error/instruments/
 allocation_drift_limits; min_position_value default "0".
+Корень INDEX закрыт: кроме обязательных разрешены только min_position_value,
+reference_capitalization_currency/preferred_currency. У инструмента разрешены
+только ticker/effective_quantity/free_float/weight_limit/reference_price/
+reference_weight/reference_index_capitalization/reference_price_currency/reference_fx_rate.
+Любое неизвестное поле, в том числе min_position_vaule рядом с правильным,
+ошибочно; диагностика называет ключ и root/instruments[i], без дампа значений.
+Обязательность и валютные условия остаются прежними.
+COMPOSITE и drift-таблица сохраняют строгие схемы.
 Необязательный INDEX preferred_currency задаёт приоритет валюты торгов
 всего состава; отсутствующий означает RUB. Валюта проверяется по тому же
 набору кодов, что справочные валюты; нормализуется только регистр.
