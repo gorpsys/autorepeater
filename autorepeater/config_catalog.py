@@ -16,6 +16,7 @@ class Candidate(Generic[ConfigT]):
     name: str | None
     config: ConfigT | None
     error: ValueError | None
+    cause: OSError | ValueError | None = None
 
 
 def discover_candidates(paths: Sequence[Path], read_document: Callable[[Path], object],
@@ -26,15 +27,17 @@ def discover_candidates(paths: Sequence[Path], read_document: Callable[[Path], o
         name = None
         config = None
         error = None
+        original_cause: OSError | ValueError | None = None
         try:
             document = read_document(path)
             if isinstance(document, dict) and isinstance(document.get('name'), str):
                 name = document['name']
             config = validate_document(document)
         except (OSError, ValueError) as cause:
+            original_cause = cause
             label = f'{path} ({name})' if name is not None else str(path)
             error = ValueError(f'{label}: {cause}')
-        candidates.append(Candidate(path, name, config, error))
+        candidates.append(Candidate(path, name, config, error, original_cause))
     return candidates
 
 
@@ -63,5 +66,7 @@ def select_candidate(candidates: Sequence[Candidate[ConfigT]], name: str,
     if len(matches) != 1:
         raise ValueError(_duplicate_message(name, matches))
     if matches[0].error is not None:
+        if matches[0].cause is not None:
+            raise matches[0].error from matches[0].cause
         raise matches[0].error
     return cast(ConfigT, matches[0].config)

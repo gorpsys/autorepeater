@@ -254,8 +254,11 @@ def select_index_config(name: str | None = None) -> IndexConfig:
     """Select one exact JSON name; isolate foreign errors and read each file once."""
     candidates = _discover_candidates()
     if name is None:
-        if len(candidates) != 1 or candidates[0].error is not None:
+        if len(candidates) != 1:
             raise UnsupportedSourceError('--src must name a configured index strategy')
+        if candidates[0].error is not None:
+            raise UnsupportedSourceError(
+                '--src must name a configured index strategy') from candidates[0].cause
         return candidates[0].config
     return select_candidate(candidates, name, reporting.print_index_config_warning)
 

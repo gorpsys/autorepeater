@@ -20,6 +20,30 @@ def document(name='GOOD', weights=('0.6', '0.3')):
     ]}
 
 
+@pytest.mark.parametrize('entrypoint', ['load', 'select'])
+def test_composite_decimal_error_preserves_original_chain(
+        tmp_path, monkeypatch, caplog, entrypoint, config_error_capture):
+    """The real policy-limit failure retains its original Decimal cause."""
+    path = tmp_path / 'different-filename.json'
+    payload = {**document(), 'component_drift_limit': 'bad'}
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    monkeypatch.setenv('COMPOSITE_CONFIG_DIR', str(tmp_path))
+    capture = config_error_capture(composite_config.validate_composite_config)
+    with patch.object(composite_config, 'read_composite_document', autospec=True, spec_set=True,
+                      side_effect=composite_config.read_composite_document) as read, \
+            patch.object(composite_config, 'validate_composite_config', autospec=True,
+                         spec_set=True, side_effect=capture.side_effect) as validator:
+        with pytest.raises(ValueError) as caught:
+            if entrypoint == 'load':
+                composite_config.load_composite_config(path)
+            else:
+                composite_config.select_composite_config('GOOD')
+    capture.assert_chain(caught, path, entrypoint=entrypoint)
+    read.assert_called_once_with(path)
+    validator.assert_called_once_with(payload)
+    assert not caplog.records
+
+
 @pytest.mark.parametrize('field, first, second', [
     ('component_drift_limit', '0.20', '0.10'),
     ('component_drift_limit', '0.20', '0.20'),

@@ -3,13 +3,15 @@ import json
 from copy import deepcopy
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import call, patch
 
 import pytest
 
 from autorepeater import account_config, composite_config, index_config, strategies
 from autorepeater.composite_strategy import PreparedCompositeSource
 from autorepeater.index_strategy import IndexQuote, calculate_index_target
+from autorepeater.strategy_contract import UnsupportedSourceError
 
 
 def account_document(name='NAMED', **changes):
@@ -31,6 +33,132 @@ def index_document():
     path = Path(index_config.__file__).parent / 'configs/gold.json'
     return {**index_config.read_index_document(path),
             'allocation_drift_limits': drift_rows()}
+
+
+@pytest.mark.parametrize('entrypoint', ['load', 'select'])
+def test_index_decimal_error_preserves_original_chain(
+        tmp_path, monkeypatch, caplog, entrypoint, config_error_capture):
+    """The real reserve validator keeps its error and Decimal cause through selection."""
+    path = tmp_path / 'different-filename.json'
+    payload = {**index_document(), 'name': 'GOOD', 'reserve': 'bad'}
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    monkeypatch.delenv('IMOEX_CONFIG_PATH', raising=False)
+    monkeypatch.setenv('INDEX_CONFIG_DIR', str(tmp_path))
+    capture = config_error_capture(index_config.validate_index_config)
+    with patch.object(index_config, 'read_index_document', autospec=True, spec_set=True,
+                      side_effect=index_config.read_index_document) as read, \
+            patch.object(index_config, 'validate_index_config', autospec=True, spec_set=True,
+                         side_effect=capture.side_effect) as validator:
+        with pytest.raises(ValueError) as caught:
+            if entrypoint == 'load':
+                index_config.load_index_config(path)
+            else:
+                index_config.select_index_config('GOOD')
+    capture.assert_chain(caught, path, entrypoint=entrypoint)
+    read.assert_called_once_with(path)
+    validator.assert_called_once_with(payload)
+    assert not caplog.records
+
+
+def catalog_document(algoritm, name='GOOD', invalid=False):
+    """Construct valid schemas, with an optional real decimal conversion failure."""
+    if algoritm == 'ACCOUNT':
+        payload = account_document(name)
+    elif algoritm == 'INDEX':
+        payload = {**index_document(), 'name': name}
+    else:
+        payload = {'name': name, 'component_drift_limit': '0.20', 'components': [
+            {'algoritm': 'INDEX', 'src': 'GOLD', 'weight': '1'}]}
+    if invalid:
+        payload['component_drift_limit' if algoritm == 'COMPOSITE' else 'reserve'] = 'bad'
+    return payload
+
+
+@pytest.fixture(name='catalog')
+def fixture_catalog(request, tmp_path, monkeypatch):
+    """An isolated real catalog with autospec-compatible algorithm functions."""
+    algoritm = request.param
+    module = {'ACCOUNT': account_config, 'INDEX': index_config,
+              'COMPOSITE': composite_config}[algoritm]
+    for variable in ('ACCOUNT_CONFIG_PATH', 'IMOEX_CONFIG_PATH'):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv(f'{algoritm}_CONFIG_DIR', str(tmp_path))
+    prefix = algoritm.lower()
+    return SimpleNamespace(algoritm=algoritm, module=module,
+                           reader=getattr(module, f'read_{prefix}_document'),
+                           validate=getattr(module, f'validate_{prefix}_config'),
+                           select=getattr(module, f'select_{prefix}_config'))
+
+
+@pytest.mark.parametrize('catalog', ['ACCOUNT', 'INDEX', 'COMPOSITE'], indirect=True)
+@pytest.mark.parametrize('problem', ['syntax', 'duplicate_key'])
+def test_real_catalog_foreign_errors_read_once_without_inferred_name(
+        catalog, tmp_path, caplog, problem):
+    """Bad bodies warn in file order; parsed names alone influence exact selection."""
+    bad = catalog_document(catalog.algoritm, 'OTHER', invalid=True)
+    good = catalog_document(catalog.algoritm)
+    bad_path, good_path, broken_path = (tmp_path / filename for filename in (
+        'a-bad.json', 'b-good.json', 'GOOD.json'))
+    bad_path.write_text(json.dumps(bad), encoding='utf-8')
+    good_path.write_text(json.dumps(good), encoding='utf-8')
+    broken_path.write_text('{"name":"GOOD",' if problem == 'syntax'
+                           else '{"name":"GOOD","name":"GOOD"}', encoding='utf-8')
+    with patch.object(catalog.module, catalog.reader.__name__, autospec=True, spec_set=True,
+                      side_effect=catalog.reader) as reads, \
+            patch.object(catalog.module, catalog.validate.__name__, autospec=True, spec_set=True,
+                         side_effect=catalog.validate) as validators:
+        selected = catalog.select('GOOD')
+    assert selected == catalog.validate(good)
+    assert reads.call_args_list == [call(path) for path in sorted(
+        (bad_path, good_path, broken_path))]
+    assert validators.call_args_list == [call(bad), call(good)]
+    assert len(caplog.records) == 2
+    assert all(record.levelname == 'WARNING' for record in caplog.records)
+    assert str(broken_path) in caplog.messages[0]
+    assert str(bad_path) in caplog.messages[1] and '(OTHER)' in caplog.messages[1]
+    assert all('duplicate strategy name' not in message for message in caplog.messages)
+
+
+@pytest.mark.parametrize('catalog', ['ACCOUNT', 'INDEX', 'COMPOSITE'], indirect=True)
+@pytest.mark.parametrize('problem', ['syntax', 'duplicate_key'])
+def test_real_catalog_unknown_parse_failure_has_no_selected_cause(
+        catalog, tmp_path, caplog, problem):
+    """A matching filename and raw name cannot make an unparsed file selectable."""
+    path = tmp_path / 'MISSING.json'
+    path.write_text('{"name":"MISSING",' if problem == 'syntax'
+                    else '{"name":"MISSING","name":"MISSING"}', encoding='utf-8')
+    with patch.object(catalog.module, catalog.reader.__name__, autospec=True, spec_set=True,
+                      side_effect=catalog.reader) as read, \
+            patch.object(catalog.module, catalog.validate.__name__, autospec=True, spec_set=True,
+                         side_effect=catalog.validate) as validator:
+        with pytest.raises(UnsupportedSourceError) as caught:
+            catalog.select('MISSING')
+    assert str(caught.value) == f'unsupported src: MISSING; problematic files: {path}'
+    assert caught.value.__cause__ is None
+    read.assert_called_once_with(path)
+    validator.assert_not_called()
+    assert len(caplog.records) == 1 and str(path) in caplog.messages[0]
+
+
+@pytest.mark.parametrize('catalog', ['ACCOUNT', 'INDEX', 'COMPOSITE'], indirect=True)
+def test_real_catalog_readable_bad_name_still_makes_selected_duplicate(catalog, tmp_path, caplog):
+    """Decimal failure retains the parsed name but cannot supply an arbitrary duplicate cause."""
+    good = catalog_document(catalog.algoritm)
+    bad = catalog_document(catalog.algoritm, invalid=True)
+    paths = [tmp_path / filename for filename in ('a-good.json', 'b-bad.json')]
+    for path, payload in zip(paths, (good, bad)):
+        path.write_text(json.dumps(payload), encoding='utf-8')
+    with patch.object(catalog.module, catalog.reader.__name__, autospec=True, spec_set=True,
+                      side_effect=catalog.reader) as reads, \
+            patch.object(catalog.module, catalog.validate.__name__, autospec=True, spec_set=True,
+                         side_effect=catalog.validate) as validators:
+        with pytest.raises(ValueError) as caught:
+            catalog.select('GOOD')
+    assert str(caught.value) == f'duplicate strategy name: GOOD ({paths[0]}, {paths[1]})'
+    assert caught.value.__cause__ is None
+    assert reads.call_args_list == [call(path) for path in paths]
+    assert validators.call_args_list == [call(good), call(bad)]
+    assert not caplog.records
 
 
 @pytest.mark.parametrize('field, first, second', [
