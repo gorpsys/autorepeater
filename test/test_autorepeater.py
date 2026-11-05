@@ -1588,6 +1588,10 @@ def test_cloud_archive(tmp_path):
     (project / 'scripts').mkdir()
     shutil.copyfile(repository / 'scripts/build_yandex_archive.py',
                     project / 'scripts/build_yandex_archive.py')
+    for name in ('cloud_archive_inputs.py', 'cloud_archive_manifest.py', 'cloud_archive_zip.py',
+                 'runtime_lock.py',
+                 'sdk_wheel.py', 'sdk_worker.py', 'vendor_inventory.py'):
+        shutil.copyfile(repository / 'scripts' / name, project / 'scripts' / name)
     (project / 'scripts/cloud_build_tls.py').write_text(
         f'def prepare(root):\n    return {CLOUD_TLS_ENTRIES!r}\n')
     for source in (repository / 'autorepeater').glob('*.py'):
@@ -1605,7 +1609,8 @@ def test_cloud_archive(tmp_path):
         capture_output=True, text=True, timeout=30)
     assert build.returncode == 0, build.stdout + build.stderr
     extracted = tmp_path / 'extracted'
-    expected = {'main.py', 'handler.py', 'requirements.txt', 'requirements-runtime.txt'}
+    expected = {'main.py', 'handler.py', 'requirements.txt', 'requirements-runtime.txt',
+                'archive-manifest.json'}
     expected.update(CLOUD_TLS_ENTRIES)
     expected.update(path.relative_to(project).as_posix() for path in config_dir.rglob('*.json'))
     expected.update(f'autorepeater/{path.name}'

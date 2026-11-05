@@ -1,6 +1,6 @@
 .PHONY: setup lint typecheck test coverage e2e claude-yandex-archive \
         check-lint check-typecheck check-test check-coverage check-e2e \
-        update-runtime-lock check-runtime-lock check-cloud-package
+        update-runtime-lock check-runtime-lock check-cloud-package check-cloud-archive
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 VENV_PYTHON ?= python3
@@ -13,22 +13,42 @@ E2E_ARGS ?=
 E2E_RUN_SETTINGS ?=
 USE_VENDORED_SDK ?= 0
 OFFLINE_ARCHIVE ?= 0
+ARCHIVE_RELEASE ?= 0
 CLOUD_PACKAGE_SHA ?=
+
+ifeq ($(ARCHIVE_RELEASE),0)
+ARCHIVE_RELEASE_ARGUMENT =
+else ifeq ($(ARCHIVE_RELEASE),1)
+ARCHIVE_RELEASE_ARGUMENT = --release
+else
+ARCHIVE_RELEASE_ARGUMENT = $(error ARCHIVE_RELEASE must be 0 or 1)
+endif
 
 ifeq ($(USE_VENDORED_SDK),0)
 ARCHIVE_SDK_ARGUMENT =
+ARCHIVE_EXPECTED_PROFILE = default
+ARCHIVE_EXPECTED_SDK_POLICY = cloud-index
 else ifeq ($(USE_VENDORED_SDK),1)
 ARCHIVE_SDK_ARGUMENT = --use-vendored-sdk
+ARCHIVE_EXPECTED_PROFILE = vendored
+ARCHIVE_EXPECTED_SDK_POLICY = vendored
 else
 ARCHIVE_SDK_ARGUMENT = $(error USE_VENDORED_SDK must be 0 or 1)
+ARCHIVE_EXPECTED_PROFILE = $(error USE_VENDORED_SDK must be 0 or 1)
+ARCHIVE_EXPECTED_SDK_POLICY = $(error USE_VENDORED_SDK must be 0 or 1)
 endif
 
 ifeq ($(OFFLINE_ARCHIVE),0)
 ARCHIVE_OFFLINE_ARGUMENT =
 else ifeq ($(OFFLINE_ARCHIVE),1)
 ARCHIVE_OFFLINE_ARGUMENT = --offline-archive
+ARCHIVE_EXPECTED_PROFILE = offline
+ifeq ($(USE_VENDORED_SDK),0)
+ARCHIVE_EXPECTED_SDK_POLICY = auto
+endif
 else
 ARCHIVE_OFFLINE_ARGUMENT = $(error OFFLINE_ARCHIVE must be 0 or 1)
+ARCHIVE_EXPECTED_PROFILE = $(error OFFLINE_ARCHIVE must be 0 or 1)
 endif
 
 setup:
@@ -42,7 +62,11 @@ check-runtime-lock:
 	"$(PYTHON)" -m scripts.runtime_lock
 
 check-cloud-package:
-	"$(PYTHON)" -m scripts.check_cloud_bundle --expected-sha "$(CLOUD_PACKAGE_SHA)"
+	"$(PYTHON)" -m scripts.check_cloud_bundle $(ARCHIVE_RELEASE_ARGUMENT) --expected-sha "$(CLOUD_PACKAGE_SHA)"
+
+check-cloud-archive:
+	$(if $(strip $(CLOUD_PACKAGE_SHA)),,$(error CLOUD_PACKAGE_SHA is required))
+	"$(PYTHON)" -m scripts.check_cloud_bundle --archive build/yandex-function.zip --require-release --expected-sha "$(CLOUD_PACKAGE_SHA)" --expected-profile $(ARCHIVE_EXPECTED_PROFILE) --expected-sdk-policy $(ARCHIVE_EXPECTED_SDK_POLICY)
 
 check-lint check-typecheck check-test check-coverage check-e2e:
 	"$(PYTHON)" "$(MAKE_ENVIRONMENT)" $(patsubst check-%,%,$@)
@@ -64,4 +88,4 @@ e2e: check-e2e
 	$(SANDBOX_RUN) "$(PYTHON)" -m scripts.sandbox_e2e $(if $(E2E_RUN_SETTINGS),,--timeout "$(E2E_TIMEOUT)") -- $(E2E_ARGS)
 
 claude-yandex-archive:
-	"$(PYTHON)" scripts/build_yandex_archive.py $(ARCHIVE_SDK_ARGUMENT) $(ARCHIVE_OFFLINE_ARGUMENT)
+	"$(PYTHON)" scripts/build_yandex_archive.py $(ARCHIVE_SDK_ARGUMENT) $(ARCHIVE_OFFLINE_ARGUMENT) $(ARCHIVE_RELEASE_ARGUMENT) --expected-sha "$(CLOUD_PACKAGE_SHA)"

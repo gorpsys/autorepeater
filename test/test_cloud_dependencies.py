@@ -177,7 +177,8 @@ def test_full_root_payload_locked_two_stages_and_notice_scope(pipeline, vendored
 
 @pytest.mark.parametrize('name', [
     'main.py', 'handler.py', 'autorepeater/evil.py', 'requirements.txt',
-    'THIRD_PARTY_NOTICES/x', cloud.MANIFEST, '.env', '.idea/file', '../escape',
+    'THIRD_PARTY_NOTICES/x', cloud.MANIFEST, 'archive-manifest.json',
+    'archive-manifest.json/child', '.env', '.idea/file', '../escape',
 ])
 def test_dependency_collision_precedes_pip(pipeline, name):
     """Unsafe dependency roots are rejected before installing any bytes."""

@@ -160,15 +160,22 @@ def test_exact_sha_and_gate_order_precede_cloud_effects(workflows):
     assert deploy['steps'][:2] == original['jobs']['deploy']['steps'][:2]
     assert deploy['steps'][0]['with'] == {
         'ref': '${{ needs.gate.outputs.sha }}', 'persist-credentials': False}
-    assert deploy['steps'][3:] == original['jobs']['deploy']['steps'][3:]
+    assert deploy['steps'][4:] == original['jobs']['deploy']['steps'][4:]
+    assert original['jobs']['deploy']['steps'][2]['run'] == (
+        'make claude-yandex-archive ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA="$DEPLOY_SHA"')
+    assert original['jobs']['deploy']['steps'][3]['run'] == (
+        'make check-cloud-archive CLOUD_PACKAGE_SHA="$DEPLOY_SHA"')
+    assert 'Install the pinned official yc binary' == deploy['steps'][4]['name']
     assert deploy['steps'][-2]['run'] == 'python3 -m scripts.deploy_gate --check-once'
     assert deploy['steps'][-1]['run'] == 'python3 -m scripts.yandex_deploy'
     assert all('id-token' not in step.get('permissions', {}) for step in gate['steps'])
 
 
 @pytest.mark.parametrize('mode,expected', [
-    ('vendored', ['claude-yandex-archive USE_VENDORED_SDK=1']),
-    ('offline', ['claude-yandex-archive USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1']),
+    ('vendored', ['claude-yandex-archive USE_VENDORED_SDK=1 ARCHIVE_RELEASE=1 '
+                  'CLOUD_PACKAGE_SHA=' + 'a' * 40]),
+    ('offline', ['claude-yandex-archive USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1 '
+                 'ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA=' + 'a' * 40]),
     ('', []), ('auto', []), ('OFFLINE', []), ('vendored offline', []),
     ('vendored; touch injected', []), ('$(touch injected)', []),
 ])
@@ -182,7 +189,31 @@ def test_actual_build_script_allowlist_before_any_build(workflows, tmp_path, mod
               'export -f make\n' + step['run'])
     result = subprocess.run(['bash', '-c', script], cwd=tmp_path, check=False,
                             capture_output=True, text=True,
-                            env={'ARCHIVE_MODE': mode, 'CALLS': str(calls)}, timeout=10)
+                            env={'ARCHIVE_MODE': mode, 'CALLS': str(calls),
+                                 'DEPLOY_SHA': 'a' * 40}, timeout=10)
     assert result.returncode == (0 if expected else 1)
     assert (calls.read_text().splitlines() if calls.exists() else []) == expected
     assert not (tmp_path / 'injected').exists()
+
+
+@pytest.mark.parametrize('mode', ['vendored', 'offline', '', '$(touch injected)'])
+def test_ready_check_uses_same_allowlisted_reserve_mode(workflows, tmp_path, mode):
+    """Ready validation preserves the exact flags and rejects unsafe mode values."""
+    step = workflows[1]['jobs']['deploy']['steps'][3]
+    assert step['shell'] == 'bash'
+    assert step['env'] == {'ARCHIVE_MODE': '${{ inputs.mode }}'}
+    result = subprocess.run(['bash', '-c', 'make() { printf "%s\\n" "$*"; };\n' + step['run']],
+                            cwd=tmp_path, capture_output=True, text=True, check=False,
+                            env={'ARCHIVE_MODE': mode, 'DEPLOY_SHA': 'a' * 40}, timeout=10)
+    assert result.returncode == (0 if mode in ('vendored', 'offline') else 1)
+    flags = ' USE_VENDORED_SDK=1' + (' OFFLINE_ARCHIVE=1' if mode == 'offline' else '')
+    assert result.stdout == ('check-cloud-archive' + flags + ' CLOUD_PACKAGE_SHA=' + 'a' * 40
+                             + '\n' if result.returncode == 0 else '')
+    assert not (tmp_path / 'injected').exists()
+
+
+def test_package_workflows_require_release_without_changing_the_shared_goal():
+    """Both package smoke consumers explicitly exercise the release branch."""
+    for name in ('python-app', 'cloud-package-check'):
+        text = (ROOT / f'.github/workflows/{name}.yml').read_text()
+        assert 'run: make check-cloud-package ARCHIVE_RELEASE=1' in text
