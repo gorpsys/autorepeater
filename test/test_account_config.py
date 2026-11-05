@@ -31,6 +31,31 @@ def test_valid_account_config(reserve):
     assert config.reserve == Decimal(reserve)
 
 
+@pytest.mark.parametrize('entrypoint', ['load', 'select'])
+def test_account_decimal_error_preserves_original_chain(
+        tmp_path, monkeypatch, caplog, entrypoint, config_error_capture):
+    """Real decimal validation survives both the direct loader and named catalog."""
+    path = tmp_path / 'different-filename.json'
+    payload = document('bad')
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    monkeypatch.delenv('ACCOUNT_CONFIG_DIR', raising=False)
+    monkeypatch.setenv('ACCOUNT_CONFIG_PATH', str(path))
+    capture = config_error_capture(account_config.validate_account_config)
+    with patch.object(account_config, 'read_account_document', autospec=True, spec_set=True,
+                      side_effect=account_config.read_account_document) as read, \
+            patch.object(account_config, 'validate_account_config', autospec=True, spec_set=True,
+                         side_effect=capture.side_effect) as validator:
+        with pytest.raises(ValueError) as caught:
+            if entrypoint == 'load':
+                account_config.load_account_config(path)
+            else:
+                account_config.select_account_config('00123')
+    capture.assert_chain(caught, path, name='00123', entrypoint=entrypoint)
+    read.assert_called_once_with(path)
+    validator.assert_called_once_with(payload)
+    assert not caplog.records
+
+
 @pytest.mark.parametrize('replacement', ['0.01', '0.02'])
 def test_account_loader_rejects_duplicate_reserve(tmp_path, replacement):
     """Reading a full valid schema must not silently keep the last reserve."""

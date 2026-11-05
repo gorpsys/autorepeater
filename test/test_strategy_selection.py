@@ -10,7 +10,7 @@ from unittest.mock import ANY, Mock, call, patch
 
 import pytest
 
-from autorepeater import strategies
+from autorepeater import account_config, strategies
 from autorepeater import index_config
 from autorepeater import composite_config
 from autorepeater import runner as runner_module
@@ -19,7 +19,7 @@ from autorepeater.index_config import load_index_configs, select_index_config
 from autorepeater.index_strategy import IndexQuote
 from autorepeater.account_strategy import PreparedAccountSource
 from autorepeater.account_config import AccountConfig
-from autorepeater.strategy_contract import AlgorithmDefinition
+from autorepeater.strategy_contract import AlgorithmDefinition, UnsupportedSourceError
 from scripts import check_imoex_strategy as calibration
 import main as cli
 
@@ -347,6 +347,9 @@ def write_strict_selection_document(tmp_path, monkeypatch, algoritm, problem, di
         encoded = encoded[:-1] + f', "{diagnostic}": "{payload[diagnostic]}"}}'
     elif problem == 'unknown_root':
         encoded = encoded[:-1] + f', "{diagnostic}": "30"}}'
+    elif problem == 'decimal':
+        payload[diagnostic] = 'bad'
+        encoded = json.dumps(payload)
     else:
         payload['instruments'][0][diagnostic] = 'RUB'
         encoded = json.dumps(payload)
@@ -354,6 +357,48 @@ def write_strict_selection_document(tmp_path, monkeypatch, algoritm, problem, di
     path.write_text(encoded, encoding='utf-8')
     monkeypatch.setenv(variable, str(path if algoritm == 'ACCOUNT' else tmp_path))
     return path
+
+
+@pytest.mark.parametrize('entrypoint', ['cli', 'cloud'])
+@pytest.mark.parametrize('algoritm, module, field', [
+    ('ACCOUNT', account_config, 'reserve'),
+    ('INDEX', index_config, 'reserve'),
+    ('COMPOSITE', composite_config, 'component_drift_limit'),
+])
+def test_selected_decimal_chain_precedes_credentials_runner_and_client(
+        tmp_path, monkeypatch, caplog, entrypoint, algoritm, module, field, config_error_capture):
+    """Every launch preserves real nested causes and stops before effect boundaries."""
+    path = write_strict_selection_document(tmp_path, monkeypatch, algoritm, 'decimal', field)
+    monkeypatch.setattr(sys, 'argv', ['main.py', '--algoritm', algoritm, '-s', 'GOOD'])
+    capture = config_error_capture(getattr(module, f'validate_{algoritm.lower()}_config'))
+    reader = getattr(module, f'read_{algoritm.lower()}_document')
+    effects = {}
+    with patch.object(module, reader.__name__, autospec=True, spec_set=True,
+                      side_effect=reader) as read, \
+            patch.object(module, capture.validate.__name__, autospec=True, spec_set=True,
+                         side_effect=capture.side_effect) as validator, \
+            patch.object(cli if entrypoint == 'cli' else serverless, 'Runner',
+                         autospec=True, spec_set=True) as effects['launch'], \
+            patch.object(runner_module, 'Client', autospec=True,
+                         spec_set=True) as effects['client'], \
+            patch.object(cli, 'os', autospec=True, spec_set=True) as effects['credentials'], \
+            patch.object(serverless, 'get_param', autospec=True, spec_set=True,
+                         side_effect=AssertionError('credentials read')) as effects['parameters'], \
+            patch.object(serverless, 'configure_yc_logging', autospec=True, spec_set=True):
+        with pytest.raises(ValueError) as caught:
+            if entrypoint == 'cli':
+                cli.main()
+            else:
+                serverless.handler({'queryStringParameters': {
+                    'algoritm': algoritm, 'src': 'GOOD'}}, None)
+    assert field in str(capture.assert_chain(caught, path))
+    read.assert_called_once_with(path)
+    validator.assert_called_once()
+    assert effects['credentials'].mock_calls == []
+    effects['launch'].assert_not_called()
+    effects['client'].assert_not_called()
+    effects['parameters'].assert_not_called()
+    assert not caplog.records
 
 
 @pytest.mark.parametrize('entrypoint', ['cli', 'cloud'])
@@ -655,22 +700,33 @@ def test_foreign_validation_errors_include_path(documents, tmp_path, caplog, pay
 
 @pytest.mark.parametrize('mode', ['single', 'several', 'syntax', 'schema', 'duplicate'])
 def test_calibration_auto_selection_requires_clean_single_candidate(
-        documents, tmp_path, mode):
+        documents, tmp_path, mode, caplog):
     """Automatic selection never guesses a unique good candidate among errors."""
-    documents('renamed.json')
+    good = documents('renamed.json')
     if mode == 'syntax':
         (tmp_path / 'bad.json').write_text('{', encoding='utf-8')
     elif mode != 'single':
         documents('other.json', 'GOOD' if mode == 'duplicate' else 'OTHER',
                   reserve='NaN' if mode == 'schema' else '0.01')
-    with patch.object(index_config, 'read_index_document',
-                      wraps=index_config.read_index_document) as read:
+    paths = sorted(tmp_path.glob('*.json'))
+    with patch.object(index_config, 'read_index_document', autospec=True, spec_set=True,
+                      side_effect=index_config.read_index_document) as read, \
+            patch.object(index_config, 'validate_index_config', autospec=True, spec_set=True,
+                         side_effect=index_config.validate_index_config) as validate:
         if mode == 'single':
-            assert select_index_config().name == 'GOOD'
+            selected = select_index_config()
+            assert selected.name == 'GOOD'
+            validate.assert_called_once_with(json.loads(good.read_text(encoding='utf-8')))
         else:
-            with pytest.raises(ValueError, match='--src'):
+            with pytest.raises(UnsupportedSourceError) as caught:
                 select_index_config()
-        assert read.call_count == len(list(tmp_path.glob('*.json')))
+            assert caught.type is UnsupportedSourceError
+            assert str(caught.value) == '--src must name a configured index strategy'
+            assert caught.value.__cause__ is None
+            assert caught.value.__context__ is None
+        assert read.call_args_list == [call(path) for path in paths]
+        assert validate.call_count == len(paths) - (mode == 'syntax')
+    assert not caplog.records
 
 
 @pytest.mark.parametrize('explicit', [True, False])

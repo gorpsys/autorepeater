@@ -1,8 +1,42 @@
 """Keep local strategy configuration paths independent of the caller's shell."""
 import json
 from collections.abc import Callable
+from decimal import InvalidOperation
+from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.fixture(name='config_error_capture')
+def fixture_config_error_capture():
+    """Observe real validation and assert original nested Decimal exception identity."""
+    def build(validate):
+        captured = []
+
+        def capture(data):
+            try:
+                return validate(data)
+            except ValueError as error:
+                captured.append((error, error.__cause__))
+                raise
+
+        def assert_chain(caught, path, name='GOOD', entrypoint='select'):
+            assert len(captured) == 1
+            original, decimal_error = captured[0]
+            assert isinstance(decimal_error, InvalidOperation)
+            assert original.__cause__ is decimal_error
+            assert caught.type is ValueError
+            if entrypoint == 'load':
+                assert caught.value is original
+            else:
+                assert str(caught.value) == f'{path} ({name}): {original}'
+                assert caught.value.__cause__ is original
+                assert caught.value.__cause__.__cause__ is decimal_error
+            return original
+
+        return SimpleNamespace(validate=validate, side_effect=capture, assert_chain=assert_chain)
+
+    return build
 
 
 @pytest.fixture(autouse=True)

@@ -1,12 +1,14 @@
 """Generic recursive preparation independent of concrete algorithms."""
 import inspect
 import json
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, call, create_autospec, patch
 
 import pytest
 
 from autorepeater import strategies, strategy_contract
-from autorepeater import index_config
+from autorepeater import account_config, composite_config, index_config
 from autorepeater.account_strategy import prepare_account_source
 from autorepeater.composite_strategy import CompositeStrategy, prepare_composite_source
 from autorepeater.index_strategy import prepare_index_source
@@ -255,3 +257,75 @@ def test_nested_index_reuse_reads_each_occurrence_only_during_preparation(tree, 
     assert first.config == second.config
     assert first.config is not second.config
     assert factory_index.call_args_list == [call(first.config), call(second.config)]
+
+
+@pytest.fixture(name='bad_composite_tree')
+def fixture_bad_composite_tree(tmp_path, monkeypatch):
+    """Prepare isolated real input files and observe all registered factories."""
+    monkeypatch.setattr(strategies, 'ALGORITHMS', dict(strategies.ALGORITHMS))
+    for variable in ('ACCOUNT_CONFIG_PATH', 'IMOEX_CONFIG_PATH'):
+        monkeypatch.delenv(variable, raising=False)
+    for algoritm in ('ACCOUNT', 'INDEX', 'COMPOSITE'):
+        directory = tmp_path / algoritm
+        directory.mkdir()
+        monkeypatch.setenv(f'{algoritm}_CONFIG_DIR', str(directory))
+    account = tmp_path / 'ACCOUNT' / 'good.json'
+    account.write_text(json.dumps({
+        'name': 'GOOD', 'source_account_id': '00123', 'reserve': '0.01',
+        'allocation_drift_limit': '0.0092'}), encoding='utf-8')
+    bad = tmp_path / 'INDEX' / 'bad.json'
+    payload = index_config.read_index_document(
+        Path(index_config.__file__).parent / 'configs/gold.json')
+    payload.update(name='BAD', reserve='bad')
+    bad.write_text(json.dumps(payload), encoding='utf-8')
+    for name, components in (
+            ('ROOT', [('ACCOUNT', 'GOOD', '0.5'), ('COMPOSITE', 'BRANCH', '0.5')]),
+            ('BRANCH', [('INDEX', 'BAD', '1')])):
+        (tmp_path / 'COMPOSITE' / f'{name}.json').write_text(json.dumps({
+            'name': name, 'component_drift_limit': '0.20', 'components': [
+                {'algoritm': algoritm, 'src': src, 'weight': weight}
+                for algoritm, src, weight in components]}), encoding='utf-8')
+    factories, preparers = {}, {}
+    for algoritm in ('ACCOUNT', 'INDEX', 'COMPOSITE'):
+        definition = strategies.ALGORITHMS[algoritm]
+        factories[algoritm] = create_autospec(
+            definition.create, spec_set=True, side_effect=definition.create)
+        preparers[algoritm] = create_autospec(
+            definition.prepare_source, spec_set=True, side_effect=definition.prepare_source)
+        monkeypatch.setitem(strategies.ALGORITHMS, algoritm, AlgorithmDefinition(
+            preparers[algoritm], factories[algoritm]))
+    return SimpleNamespace(account=account, bad=bad, payload=payload,
+                           factories=factories, preparers=preparers)
+
+
+def test_real_bad_composite_descendant_aborts_entire_tree_before_factories(
+        tmp_path, caplog, bad_composite_tree, config_error_capture):
+    """A real bad INDEX below COMPOSITE leaves even the earlier ACCOUNT unconstructed."""
+    capture = config_error_capture(index_config.validate_index_config)
+    with patch.object(index_config, 'validate_index_config', autospec=True, spec_set=True,
+                      side_effect=capture.side_effect) as validator, \
+            patch.object(index_config, 'read_index_document', autospec=True, spec_set=True,
+                         side_effect=index_config.read_index_document) as index_read, \
+            patch.object(account_config, 'read_account_document', autospec=True, spec_set=True,
+                         side_effect=account_config.read_account_document) as account_read, \
+            patch.object(composite_config, 'read_composite_document', autospec=True, spec_set=True,
+                         side_effect=composite_config.read_composite_document) as composite_read, \
+            patch('autorepeater.runner.Client', autospec=True, spec_set=True) as client:
+        with pytest.raises(ValueError) as caught:
+            strategies.prepare_strategy('COMPOSITE', 'ROOT')
+    capture.assert_chain(caught, bad_composite_tree.bad, name='BAD')
+    index_read.assert_called_once_with(bad_composite_tree.bad)
+    account_read.assert_called_once_with(bad_composite_tree.account)
+    validator.assert_called_once_with(bad_composite_tree.payload)
+    assert composite_read.call_args_list == [
+        call(tmp_path / 'COMPOSITE' / f'{name}.json')
+        for name in ('BRANCH', 'ROOT', 'BRANCH', 'ROOT')]
+    context = bad_composite_tree.preparers['COMPOSITE'].call_args_list[0].args[1]
+    assert bad_composite_tree.preparers['ACCOUNT'].call_args_list == [call('GOOD', context)]
+    assert bad_composite_tree.preparers['COMPOSITE'].call_args_list == [
+        call('ROOT', context), call('BRANCH', context)]
+    assert bad_composite_tree.preparers['INDEX'].call_args_list == [call('BAD', context)]
+    for factory in bad_composite_tree.factories.values():
+        factory.assert_not_called()
+    client.assert_not_called()
+    assert not caplog.records
