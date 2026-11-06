@@ -5,9 +5,9 @@ T-Bank's index. Offline ZIP verification runs no installer or network acquisitio
 The shared import socket guard is Python-level, not isolation of native syscalls.
 """
 import argparse
+from dataclasses import dataclass
 import json
 from pathlib import Path
-import re
 import stat
 import subprocess
 import sys
@@ -19,6 +19,9 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import build_yandex_archive as builder
+from scripts import cloud_archive_inputs as inputs
+from scripts import cloud_archive_manifest as inventory
+from scripts import cloud_archive_zip
 from scripts import cloud_dependencies as cloud
 from scripts import install_dependencies as installer
 from scripts import runtime_lock, sdk_wheel
@@ -33,6 +36,14 @@ MAX_ENTRIES = 20000
 
 class BundleError(ValueError):
     """Fixed safe bundle error without child output or credentials."""
+
+
+@dataclass(frozen=True)
+class BundleExpectation:
+    """Explicit source and optional SDK policy expectations for a checkout bundle."""
+    release: bool = False
+    expected_sha: str = ''
+    sdk_policy: str | None = None
 
 
 def require(condition: bool, reason: str) -> None:
@@ -51,7 +62,7 @@ def read_bundle(path: Path) -> dict[str, bytes]:
             names = [m.filename for m in members]
             require(len(names) <= MAX_ENTRIES and len(set(names)) == len(names)
                     and sum(m.file_size for m in members) <= MAX_BYTES, 'bundle ZIP limits')
-            require(all(m.filename == m.orig_filename and cloud.safe_path(m.orig_filename)
+            require(all(m.filename == m.orig_filename and inputs.safe_member_name(m.orig_filename)
                         and not m.is_dir()
                         and m.filename.split('/')[0] != 'scripts'
                         and not m.flag_bits & 1
@@ -60,17 +71,50 @@ def read_bundle(path: Path) -> dict[str, bytes]:
             require(not any('/'.join(n.split('/')[:i]) in names
                             for n in names for i in range(1, len(n.split('/')))),
                     'bundle path collision')
-            return {m.filename: archive.read(m) for m in members}
+            files = {m.filename: archive.read(m) for m in members}
+            try:
+                inventory.verify(files, members, comment=archive.comment)
+                cloud_archive_zip.verify_local_headers(archive)
+            except inventory.ManifestError as error:
+                raise BundleError(str(error)) from None
+            return files
     except (BadZipFile, RuntimeError, NotImplementedError):
         raise BundleError('invalid bundle ZIP or CRC') from None
 
 
-def application_files(root: Path) -> dict[str, bytes]:
+def application_files(root: Path, *, release: bool = False,
+                      expected_sha: str = '') -> dict[str, bytes]:
     """Compare the shipped application/configuration with this exact checkout."""
-    paths = [p for p in builder.archive_files(root) if not p.name.startswith('requirements')]
-    require(all(not p.is_symlink() and all(not parent.is_symlink() for parent in p.parents)
-                for p in paths), 'unsafe application file')
-    return {p.relative_to(root).as_posix(): p.read_bytes() for p in paths}
+    return {file.name: file.data for file in inputs.snapshot(
+        root, release=release, expected_sha=expected_sha).files
+            if file.name not in ('requirements.txt', 'requirements-runtime.txt')}
+
+
+def _identity(document: dict[str, Any], expected_sha: str, profile: str,
+              sdk_policy: str | None, release: bool) -> None:
+    require(document['profile'] == profile and (
+        sdk_policy is None or document['sdk_policy'] == sdk_policy),
+            'bundle profile or SDK policy mismatch')
+    if expected_sha:
+        require(inputs.SHA.fullmatch(expected_sha) is not None
+                and document['source']['head'] == expected_sha.lower(),
+                'bundle source SHA mismatch')
+    if release:
+        require(document['mode'] == 'release' and document['source']['git_state'] == 'known'
+                and document['source']['dirty'] is False, 'bundle release identity required')
+
+
+def check_archive(path: Path, expected_sha: str, profile: str,
+                  sdk_policy: str) -> dict[str, str]:
+    """Check a ready release with no checkout, installation or application execution."""
+    require(inputs.SHA.fullmatch(expected_sha) is not None, 'invalid expected source SHA')
+    require(profile in inventory.PROFILES and sdk_policy in inventory.PROFILES[profile]
+            and not (profile == 'offline' and sdk_policy == 'auto'),
+            'invalid expected release profile or SDK policy')
+    document = json.loads(read_bundle(path)[inventory.MANIFEST])
+    _identity(document, expected_sha, profile, sdk_policy, True)
+    return {'status': 'ok', 'checkout_sha': document['source']['head'],
+            'profile': profile, 'sdk_policy': sdk_policy}
 
 
 def _vendored(document: dict[str, Any], root: Path, files: dict[str, bytes],
@@ -153,13 +197,18 @@ def _write_files(target: Path, files: dict[str, bytes]) -> None:
         path.write_bytes(data)
 
 
-def check_bundle(root: Path, path: Path, mode: str) -> None:
+def check_bundle(root: Path, path: Path, mode: str, *,
+                 expectation: BundleExpectation = BundleExpectation()) -> None:
     """Validate a ready ZIP; the offline branch never invokes pip or source acquisition."""
     require(mode in ('vendored', 'offline'), 'unsupported bundle mode')
+    application = application_files(root, release=expectation.release,
+                                    expected_sha=expectation.expected_sha)
+    root = inputs.project_path(root)
     cloud.check_platform()
     document = runtime_lock.load_lock(root)
-    application = application_files(root)
     files = read_bundle(path)
+    _identity(json.loads(files.pop(inventory.MANIFEST)), expectation.expected_sha, mode,
+              expectation.sdk_policy, expectation.release)
     require(all(files.get(n) == data for n, data in application.items()),
             'bundle application drift')
     with TemporaryDirectory(prefix='cloud-bundle-check-') as directory:
@@ -191,22 +240,24 @@ def check_bundle(root: Path, path: Path, mode: str) -> None:
             budget.remaining()
 
 
-def check_packages(root: Path, expected_sha: str = '') -> dict[str, str]:
+def check_packages(root: Path, expected_sha: str = '', *,
+                   release: bool = False) -> dict[str, str]:
     """Build both reserved SDK modes in an owned folder and report the tested identity."""
+    snapshot = inputs.snapshot(root, release=release, expected_sha=expected_sha)
+    root = inputs.project_path(root)
+    sha = snapshot.source.head
+    require(sha is not None, 'package checkout SHA unavailable')
+    assert sha is not None
     cloud.check_platform()
-    result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, capture_output=True,
-                            text=True, timeout=10, check=False)
-    sha = result.stdout.strip()
-    require(result.returncode == 0 and re.fullmatch(r'[0-9a-f]{40}', sha) is not None
-            and (not expected_sha or expected_sha == sha), 'package checkout SHA mismatch')
     document = runtime_lock.load_lock(root)
     installer.check_inputs(root, document)
     with TemporaryDirectory(prefix='cloud-package-smoke-') as directory:
         for mode in ('vendored', 'offline'):
             path = Path(directory) / (mode + '.zip')
             builder.build_archive(root, path, use_vendored_sdk=True,
-                                  offline_archive=mode == 'offline')
-            check_bundle(root, path, mode)
+                                  offline_archive=mode == 'offline', release=release,
+                                  expected_sha=sha)
+            check_bundle(root, path, mode, expectation=BundleExpectation(release, sha, 'vendored'))
     return {'status': 'ok', 'checkout_sha': sha,
             'lock_sha256': runtime_lock.canonical_digest(document)}
 
@@ -216,12 +267,27 @@ def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--expected-sha', default='')
+    parser.add_argument('--release', action='store_true')
+    parser.add_argument('--archive', type=Path)
+    parser.add_argument('--require-release', action='store_true')
+    parser.add_argument('--expected-profile', choices=sorted(inventory.PROFILES))
+    parser.add_argument('--expected-sdk-policy', choices=sorted({
+        policy for policies in inventory.PROFILES.values() for policy in policies}))
     args = parser.parse_args(arguments)
+    if args.archive is not None:
+        if (not args.require_release or not inputs.SHA.fullmatch(args.expected_sha)
+                or not args.expected_profile or not args.expected_sdk_policy or args.release):
+            parser.error('ready archive requires release identity and profile expectations')
+    elif args.require_release or args.expected_profile or args.expected_sdk_policy:
+        parser.error('ready archive expectations require --archive')
     try:
-        facts = check_packages(args.project_root.resolve(), args.expected_sha)
+        facts = (check_archive(args.archive, args.expected_sha, args.expected_profile,
+                               args.expected_sdk_policy) if args.archive is not None
+                 else check_packages(args.project_root, args.expected_sha, release=args.release))
         print(json.dumps(facts, sort_keys=True))
         return 0
-    except (BundleError, cloud.PayloadError, installer.InstallError, runtime_lock.LockError,
+    except (BundleError, inputs.InputError, inventory.ManifestError, cloud.PayloadError,
+            installer.InstallError, runtime_lock.LockError,
             sdk_wheel.WheelError, WorkerError, PackageError, InventoryError,
             OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
         reason = 'local files/process unavailable' if isinstance(error, (

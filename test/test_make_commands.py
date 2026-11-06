@@ -148,7 +148,7 @@ def run_make(target, cwd, environment, arguments=()):
 def command_log(log_path):
     """Parse NUL-delimited command records without shell interpretation."""
     records = log_path.read_bytes().split(b'\n')
-    return [[part.decode(errors='replace') for part in record.split(b'\0') if part]
+    return [[part.decode(errors='replace') for part in record.split(b'\0')[:-1]]
             for record in records if record]
 
 
@@ -159,7 +159,8 @@ def test_make_archive_sdk_flag_uses_selected_python(fake_tools, git_repository, 
     result = run_make('claude-yandex-archive', git_repository, environment,
                       [f'PYTHON={python}', f'USE_VENDORED_SDK={flag}'])
     assert result.returncode == 0, result.stdout + result.stderr
-    assert command_log(log_path) == [['scripts/build_yandex_archive.py', *expected]]
+    assert command_log(log_path) == [
+        ['scripts/build_yandex_archive.py', *expected, '--expected-sha', '']]
 
 
 @pytest.mark.parametrize('flag', ['', 'true', '2', '01', '0 1'])
@@ -184,7 +185,8 @@ def test_make_archive_flag_matrix(fake_tools, git_repository, sdk, offline, expe
     result = run_make('claude-yandex-archive', git_repository, environment,
                       [f'PYTHON={python}', f'USE_VENDORED_SDK={sdk}', f'OFFLINE_ARCHIVE={offline}'])
     assert result.returncode == 0, result.stdout + result.stderr
-    assert command_log(log_path) == [['scripts/build_yandex_archive.py', *expected]]
+    assert command_log(log_path) == [
+        ['scripts/build_yandex_archive.py', *expected, '--expected-sha', '']]
 
 
 @pytest.mark.parametrize('flag', ['', 'true', '2', '01', '0 1'])

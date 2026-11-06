@@ -89,8 +89,19 @@ jobs:
         run: |
           set -euo pipefail
           case "$ARCHIVE_MODE" in
-            vendored) make claude-yandex-archive USE_VENDORED_SDK=1 ;;
-            offline) make claude-yandex-archive USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1 ;;
+            vendored) make claude-yandex-archive USE_VENDORED_SDK=1 ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA="$DEPLOY_SHA" ;;
+            offline) make claude-yandex-archive USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1 ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA="$DEPLOY_SHA" ;;
+            *) echo "Unsupported cloud package mode" >&2; exit 1 ;;
+          esac
+      - name: Verify the ready reserve release archive
+        shell: bash
+        env:
+          ARCHIVE_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          case "$ARCHIVE_MODE" in
+            vendored) make check-cloud-archive USE_VENDORED_SDK=1 CLOUD_PACKAGE_SHA="$DEPLOY_SHA" ;;
+            offline) make check-cloud-archive USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1 CLOUD_PACKAGE_SHA="$DEPLOY_SHA" ;;
             *) echo "Unsupported cloud package mode" >&2; exit 1 ;;
           esac
       - name: Install the pinned official yc binary

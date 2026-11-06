@@ -21,6 +21,8 @@ python -m scripts.check_rebalance_policy --output /tmp/rebalance-policy-report.j
 make claude-yandex-archive
 make claude-yandex-archive USE_VENDORED_SDK=1
 make claude-yandex-archive USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1
+make claude-yandex-archive ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA="$(git rev-parse HEAD)"
+make check-cloud-archive CLOUD_PACKAGE_SHA="$(git rev-parse HEAD)"
 ```
 
 Verified setup: CPython 3.12/Linux x86_64, glibc >=2.17; PyPI нужен для
@@ -95,8 +97,31 @@ installer requirements, dev-only пакетов и копирования site-p
 runtime-lock.json и runtime-file-lock.json обновляются явно с review;
 обычные setup/build их не меняют. Required Offline checks после одного
 coverage-прогона выполняет обязательный сетевой make check-cloud-package
-для точного SHA. Smoke не вызывает handler или RPC, не заменяет live E2E
+с ARCHIVE_RELEASE=1 для точного SHA. Smoke не вызывает handler или RPC, не заменяет live E2E
 и не подтверждает cold start в Yandex.
+
+Local — умолчание; все три Make флага ARCHIVE_RELEASE/USE_VENDORED_SDK/
+OFFLINE_ARCHIVE принимают только 0/1. CLI: --release, --expected-sha SHA,
+--use-vendored-sdk, --offline-archive. Release/offline требует forced vendored SDK.
+Release запрещает любые tracked-изменения index/worktree во всём репозитории
+и дополнительные eligible untracked/ignored входы. Raw bytes проверяются без
+filters/EOL/stat cache; index flags/sparse/submodules не подтверждают чистоту.
+Local сохраняет выбранные bytes и отмечает этот же dirty predicate;
+без Git facts пишет unknown (git_state=unavailable, head/dirty=null).
+Ожидаемый SHA обязателен к совпадению и в local; неизвестные facts тогда — отказ.
+Проверки повторяются перед публикацией, C34 atomic replace сохраняется.
+
+Roots/ancestors, explicit-файлы и выбранные symlink-дети теперь отвергаются
+до чтения/preparation, вместо пропуска; заменить их обычными файлами/каталогами
+в приватном checkout. Архив имеет archive-manifest.json schema1 с точными
+names/size/SHA-256/mode всех members, кроме самого manifest. Новые tests
+пересчитывают inventory независимо и сохраняют реальные JSON/negative probes.
+Фиксированные ZIP metadata и fingerprint точных CPython/zlib обеспечивают
+равные bytes только при одинаковых inputs/source/toolchain. Старые ZIP без
+manifest checker не сертифицирует. Read-only check-cloud-archive требует SHA
+и те же reserve flags; проверяет готовый ZIP без pip/сети/выполнения приложения.
+Точные команды, schema и безопасная диагностика — в
+[инструкции сборки](../../scripts/README.md#сборка-облачного-архива).
 
 Все деньги/количества Decimal, форматирование без экспоненты, целые с .0,
 nano до 9 знаков. Сохранять публичное имя postiton_to_string для совместимости.

@@ -24,4 +24,4 @@ jobs:
       timeout-minutes: 20
       env:
         CLOUD_PACKAGE_SHA: ${{ github.sha }}
-      run: make check-cloud-package
+      run: make check-cloud-package ARCHIVE_RELEASE=1

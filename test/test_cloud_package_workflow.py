@@ -60,4 +60,4 @@ def test_both_workflows_propagate_make_failure_without_shell_pipeline(tmp_path, 
                                 cwd=tmp_path, env={'STATUS': str(status)}, check=False,
                                 capture_output=True, text=True, timeout=10)
         assert result.returncode == status
-        assert result.stdout == 'check-cloud-package\n'
+        assert result.stdout == 'check-cloud-package ARCHIVE_RELEASE=1\n'

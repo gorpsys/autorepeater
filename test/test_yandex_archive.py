@@ -7,12 +7,14 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from test.archive_parity import corrupt_zip_crc, extract_with_parity
 from unittest.mock import create_autospec, patch
 from zipfile import ZipFile
 
 import pytest
 
 from scripts import build_yandex_archive as builder
+from scripts import cloud_archive_manifest as inventory
 from scripts import cloud_build_tls, runtime_lock, sdk_wheel
 
 
@@ -30,7 +32,11 @@ def fixture_cloud_ca_double(monkeypatch):
 
 def copy_archive_builder(repository, root):
     """Isolated CLI tests use the same strict boundary without real CA downloads."""
-    for relative in ('Makefile', 'scripts/build_yandex_archive.py'):
+    for relative in ('Makefile', 'scripts/build_yandex_archive.py',
+                     'scripts/cloud_archive_inputs.py', 'scripts/cloud_archive_manifest.py',
+                     'scripts/cloud_archive_zip.py',
+                     'scripts/runtime_lock.py', 'scripts/sdk_wheel.py',
+                     'scripts/sdk_worker.py', 'scripts/vendor_inventory.py'):
         shutil.copyfile(repository / relative, root / relative)
     (root / 'scripts/cloud_build_tls.py').write_text(
         f'def prepare(root):\n    return {TLS_ENTRIES!r}\n')
@@ -66,15 +72,6 @@ def fixture_project(tmp_path):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
-    external = tmp_path / 'external'
-    external.mkdir()
-    (external / 'external.json').write_bytes(b'external')
-    (root / 'autorepeater/configs/linked').symlink_to(external, target_is_directory=True)
-    (root / 'autorepeater/configs/linked.json').symlink_to(external / 'external.json')
-    (root / 'autorepeater/configs/new/catalog/linked').symlink_to(
-        external, target_is_directory=True)
-    (root / 'autorepeater/configs/new/catalog/linked.json').symlink_to(external / 'external.json')
-    (root / 'autorepeater/linked.py').symlink_to(external / 'external.json')
     return root
 
 
@@ -99,7 +96,7 @@ def test_archive_files_and_bytes(project, monkeypatch, tmp_path):
     archive_path = builder.build_archive(project)
     assert archive_path == project / 'build/yandex-function.zip'
     with ZipFile(archive_path) as archive:
-        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys()
+        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys() | {inventory.MANIFEST}
         for name in EXPECTED:
             assert archive.read(name) == (project / name).read_bytes()
         for name, data in TLS_ENTRIES.items():
@@ -115,7 +112,8 @@ def test_custom_output_and_rebuild(project, tmp_path):
     (project / 'autorepeater/new_strategy.py').unlink()
     builder.build_archive(project, output)
     with ZipFile(output) as archive:
-        expected = EXPECTED - {'autorepeater/new_strategy.py'} | TLS_ENTRIES.keys()
+        expected = EXPECTED - {'autorepeater/new_strategy.py'} | TLS_ENTRIES.keys() | {
+            inventory.MANIFEST}
         assert set(archive.namelist()) == expected
 
 
@@ -133,7 +131,7 @@ def test_entrypoint_in_process(project, tmp_path, monkeypatch):
                                      '--output', str(output)])
     runpy.run_path(str(Path(builder.__file__)), run_name='__main__')
     with ZipFile(output) as archive:
-        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys()
+        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys() | {inventory.MANIFEST}
 
 
 def test_default_entrypoint(project):
@@ -160,27 +158,28 @@ def test_make_archive_without_python_alias(project, tmp_path, override):
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     with ZipFile(project / 'build/yandex-function.zip') as archive:
-        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys()
+        assert set(archive.namelist()) == EXPECTED | TLS_ENTRIES.keys() | {inventory.MANIFEST}
 
 
 def test_missing_required_file(project):
     """A missing root entry fails rather than producing a silently incomplete bundle."""
     (project / 'handler.py').unlink()
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError, match='unsafe application'):
         builder.build_archive(project)
 
 
 def test_config_read_error(project):
     """Errors while selecting configs propagate."""
     with patch.object(Path, 'iterdir', side_effect=PermissionError('cannot list configs')):
-        with pytest.raises(PermissionError, match='cannot list'):
+        with pytest.raises(ValueError, match='unsafe application directory unavailable'):
             builder.build_archive(project)
 
 
 def test_archive_read_error(project):
     """Errors while reading a selected file propagate to the caller."""
-    with patch.object(builder.ZipFile, 'write', side_effect=PermissionError('cannot read file')):
-        with pytest.raises(PermissionError, match='cannot read file'):
+    with patch.object(Path, 'read_bytes', autospec=True, spec_set=True,
+                      side_effect=PermissionError('cannot read file')):
+        with pytest.raises(ValueError, match='unsafe application read failed'):
             builder.build_archive(project)
 
 
@@ -236,7 +235,8 @@ def test_vendored_archive_locked_requirements_and_owned_bytes(vendored_project, 
     with ZipFile(output) as archive:
         assert archive.testzip() is None
         assert set(archive.namelist()) == EXPECTED | {
-            prefix + sdk_wheel.FILENAME, prefix + 'LICENSE', prefix + 'manifest.json'}
+            prefix + sdk_wheel.FILENAME, prefix + 'LICENSE', prefix + 'manifest.json',
+            inventory.MANIFEST}
         assert archive.read(prefix + sdk_wheel.FILENAME) == owned.data
         assert archive.read(prefix + 'LICENSE') == owned.license_bytes
         assert json.loads(archive.read(prefix + 'manifest.json')) == json.loads(
@@ -361,14 +361,20 @@ def test_atomic_vendored_publication(vendored_project, acquisition, monkeypatch,
     output = builder.build_archive(vendored_project)
     original = output.read_bytes()
     if stage == 'write':
-        monkeypatch.setattr(ZipFile, 'write', create_autospec(
-            ZipFile.write, spec_set=True, side_effect=PermissionError('write failed')))
+        monkeypatch.setattr(ZipFile, 'writestr', create_autospec(
+            ZipFile.writestr, spec_set=True, side_effect=PermissionError('write failed')))
     elif stage == 'interrupt':
-        monkeypatch.setattr(ZipFile, 'write', create_autospec(
-            ZipFile.write, spec_set=True, side_effect=KeyboardInterrupt))
+        monkeypatch.setattr(ZipFile, 'writestr', create_autospec(
+            ZipFile.writestr, spec_set=True, side_effect=KeyboardInterrupt))
     elif stage == 'crc':
-        monkeypatch.setattr(ZipFile, 'testzip', create_autospec(
-            ZipFile.testzip, spec_set=True, return_value='handler.py'))
+        write = getattr(builder, '_write_archive')
+
+        def corrupt(entries, path):
+            write(entries, path)
+            corrupt_zip_crc(path)
+
+        monkeypatch.setattr(builder, '_write_archive', create_autospec(
+            write, spec_set=True, side_effect=corrupt))
     elif stage == 'members':
         monkeypatch.setattr(ZipFile, 'namelist', create_autospec(
             ZipFile.namelist, spec_set=True, return_value=['handler.py']))
@@ -406,17 +412,18 @@ def test_default_rejects_non_executable_pip_wrapper(project, monkeypatch):
     """Losing executable ZIP metadata must fail before replacing the release ZIP."""
     output = builder.build_archive(project)
     previous = output.read_bytes()
-    original_getinfo = ZipFile.getinfo
+    original_infolist = ZipFile.infolist
 
-    def wrong_mode(archive, name):
-        info = copy(original_getinfo(archive, name))
-        if name == 'pip3.12':
-            info.external_attr = 0o100644 << 16
-        return info
+    def wrong_mode(archive):
+        members = [copy(info) for info in original_infolist(archive)]
+        for info in members:
+            if info.filename == 'pip3.12':
+                info.external_attr = 0o100644 << 16
+        return members
 
-    monkeypatch.setattr(ZipFile, 'getinfo', create_autospec(
-        ZipFile.getinfo, spec_set=True, side_effect=wrong_mode))
-    with pytest.raises(ValueError, match='cloud pip wrapper is not executable'):
+    monkeypatch.setattr(ZipFile, 'infolist', create_autospec(
+        ZipFile.infolist, spec_set=True, side_effect=wrong_mode))
+    with pytest.raises(ValueError, match='invalid archive ZIP metadata'):
         builder.build_archive(project)
     assert output.read_bytes() == previous
 
@@ -461,7 +468,7 @@ def test_offline_root_archive_and_cli(project, monkeypatch, tmp_path, vendored):
     assert not any(n.startswith('requirements') for n in application)
     port.assert_called_once_with(project, application, use_vendored_sdk=vendored)
     with ZipFile(output) as archive:
-        assert set(archive.namelist()) == set(application) | set(expected)
+        assert set(archive.namelist()) == set(application) | set(expected) | {inventory.MANIFEST}
         assert archive.testzip() is None
         assert all(archive.read(n) == data for n, data in expected.items())
 
@@ -506,8 +513,7 @@ def test_offline_application_symlink_precedes_payload(project, monkeypatch, tmp_
 def test_offline_stdlib_entrypoint_and_other_cwd(project, tmp_path, entrypoint):
     """Mode helpers are lazy and resolve from the builder tree, without PYTHONPATH."""
     repository = Path(__file__).resolve().parents[1]
-    shutil.copyfile(repository / 'scripts/build_yandex_archive.py',
-                    project / 'scripts/build_yandex_archive.py')
+    copy_archive_builder(repository, project)
     (project / 'scripts/cloud_dependencies.py').write_text(
         'def prepare_payload(root, application, *, use_vendored_sdk=False):\n'
         '    assert "main.py" in application\n'
@@ -568,7 +574,10 @@ def test_vendored_builder_probe_policy(vendored_project, monkeypatch, caplog, pr
 def test_vendored_stdlib_entrypoints(vendored_project, tmp_path, entrypoint):
     """All helpers resolve from the isolated script tree without site-packages/cwd."""
     repository = Path(__file__).resolve().parents[1]
-    for relative in ('Makefile', 'scripts/build_yandex_archive.py', 'scripts/sdk_wheel.py',
+    for relative in ('Makefile', 'scripts/build_yandex_archive.py',
+                     'scripts/cloud_archive_inputs.py', 'scripts/cloud_archive_manifest.py',
+                     'scripts/cloud_archive_zip.py',
+                     'scripts/sdk_wheel.py',
                      'scripts/runtime_lock.py', 'scripts/vendor_inventory.py'):
         shutil.copyfile(repository / relative, vendored_project / relative)
     # This offline worker double exercises the actual acquisition decode/validation.
@@ -825,17 +834,6 @@ def test_archive_probe_rejects_application_source_paths(tmp_path, location):
     assert 'application source leaked onto sys.path' in probe.stderr
 
 
-def assert_staging_parity(project_root, extracted, expected):
-    """Any intermediate tree must have exactly the ZIP's members and bytes."""
-    staging = project_root / 'build/yandex-function'
-    if staging.exists():
-        staged = {path.relative_to(staging).as_posix()
-                  for path in staging.rglob('*') if path.is_file()}
-        assert staged == expected
-        for name in expected:
-            assert (staging / name).read_bytes() == (extracted / name).read_bytes()
-
-
 def damage_archive_child(project_root, scenario):
     """Corrupt only a selected field, preserving the rest of each valid document."""
     configs = project_root / 'autorepeater/configs/new/deep'
@@ -870,13 +868,8 @@ def test_nested_application_archive(application_bundle, tmp_path, scenario, path
                            check=False, capture_output=True, text=True, timeout=30)
     assert build.returncode == 0, build.stdout + build.stderr
     extracted = tmp_path / 'extracted'
-    with ZipFile(project_root / 'build/yandex-function.zip') as archive:
-        assert len(archive.namelist()) == len(expected)
-        assert set(archive.namelist()) == expected
-        for name in expected:
-            assert archive.read(name) == (project_root / name).read_bytes()
-        archive.extractall(extracted)
-    assert_staging_parity(project_root, extracted, expected)
+    extract_with_parity(project_root, project_root / 'build/yandex-function.zip',
+                        extracted, expected)
     working = tmp_path / 'elsewhere'
     working.mkdir()
     probe = subprocess.run(
@@ -988,9 +981,7 @@ register_algorithm('ARCHIVE_INDEPENDENT', AlgorithmDefinition(prepare_source, In
 ''', encoding='utf-8')
     expected.add('autorepeater/archive_independent.py')
     extracted = tmp_path / 'independent-extracted'
-    with ZipFile(builder.build_archive(root)) as archive:
-        assert set(archive.namelist()) == expected
-        archive.extractall(extracted)
+    extract_with_parity(root, builder.build_archive(root), extracted, expected)
     working = tmp_path / 'independent-elsewhere'
     working.mkdir()
     probe = subprocess.run([sys.executable, '-I', '-c', INDEPENDENT_PROBE, str(extracted)],
