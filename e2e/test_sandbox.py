@@ -171,7 +171,7 @@ def _expected_app_positions(session: SandboxSession, account_id: str,
                             instruments: list[InstrumentInfo], quantities: dict[str, D],
                             responses: list[dict[str, object]]) -> ExpectedAppState:
     """Read actual order states and independently reconstruct the physical position deltas."""
-    lots = {item.uid: item.lot for item in instruments}
+    items = {item.uid: item for item in instruments}
     expected = dict(quantities)
     operation_totals = {}
     for item in responses:
@@ -180,9 +180,10 @@ def _expected_app_positions(session: SandboxSession, account_id: str,
                            account_id=account_id, order_id=item['order_id'])
         direction = (OrderDirection.ORDER_DIRECTION_BUY if item['side'] == 'BUY'
                      else OrderDirection.ORDER_DIRECTION_SELL)
-        session.check_order(broker, item['uid'], item['requested'], direction, item['order_id'])
+        session.check_order(broker, items[item['uid']], item['requested'],
+                            direction, item['order_id'])
         check(broker.execution_report_status == FILL, 'broker did not confirm FILL')
-        delta = D(item['requested'] * lots[item['uid']])
+        delta = D(item['requested'] * items[item['uid']].lot)
         key = (item['uid'], item['side'])
         operation_totals[key] = operation_totals.get(key, D(0)) + delta
         expected[item['uid']] = expected.get(item['uid'], D(0)) + (

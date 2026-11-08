@@ -246,8 +246,8 @@ def _trade_facts(session: SandboxSession, dst: str, instruments: CurrencyCatalog
         side = response['side']
         direction = (OrderDirection.ORDER_DIRECTION_BUY if side == 'BUY'
                      else OrderDirection.ORDER_DIRECTION_SELL)
-        session.check_order(broker, item.uid, response['requested'],
-                            direction, response['order_id'])
+        executed_lots = session.check_order(broker, item, response['requested'],
+                                            direction, response['order_id'])
         require(broker.execution_report_status == FILL, 'multicurrency app order not FILL')
         total = MoneyAmount.from_units_nano(broker.total_order_amount.currency,
                                             broker.total_order_amount.units,
@@ -257,7 +257,7 @@ def _trade_facts(session: SandboxSession, dst: str, instruments: CurrencyCatalog
                                           broker.executed_commission.nano)
         require(total.currency == fee.currency == item.currency.lower(),
                 'sandbox total/commission settlement units mismatch')
-        trades.append(TradeFact(item.uid, side, broker.lots_executed, item.lot, total.currency,
+        trades.append(TradeFact(item.uid, side, executed_lots, item.lot, total.currency,
                                 total.amount, fee.amount,
                                 'cny' if item.uid == instruments.currency.uid else None,
                                 cny_bond=(item.instrument_type == InstrumentType.BOND
@@ -267,8 +267,9 @@ def _trade_facts(session: SandboxSession, dst: str, instruments: CurrencyCatalog
             'request_id': response['request_id'], 'order_id': broker.order_id,
             'status': broker.execution_report_status.name,
             'requested': broker.lots_requested, 'executed': broker.lots_executed,
+            'executed_lots': executed_lots,
             'trade': asdict(trades[-1]),
-            'pieces': broker.lots_executed * item.lot,
+            'pieces': executed_lots * item.lot,
             'total_order_amount': amount_fact(broker.total_order_amount),
             'executed_commission': amount_fact(broker.executed_commission),
             'executed_order_price': amount_fact(broker.executed_order_price),
@@ -812,7 +813,7 @@ def _probe_fill_prices(session, dst, response, bond, lots):
     """Missing native per-fill prices limit inference, without inventing trade prices."""
     state = safe_call(session.client.orders.get_order_state,
                       account_id=dst, order_id=response['order_id'])
-    session.check_order(state, bond.uid, lots, OrderDirection.ORDER_DIRECTION_BUY,
+    session.check_order(state, bond, lots, OrderDirection.ORDER_DIRECTION_BUY,
                         response['order_id'])
     require(state.execution_report_status == FILL, 'commission probe order not FILL')
     facts, prices, quantity = [], [], 0
