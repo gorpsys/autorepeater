@@ -11,7 +11,7 @@ from autorepeater.logging_config import logger as LOGGER
 from autorepeater.money import format_decimal, format_decimal_map
 from autorepeater.strategy_data import DataAccessError, InstrumentType
 from autorepeater.tinvest_requests import call_api
-from autorepeater.tinvest_strategy_data import _decimal_value
+from autorepeater.tinvest_values import decimal_value
 from autorepeater.tinvest_validation import (
     sdk_bool as _bool, sdk_count as _count, sdk_text as _text,
 )
@@ -28,7 +28,7 @@ def _decimal(value, field, nonnegative=False):
 
 
 def _quotation(value, field):
-    return _decimal(_decimal_value(value, field), field, nonnegative=True)
+    return _decimal(decimal_value(value, field), field, nonnegative=True)
 
 
 def _read(method, **kwargs):

@@ -1,5 +1,6 @@
 """Native security books have explicit units, market times and safe read errors."""
 import inspect
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import Mock, call, create_autospec
@@ -133,7 +134,7 @@ def test_bad_book_rejected(reads, field, value):
         data.get_security_quote('uid')
 
 
-def test_transport_failure_is_safe_and_preserves_cause(reads):
+def test_transport_failure_is_safe_and_preserves_cause(reads, caplog):
     """No raw broker message is exposed as the neutral error text."""
     client, data = reads
     error = RequestError(StatusCode.DEADLINE_EXCEEDED, 'private broker details', None)
@@ -142,6 +143,21 @@ def test_transport_failure_is_safe_and_preserves_cause(reads):
         data.get_security_quote('uid')
     assert caught.value.__cause__ is error
     assert 'private' not in str(caught.value)
+    full, = [record for record in caplog.records if hasattr(record, 'sdk_details')]
+    assert (full.sdk_details, full.exc_info[1]) == (error.details, error)
+
+
+def test_debug_response_precedes_security_conversion_failure(reads, caplog):
+    """Invalid settlement metadata is logged before its validation rejects it."""
+    client, data = reads
+    response = client.instruments.get_instrument_by.return_value
+    response.instrument.currency = None
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        with pytest.raises(ValueError):
+            data.get_security_quote('uid')
+    assert any(record.msg == 'SDK response: method=%s response=%s'
+               and record.args[1] == repr(response) for record in caplog.records)
+    client.market_data.get_order_book.assert_not_called()
 
 
 @pytest.mark.parametrize('instrument', [None, sdk.Instrument(uid='other')])

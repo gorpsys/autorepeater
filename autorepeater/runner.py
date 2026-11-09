@@ -12,7 +12,7 @@ from t_tech.invest.services import Services
 from autorepeater.logging_config import configure_local_logging
 from autorepeater.grpc_deadline import UnaryDeadlineInterceptor
 from autorepeater.repeater import AutoRepeater
-from autorepeater.reporting import print_all_portfolio
+from autorepeater.legacy_display import print_all_portfolio
 from autorepeater.reporting import print_missing_destination
 from autorepeater.strategies import create_strategy
 from autorepeater.strategy_contract import PreparedStrategy

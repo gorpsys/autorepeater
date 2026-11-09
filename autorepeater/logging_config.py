@@ -1,5 +1,6 @@
 """Logging helpers for local and Yandex Cloud runs."""
 import logging
+import os
 
 from pythonjsonlogger import jsonlogger
 
@@ -23,16 +24,26 @@ class YcLoggingFormatter(jsonlogger.JsonFormatter):
                 'WARNING', 'WARN').replace('CRITICAL', 'FATAL')
 
 
+def _application_level() -> int:
+    """Use the same explicit application verbosity for CLI and cloud runs."""
+    value = os.environ.get('LOG_LEVEL', 'INFO').strip().upper()
+    if value not in ('INFO', 'DEBUG'):
+        raise ValueError('LOG_LEVEL must be INFO or DEBUG')
+    return logging.DEBUG if value == 'DEBUG' else logging.INFO
+
+
 def configure_local_logging() -> None:
     """Configure default logging for local CLI runs."""
+    level = _application_level()
     logging.addLevelName(IMPORTANT, 'IMPORTANT')
     logging.basicConfig(level=IMPORTANT)
     logging.getLogger().setLevel(IMPORTANT)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(level)
 
 
 def configure_yc_logging() -> None:
     """Configure JSON logging expected by Yandex Cloud Functions."""
+    level = _application_level()
     logging.addLevelName(IMPORTANT, 'IMPORTANT')
     if not logger.handlers:
         log_handler = logging.StreamHandler()
@@ -40,4 +51,4 @@ def configure_yc_logging() -> None:
             YcLoggingFormatter('%(message)s %(level)s %(logger)s'))
         logger.addHandler(log_handler)
     logger.propagate = False
-    logger.setLevel(logging.INFO)
+    logger.setLevel(level)

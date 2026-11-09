@@ -5,18 +5,16 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal, localcontext
 import json
-from typing import TYPE_CHECKING, Protocol, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from autorepeater.cash_facts import order_cash_bound
 from autorepeater.constants import IMPORTANT
 from autorepeater.logging_config import logger
 from autorepeater.market_diagnostics import safe_symbol
-from autorepeater.money import currency_to_decimal
-from autorepeater.money import currency_to_string
 from autorepeater.money import format_decimal
-from autorepeater.money import get_quantity_position
-from autorepeater.money import no_money_to_string
-from autorepeater.portfolio import DisplayPosition, PortfolioClient, TargetPortfolio, get_portfolio
+from autorepeater.display_data import DisplayAccount, DisplayPosition
+from autorepeater.display_data import GetInstrumentException
+from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType, PortfolioEntry, PositionEvent
 from autorepeater.strategy_plan import exact_product
 
@@ -27,54 +25,11 @@ if TYPE_CHECKING:
 
 KeyT = TypeVar('KeyT')
 
-
-class DisplayInstrument(Protocol):  # pylint: disable=too-few-public-methods
-    """Name and ticker needed for the legacy instrument display."""
-    name: str
-    ticker: str
-
-
-class InstrumentMatches(Protocol):  # pylint: disable=too-few-public-methods
-    """Ordered matches from the legacy display lookup."""
-    instruments: Sequence[DisplayInstrument]
-
-
-class InstrumentFinder(Protocol):  # pylint: disable=too-few-public-methods
-    """Only the instrument lookup used for explicit account display."""
-
-    def find_instrument(self, *, query: str) -> InstrumentMatches:
-        """Find display metadata."""
-
-
-class DisplayAccount(Protocol):  # pylint: disable=too-few-public-methods
-    """Account identity used by explicit account display."""
-    name: str
-    id: str
-
-
-class DisplayAccounts(Protocol):  # pylint: disable=too-few-public-methods
-    """Accounts returned for explicit display."""
-    accounts: Sequence[DisplayAccount]
-
-
-class AccountReader(Protocol):  # pylint: disable=too-few-public-methods
-    """Only the account-list read used by reporting."""
-
-    def get_accounts(self) -> DisplayAccounts:
-        """Read available account identities."""
-
-
-class ReportingClient(PortfolioClient, Protocol):  # pylint: disable=too-few-public-methods
-    """Legacy display reads; strategy reporting still uses only loaded neutral DTOs."""
-    instruments: InstrumentFinder
-    users: AccountReader
+# The exception remains part of the historical public compatibility boundary.
+__all__ = ['GetInstrumentException', 'postiton_to_string']
 
 
 NANO_QUANT = Decimal('0.000000001')
-
-
-class GetInstrumentException(Exception):
-    """Instrument not found uniquely by instrument_id."""
 
 
 def print_config_warning(message: str) -> None:
@@ -112,24 +67,33 @@ def print_index_selection_warning(ticker: str, chosen: InstrumentInfo,
                    safe_symbol(chosen.class_code, limit=16), details)
 
 
-def get_instrument(client: ReportingClient, instrument_id: str) -> DisplayInstrument:
-    """Find the instrument name used for display."""
-    result = client.instruments.find_instrument(query=instrument_id).instruments
-    if len(result) == 1:
-        return result[0]
-    raise GetInstrumentException('error get instrument')
+def postiton_to_string(client, position) -> str:
+    """Compatibility boundary for the historical SDK-shaped public call."""
+    # Intentional local compatibility edge; the adapter uses the pure formatters above.
+    from autorepeater.legacy_display import convert_position  # pylint: disable=import-outside-toplevel,cyclic-import
+    return display_position_to_string(convert_position(client, position))
 
 
-def postiton_to_string(client: ReportingClient, position: DisplayPosition) -> str:
-    """Convert a position to its existing human-readable representation."""
-    if position.instrument_type == 'currency':
-        return currency_to_string(position)
-    if position.instrument_type in ['share', 'etf']:
-        instrument = get_instrument(client, position.instrument_uid)
-        quantity = format_decimal(get_quantity_position(position))
-        return (no_money_to_string(instrument) + ' - ' +
-                quantity + ' - ' + currency_to_string(position))
-    return str(position)
+def display_instrument_label(name: str, ticker: str) -> str:
+    """Format loaded instrument strings with the legacy concatenation semantics."""
+    return name + '(' + ticker + ')'
+
+
+def display_position_value(price: Decimal, quantity: Decimal) -> Decimal:
+    """Round each legacy position before the caller adds it to the total."""
+    return (price * quantity).quantize(NANO_QUANT)
+
+
+def display_position_to_string(position: DisplayPosition) -> str:
+    """Format loaded values, preserving currency case and legacy TypeError."""
+    if position.instrument_type in ('currency', 'share', 'etf'):
+        value = display_position_value(position.current_price, position.quantity)
+        money = position.currency
+        money += ' - ' + format_decimal(value)
+        if position.instrument_type == 'currency':
+            return money
+        return position.instrument_label + ' - ' + format_decimal(position.quantity) + ' - ' + money
+    return position.diagnostic_text
 
 
 def print_account_header(side: str) -> None:
@@ -137,9 +101,16 @@ def print_account_header(side: str) -> None:
     logger.log(IMPORTANT, '%s account', side)
 
 
-def print_position(client: ReportingClient, position: DisplayPosition) -> None:
-    """Report an already loaded position."""
-    logger.log(IMPORTANT, postiton_to_string(client, position))
+def print_display_position(position: DisplayPosition) -> None:
+    """Report an already converted legacy position without a client."""
+    if position.instrument_type in ('currency', 'share', 'etf'):
+        logger.log(IMPORTANT, display_position_to_string(position))
+    else:
+        if position.diagnostic_text:
+            logger.debug('%s', position.diagnostic_text)
+        logger.info('Position: uid=%s type=%s quantity=%s currency=%s price=%s',
+                    position.uid, position.instrument_type, format_decimal(position.quantity),
+                    position.currency, format_decimal(position.current_price))
 
 
 def _strategy_currency_to_string(position: PortfolioEntry) -> str:
@@ -171,7 +142,16 @@ def strategy_position_to_string(position: PortfolioEntry) -> str:
 
 def print_strategy_position(position: PortfolioEntry) -> None:
     """Report a position from the SDK-independent strategy data model."""
-    logger.info('%s', strategy_position_to_string(position))
+    if (position.instrument_type in (InstrumentType.CURRENCY, InstrumentType.SHARE,
+                                     InstrumentType.ETF)
+            or (position.native_price is not None and position.rub_price is not None
+                and position.settlement_currency is not None)):
+        logger.info('%s', strategy_position_to_string(position))
+    else:
+        logger.debug('%s', position.diagnostic_text)
+        logger.info('Position: uid=%s type=%s quantity=%s currency=%s price=%s',
+                    position.uid, position.instrument_type.value, format_decimal(position.quantity),
+                    position.currency, format_decimal(position.current_price))
 
 
 def print_total(total: Decimal) -> None:
@@ -203,29 +183,21 @@ def print_missing_destination(mode: str) -> None:
     logger.info('Skipping trading: destination account is not set; mode=%s', mode)
 
 
-def print_portfolio_by_account(client: ReportingClient, account: DisplayAccount) -> None:
-    """Print detailed information about an account, including its cash."""
+def print_display_account_header(account: DisplayAccount) -> None:
+    """Print the identity before the adapter loads this account's portfolio."""
     logger.log(IMPORTANT, '%s (%s)', account.name, account.id)
     logger.log(IMPORTANT, '------------')
-    portfolio = get_portfolio(client, account.id)
-    total = Decimal('0')
-    for position in portfolio.positions:
-        print_position(client, position)
-        total += currency_to_decimal(position)
+
+
+def print_display_account_footer(total: Decimal) -> None:
+    """Finish only after every position has been printed and valued."""
     print_total(total)
     logger.log(IMPORTANT, '============')
 
 
-def print_all_portfolio(client: ReportingClient) -> None:
-    """Print detailed information about all accounts."""
-    response = client.users.get_accounts()
-    for account in response.accounts:
-        print_portfolio_by_account(client, account)
-
-
 def print_skipped_strategy_event(event: PositionEvent) -> None:
     """Report the adapter-provided diagnostic representation of an event."""
-    logger.log(IMPORTANT, event.diagnostic_text)
+    logger.debug('%s', event.diagnostic_text)
     logger.info('Skipping synchronization: event did not trigger rebalance; '
                 'account=%s has_position=%s securities=%d money=%d',
                 event.account_id, event.has_position, len(event.securities), len(event.money))

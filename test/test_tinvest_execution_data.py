@@ -1,5 +1,6 @@
 """Execution reads use documented own limits, never estimated sale proceeds."""
 import inspect
+import logging
 from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
@@ -453,7 +454,7 @@ def test_invalid_native_money(reads, value):
 @pytest.mark.parametrize('operation', [
     'positions', 'orders', 'status', 'caps', 'portfolio', 'metadata',
 ])
-def test_transport_errors_preserve_cause_without_retry(reads, operation):
+def test_transport_errors_preserve_cause_without_retry(reads, operation, caplog):
     """A neutral error does not conceal transport failure or resend anything."""
     client, data, adapter = reads
     error = RequestError(StatusCode.UNAVAILABLE, 'synthetic failure', ())
@@ -470,6 +471,26 @@ def test_transport_errors_preserve_cause_without_retry(reads, operation):
             adapter.get_trade_rules('account', ['uid'])
     assert raised.value.__cause__ is error
     assert targets[operation].call_count == 1
+    client.orders.post_order.assert_not_called()
+    full = [record for record in caplog.records if hasattr(record, 'sdk_details')]
+    if isinstance(error, RequestError):
+        assert len(full) == 1
+        assert full[0].sdk_details == error.details
+        assert full[0].exc_info[1] is error
+    else:
+        assert full == []
+
+
+def test_debug_response_precedes_execution_conversion_failure(reads, caplog):
+    """Malformed real broker data is logged before the original conversion error."""
+    client, _, adapter = reads
+    response = client.operations.get_positions.return_value
+    response.money = None
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        with pytest.raises(TypeError):
+            adapter.get_destination('account')
+    assert any(record.msg == 'SDK response: method=%s response=%s'
+               and record.args[1] == repr(response) for record in caplog.records)
     client.orders.post_order.assert_not_called()
 
 
@@ -555,6 +576,30 @@ def test_missing_negative_or_bool_availability(reads, value):
     client.orders.get_max_lots.return_value.buy_limits.buy_money_amount = value
     with pytest.raises(ValueError, match='buy_money_amount'):
         adapter.get_trade_rules('account', ['uid'])
+
+
+@pytest.mark.parametrize('units,nano,expected', [
+    (1, -1, D('0.999999999')), (0, 1000000000, D(1)),
+    (0, 1, D('0.000000001')), (0, 999999999, D('0.999999999')),
+])
+def test_availability_keeps_legacy_nonnegative_conversion(reads, units, nano, expected):
+    """Moving the converter does not impose MoneyAmount's sign/range restrictions."""
+    client, _, adapter = reads
+    client.orders.get_max_lots.return_value.buy_limits.buy_money_amount = sdk.Quotation(
+        units=units, nano=nano)
+    rules = adapter.get_trade_rules('account', ['uid'])
+    assert rules['uid'].buy_money_amount == expected
+
+
+def test_negative_availability_keeps_exact_error_without_cause(reads):
+    """Execution still rejects negative totals after the shared signed conversion."""
+    client, _, adapter = reads
+    client.orders.get_max_lots.return_value.buy_limits.buy_money_amount = sdk.Quotation(
+        units=0, nano=-1)
+    with pytest.raises(ValueError) as caught:
+        adapter.get_trade_rules('account', ['uid'])
+    assert str(caught.value) == 'instrument uid.buy_money_amount must be nonnegative'
+    assert caught.value.__cause__ is None
 
 
 @pytest.mark.parametrize('state', ['money_currency', 'money_missing', 'money_nan', 'blocked_bool',

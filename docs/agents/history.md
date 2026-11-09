@@ -114,6 +114,39 @@ Settlement 30s/2s и глобальные временные фикстуры н
 Эти проверки не устанавливают причину INTERNAL70001 и не закрывают
 [#5](https://github.com/gorpsys/autorepeater/issues/5) автоматически.
 
+H43. Прежний общий запрет SDK repr/server text скрывал диагностику в собственном
+маршруте логов, хотя cause уже сохранялся. 09.11.2026 владелец принял обратную
+формулировку C13/C14: полные входящие SDK ошибки на ERROR, успешные ответы на
+DEBUG, без нового allowlist/truncation. Исходящие credentials/client/kwargs
+по-прежнему не читаются и не выводятся; machine evidence остаётся отдельным
+компактным протоколом. LOG_LEVEL — INFO/DEBUG независимо от dry-run --debug.
+Источник: [решение и матрица Task 11](../plans/20261109144456-sdk-diagnostics-and-display-boundaries-implementation-plan.md#решения-владельца-и-цель),
+[контракт](contracts.md#исполнение-ошибки-и-события),
+[offline SDK-проверки](../../test/test_tinvest_diagnostics.py).
+
+H44. Строгая currency/numeric валидация при переносе legacy display могла бы
+заблокировать CLI mainflow выбранного счёта из-за постороннего счёта.
+Raw-only postiton_to_string для bond/unknown раньше не читал числа вообще;
+форматирование name/ticker у share/ETF предшествовало price, а total считался
+после печати. Frozen DTO поэтому допускает незагруженные поля None и готовый
+instrument_label; adapter сохраняет прежнюю permissive конверсию, literal
+currency, порядок ошибок и частичный вывод. Это проекция прежнего поведения,
+не новая финансовая валидация. Источник: [420 offline parity cases](../../test/test_legacy_display.py),
+[решение B4](../plans/20261109144456-sdk-diagnostics-and-display-boundaries-implementation-plan.md#разделение-legacy-display--c16),
+[действующие слои](contracts.md#контракт-и-слои).
+
+H45. C17 устраняет приватную зависимость execution от strategy adapter,
+но не объединяет разные правила units/nano. Публичный decimal_value механически
+сохраняет прежний допуск scalar/sign/range inputs и Decimal-context sensitivity;
+execution nonnegative и строгий MoneyAmount остаются отдельными проверками.
+Замена им permissive legacy arithmetic также изменила бы старые ошибки.
+Источник: [converter-регрессии](../../test/test_tinvest_values.py),
+[контракт helper](../execution-adapter.md#sdk-diagnostics-and-display-boundaries).
+Выпуск 7.2.0 назначен от базы 7.1.0 как MINOR за пользовательскую возможность
+LOG_LEVEL=DEBUG; внутренний перенос display/helper сам по себе совместим.
+Это назначение версии, а не свидетельство E2E, тега или production-деплоя;
+[процедура выпуска](../../scripts/README.md#версии-и-выпуск) сохраняется.
+
 ## Пополнение истории
 
 Новая запись получает следующий ID, краткий контрпример, причину,

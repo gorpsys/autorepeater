@@ -1,5 +1,6 @@
 """Real SDK 1.51.0 read schemas behind unwrapped autospecced services; no live I/O."""
 import inspect
+import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -264,7 +265,7 @@ def test_rules_reject_invalid_own_values(reads, field, value):
 
 
 @pytest.mark.parametrize('method', ['catalog', 'book', 'status', 'caps'])
-def test_transport_errors_have_safe_reason_and_preserved_cause(reads, method):
+def test_transport_errors_have_safe_reason_and_preserved_cause(reads, method, caplog):
     """No raw SDK error or credentials appear in the public exception message."""
     client, adapter = reads
     selected = adapter.list_pairs()[0]
@@ -283,3 +284,18 @@ def test_transport_errors_have_safe_reason_and_preserved_cause(reads, method):
             adapter.get_trade_rules('account', selected)
     assert caught.value.__cause__ is error
     assert 'private' not in str(caught.value)
+    full, = [record for record in caplog.records if hasattr(record, 'sdk_details')]
+    assert full.sdk_details == error.details
+    assert full.exc_info[1] is error
+
+
+def test_debug_response_precedes_fx_conversion_failure(reads, caplog):
+    """The received catalog remains available when nominal validation fails."""
+    client, adapter = reads
+    response = client.instruments.currencies.return_value
+    response.instruments[0].nominal = None
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        with pytest.raises(ValueError, match='nominal currency'):
+            adapter.list_pairs()
+    assert any(record.msg == 'SDK response: method=%s response=%s'
+               and record.args[1] == repr(response) for record in caplog.records)

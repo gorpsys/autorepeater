@@ -123,15 +123,16 @@ that ID without generating a request ID or submitting another order.
 On a PostOrder RequestError or malformed response, OrderExecutionError preserves
 the optional keyword-only `request_id` context; existing message-only calls
 remain compatible. The adapter emits ERROR with that same request ID, validated
-intent UID/side/lots and a fixed reason. It excludes RequestError text, raw kwargs,
-malformed field values and SDK repr. A transport RequestError is preserved as
+intent UID/side/lots and a fixed reason. This compact context record excludes raw
+kwargs and malformed field values; the SDK boundary separately logs the complete
+incoming RequestError, as described below. A transport RequestError is preserved as
 the exception cause. Malformed GetOrderState responses emit ERROR with the
 requested broker ID and a fixed reason, then propagate OrderExecutionError.
 Propagation keeps the context and cause: CLI stops the current pass and continues
 events, while run_sync/cloud propagate failure without Success. A later event
 may initiate a fresh pass. Programming errors are not caught as broker failures.
-Preserving cause does not sanitize third-party tracebacks; the broader error and
-reporting work in issue #16 is outside this change.
+The diagnostic boundary preserves the original exception identity, traceback and
+cause without changing fail-stop behavior.
 
 These are local DTO, adapter and lifecycle checks. They do not establish that
 every live response populates the schema, or constitute sandbox/production or
@@ -306,9 +307,11 @@ Invalid timestamps are never
 replaced with observation time. Missing metadata or an invalid API permission
 marker also logs only selected identifiers/category/currency/flag. Missing,
 invalid and unloaded fields have distinct markers, without inferred RUB/False.
-No raw response, instrument name, transport exception text or diagnostic RPC
-is added. Successful fresh books emit no snapshots. Sandbox framework context
-adds the current stage, scenario and phase without changing evidence schemas.
+These compact rejection records add no raw response, instrument name, transport
+exception text or diagnostic RPC. Successful fresh books emit no rejection
+snapshots; complete SDK responses are separately available at DEBUG. Sandbox
+framework context adds the current stage, scenario and phase without changing
+evidence schemas.
 
 Book rejection facts also retain ticker/class/currency from the already loaded
 instrument, or an explicit missing label. Observational monotonic and UTC clocks
@@ -316,8 +319,9 @@ record request start, response and check, request duration and response-to-check
 delay. Receipt age uses observational UTC; check age retains the original
 validation clock. Neither clock replaces market time or changes the 180s guard.
 E2E aggregates named metadata/catalog/book operations and separates RPC attempts
-from quota waits; nested stage totals are inclusive. Successful payloads are not
-streamed and no extra lookups, retries or clock calls for validation are added.
+from quota waits; nested stage totals are inclusive. Complete successful payloads
+are not forwarded to machine evidence. No extra lookups, retries or clock calls
+for validation are added.
 
 The FX catalog boundary supplements the same ValueError with a safe note and
 one field/constraint event. Exact internal FxPair guard messages identify their
@@ -477,6 +481,53 @@ Polling windows do not interrupt in-flight RPCs or the established quota retry
 loop; the cloud invocation timeout remains the overall deadline.
 
 ## Transport
+
+### SDK diagnostics and display boundaries
+
+`tinvest_diagnostics.call_once(method, **kwargs)` makes exactly one SDK call.
+It logs each incoming RequestError at ERROR with its complete text and original
+traceback, then re-raises the same object. Cloud JSON includes api_method,
+grpc_status, sdk_details, sdk_metadata and tracking_id when supplied by SDK
+Metadata. No ID is inferred, no incoming text is truncated. Programming errors
+are neither wrapped nor retried. Successful responses are logged in full at
+DEBUG before conversion; the wrapper computes repr only with DEBUG enabled.
+A failing str/repr produces a type/formatting placeholder without changing the
+response or original exception. Client state, request kwargs, credentials and
+outgoing authorization metadata are not inspected or logged.
+
+`call_api` invokes this helper inside its unchanged quota loop: each failed
+attempt has one full ERROR plus the existing compact quota/terminal record.
+Stream opening/iteration failures and each received response use the same
+diagnostic helpers without materializing the iterator or changing EOF/reconnect.
+Existing diagnostic_text strings remain in own DTOs; full event/fallback text
+moves to DEBUG while compact financial facts remain at their usual levels.
+Machine evidence keeps its existing compact filters and schemas.
+
+`LOG_LEVEL` accepts INFO (default) or DEBUG, case-insensitively with surrounding
+whitespace stripped; empty/other values fail configuration before Client.
+Local and cloud configure the application logger only, without duplicate
+handlers or replacing the cloud JSON formatter. CLI `--debug` remains dry-run;
+LOG_LEVEL does not change trade permissions or add broker reads.
+
+`legacy_display` owns the existing account browse and SDK conversion; Runner.run
+keeps its GetAccounts/GetPortfolio/FindInstrument sequence and incremental
+output, while run_sync does not browse all accounts. Pure reporting functions
+consume frozen DisplayAccount/DisplayPosition scalars, Decimals and strings,
+without units/nano, SDK imports or I/O. The sole compatibility wrapper is
+`reporting.postiton_to_string(client, position)`; reporting.GetInstrumentException
+also remains available. Raw-only bond/unknown projection leaves unloaded
+numeric fields None; share/ETF instrument_label is formatted after the original
+quantity read and before price reads. Total conversion remains after printing.
+The previous permissive numeric and literal currency acceptance, errors and
+admission to CLI mainflow are preserved, including unrelated accounts.
+
+`tinvest_values.decimal_value(value, context)` publicly shares the original
+strategy/execution units/nano arithmetic and errors; execution retains its
+nonnegative check. It preserves the previous scalar/sign/range acceptance and
+Decimal-context sensitivity. Strict MoneyAmount.from_units_nano paths and the
+separate permissive legacy converter keep their own contracts.
+
+### Deadlines and retries
 
 Runner (both modes) and the explicit calibration script install the same
 `grpc.UnaryUnaryClientInterceptor` through the actual SDK

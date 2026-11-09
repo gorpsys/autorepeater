@@ -1,6 +1,7 @@
 """Only API rate-limit failures are retried, with unchanged request arguments."""
 import inspect
 import logging
+from functools import partial
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, call, create_autospec, patch
@@ -10,6 +11,7 @@ import pytest
 from grpc import StatusCode
 from t_tech import invest
 from t_tech.invest.services import OrdersService
+from t_tech.invest.logging import Metadata
 
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.execution import OrderExecutionError
@@ -19,14 +21,54 @@ from autorepeater.tinvest_execution_data import _read
 from autorepeater.tinvest_requests import call_api
 
 
+@pytest.mark.parametrize('form', ['function', 'bound', 'partial', 'autospec', 'callable'])
+def test_call_api_accepts_existing_callables_without_inspecting_credentials(form, caplog):
+    """The wrapper forwards opaque arguments once for ordinary and mocked callables."""
+    response = invest.PortfolioResponse(positions=[])
+    seen = []
+
+    class OpaqueCredential:  # pylint: disable=too-few-public-methods
+        """An outgoing value must never be rendered by diagnostics."""
+
+        def __repr__(self):
+            raise AssertionError('credentials were inspected')
+
+    class Receiver:  # pylint: disable=too-few-public-methods
+        """Support bound methods and callable instances without a client repr."""
+
+        def __call__(self, *, token):
+            seen.append(token)
+            return response
+
+        def __repr__(self):
+            raise AssertionError('client was inspected')
+
+    def request(*, token):
+        seen.append(token)
+        return response
+
+    receiver = Receiver()
+    methods = {'function': request, 'bound': receiver.__call__, 'partial': partial(request),
+               'autospec': create_autospec(request, spec_set=True, side_effect=request),
+               'callable': receiver}
+    credential = OpaqueCredential()
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        assert call_api(methods[form], token=credential) is response
+    assert len(seen) == 1 and seen[0] is credential
+    full, = caplog.records
+    assert full.msg == 'SDK response: method=%s response=%s'
+    assert full.args[1] == repr(response)
+
+
 @pytest.mark.parametrize('code,status', [
     (StatusCode.DEADLINE_EXCEEDED, 'DEADLINE_EXCEEDED'),
     (StatusCode.INTERNAL, 'INTERNAL'), ('private-code', 'UNKNOWN'),
 ])
-def test_request_failure_logs_method_status_and_duration_only(monkeypatch, caplog, code, status):
-    """Diagnostics must identify the timed-out RPC without logging SDK text or arguments."""
-    secret = 'private-details-and-token'
-    error = invest.RequestError(code, secret, {'authorization': secret})
+def test_request_failure_logs_full_error_and_compact_timing(monkeypatch, caplog, code, status):
+    """Incoming server details are complete; outgoing credentials remain opaque."""
+    secret = 'credential-only-in-kwargs'
+    error = invest.RequestError(code, 'server diagnostic\nполный ответ',
+                                Metadata('tracking', '300', 7, 123456, 'server metadata'))
     calls = []
 
     def shares(**kwargs):
@@ -40,10 +82,15 @@ def test_request_failure_logs_method_status_and_duration_only(monkeypatch, caplo
             call_api(shares, token=secret)
     assert raised.value is error
     assert calls == [{'token': secret}]
-    assert [record.message for record in caplog.records] == [
-        f'API request failed: method=shares status={status} elapsed_seconds=10.125']
+    full, record = caplog.records
+    assert full.message == f'SDK request failed: method=shares error={error}'
+    assert full.exc_info[1] is error
+    assert full.sdk_details == error.details
+    assert full.sdk_metadata == str(error.metadata)
+    assert full.tracking_id == 'tracking'
+    assert record.message == (
+        f'API request failed: method=shares status={status} elapsed_seconds=10.125')
     assert secret not in caplog.text
-    record, = caplog.records
     assert (record.api_method, record.grpc_status, record.elapsed_seconds) == (
         'shares', status, 10.125)
 
@@ -60,7 +107,8 @@ def test_rate_limit_retries_until_success(attempts, caplog):
     assert sleep.call_args_list == [call(10)] * attempts
     assert method.call_args_list == [
         call(account_id='dst', token='must-not-be-logged')] * (attempts + 1)
-    assert len(caplog.records) == attempts
+    assert len(caplog.records) == attempts * 2
+    assert len([record for record in caplog.records if record.levelno == logging.ERROR]) == attempts
     assert all('must-not-be-logged' not in record.message for record in caplog.records)
 
 
@@ -108,10 +156,10 @@ def test_post_order_retries_keep_one_idempotency_key():
 def test_post_order_quota_then_failure_preserves_request_and_cause(code, caplog):
     """Quota retries stop on transport failure with the original submission context."""
     orders = create_autospec(inspect.unwrap(OrdersService), instance=True, spec_set=True)
-    secret = 'private-transport-details'
-    error = invest.RequestError(code, secret, {'token': secret})
+    server = 'server-transport-details'
+    error = invest.RequestError(code, server, Metadata('tracking', None, None, None, None))
     orders.post_order.side_effect = [
-        invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, secret, None), error,
+        invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, server, None), error,
         invest.PostOrderResponse(),
     ]
     factory = Mock(return_value='request-id')
@@ -129,7 +177,9 @@ def test_post_order_quota_then_failure_preserves_request_and_cause(code, caplog)
         order_type=invest.OrderType.ORDER_TYPE_BESTPRICE, order_id='request-id')] * 2
     assert any(record.levelno == logging.ERROR and 'request_id=request-id' in record.message
                for record in caplog.records)
-    assert secret not in caplog.text
+    assert server in caplog.text
+    assert len([record for record in caplog.records
+                if record.msg == 'SDK request failed: method=%s error=%s']) == 2
 
 
 def test_execution_reads_use_shared_quota_wrapper():
@@ -200,8 +250,9 @@ def test_scope_expiration_stops_read_without_transport_cause(budget_time, prior_
 def test_quota_waits_and_retries_share_budget(budget_time, caplog, budget, waits):
     """Every retry spends the original budget; the last real quota error is the cause."""
     now, _, sleep = budget_time
-    secret = 'private-quota-details-and-token'
-    errors = [invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, secret, {'token': secret})
+    secret = 'credential-only-in-kwargs'
+    errors = [invest.RequestError(StatusCode.RESOURCE_EXHAUSTED, 'server-quota-details',
+                                  Metadata('tracking', None, None, None, None))
               for _ in waits]
     method = Mock(side_effect=[*errors, 'never'])
     with grpc_deadline.read_deadline(budget):
@@ -214,6 +265,8 @@ def test_quota_waits_and_retries_share_budget(budget_time, caplog, budget, waits
     assert now[0] == 100 + budget
     assert secret not in caplog.text
     assert secret not in str(raised.value)
+    assert len([record for record in caplog.records
+                if record.msg == 'SDK request failed: method=%s error=%s']) == len(waits)
 
 
 def test_quota_rpc_time_also_reduces_wait_budget(budget_time):

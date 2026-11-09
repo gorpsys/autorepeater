@@ -1,6 +1,8 @@
 # pylint: disable=R0801, R0913, R0917
 """Tests for the T-Invest implementation of the strategy data port."""
+import ast
 import inspect
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal, Overflow, localcontext
 from unittest.mock import Mock, call, create_autospec
@@ -27,6 +29,7 @@ from t_tech.invest.services import InstrumentsService
 from t_tech.invest.services import MarketDataService
 from t_tech.invest.services import OperationsService
 from t_tech.invest.services import OperationsStreamService
+from t_tech.invest.logging import Metadata
 
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.strategy_data import InstrumentInfo
@@ -38,7 +41,17 @@ from autorepeater.strategy_data import PortfolioSnapshot
 from autorepeater.strategy_data import PositionEvent
 from autorepeater.strategy_data import PriceQuote
 from autorepeater.strategy_data import SecurityBlocking
+from autorepeater import tinvest_execution_data, tinvest_strategy_data
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
+
+
+def test_execution_converter_has_no_private_strategy_dependency():
+    """Adapters share a public conversion helper rather than a neighbour's internals."""
+    tree = ast.parse(inspect.getsource(tinvest_execution_data))
+    imports = [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+    assert not any(node.module == 'autorepeater.tinvest_strategy_data' for node in imports)
+    assert not hasattr(tinvest_strategy_data, '_decimal_value')
+    assert tinvest_execution_data.decimal_value is tinvest_strategy_data.decimal_value
 
 
 @pytest.fixture(name='client')
@@ -264,10 +277,11 @@ def test_position_events_convert_position_and_service_events(client, data):
     ],
 )
 def test_normal_calls_translate_request_error(
-        client, data, method_name, service_name, sdk_method, args, kwargs):
+        client, data, method_name, service_name, sdk_method, args, kwargs, caplog):
     """Every finite read operation exposes transport errors through the own port."""
     error = RequestError(
-        StatusCode.UNAVAILABLE, 'read unavailable', ())
+        StatusCode.UNAVAILABLE, 'read unavailable',
+        Metadata('strategy-tracking', None, None, None, None))
     method = getattr(getattr(client, service_name), sdk_method)
     method.side_effect = error
 
@@ -276,13 +290,24 @@ def test_normal_calls_translate_request_error(
 
     assert caught.value.__cause__ is error
     method.assert_called_once_with(**kwargs)
+    full, = [record for record in caplog.records if hasattr(record, 'sdk_details')]
+    assert full.sdk_details == error.details
+    assert full.tracking_id == 'strategy-tracking'
+    assert full.exc_info[1] is error
 
 
-def test_position_events_translates_stream_opening_request_error(client, data):
+@pytest.mark.parametrize('stage', ['call', 'iter'])
+def test_position_events_translates_stream_opening_request_error(client, data, caplog, stage):
     """A failure while obtaining the SDK iterator is translated immediately."""
     error = RequestError(
-        StatusCode.UNAVAILABLE, 'open unavailable', ())
-    client.operations_stream.positions_stream.side_effect = error
+        StatusCode.UNAVAILABLE, 'open unavailable',
+        Metadata('stream-tracking', None, None, None, None))
+    if stage == 'call':
+        client.operations_stream.positions_stream.side_effect = error
+    else:
+        responses = create_autospec(list, instance=True, spec_set=True)
+        responses.__iter__.side_effect = error
+        client.operations_stream.positions_stream.return_value = responses
 
     with pytest.raises(DataAccessError, match='open unavailable') as caught:
         data.position_events(['account'])
@@ -290,9 +315,13 @@ def test_position_events_translates_stream_opening_request_error(client, data):
     assert caught.value.__cause__ is error
     client.operations_stream.positions_stream.assert_called_once_with(
         accounts=['account'])
+    full, = caplog.records
+    assert full.sdk_details == 'open unavailable'
+    assert full.tracking_id == 'stream-tracking'
+    assert full.exc_info[1] is error
 
 
-def test_position_events_translates_request_error_during_iteration(client, data):
+def test_position_events_translates_request_error_during_iteration(client, data, caplog):
     """A stream may fail only after yielding one valid event."""
     response = PositionsStreamResponse(position=None)
     error = RequestError(
@@ -305,10 +334,47 @@ def test_position_events_translates_request_error_during_iteration(client, data)
     client.operations_stream.positions_stream.return_value = responses()
     events = data.position_events(['account'])
 
-    assert next(events) == PositionEvent(False, '', (), (), str(response))
+    assert caplog.records == []
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        assert next(events) == PositionEvent(False, '', (), (), str(response))
+    payload, = caplog.records
+    assert payload.message == f'SDK response: method=positions_stream response={response!r}'
     with pytest.raises(DataAccessError, match='next unavailable') as caught:
         next(events)
     assert caught.value.__cause__ is error
+    full, = [record for record in caplog.records if hasattr(record, 'sdk_details')]
+    assert full.exc_info[1] is error
+    assert full.sdk_details == 'next unavailable'
+
+
+def test_stream_payload_debug_precedes_conversion_and_eof_is_silent(client, data, caplog):
+    """Only requested payloads are logged; EOF and conversion keep their own semantics."""
+    response = PositionsStreamResponse(position=PositionData(account_id='account'))
+    response.position.money = None
+    client.operations_stream.positions_stream.return_value = iter([response])
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        events = data.position_events(['account'])
+        assert caplog.records == []
+        with pytest.raises(TypeError):
+            next(events)
+        assert len(caplog.records) == 1
+        assert repr(response) in caplog.messages[0]
+        client.operations_stream.positions_stream.return_value = iter(())
+        assert not list(data.position_events(['account']))
+        assert len(caplog.records) == 1
+
+
+def test_unary_response_debug_precedes_failed_conversion(client, data, caplog):
+    """A received real SDK response remains inspectable when its conversion fails."""
+    response = PortfolioResponse(positions=[PortfolioPosition(
+        instrument_uid='broken', current_price=None, quantity=Quotation(units=1, nano=0))])
+    client.operations.get_portfolio.return_value = response
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        with pytest.raises(ValueError, match='current_price is missing'):
+            data.get_portfolio('account')
+    full, = caplog.records
+    assert full.message == f'SDK response: method=MagicMock response={response!r}'
+    client.operations.get_portfolio.assert_called_once_with(account_id='account')
 
 
 @pytest.mark.parametrize(

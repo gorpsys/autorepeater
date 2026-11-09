@@ -15,6 +15,7 @@ from t_tech.invest import (GetOrdersResponse, MoneyValue, Operation, OperationsR
 from t_tech.invest.services import OperationsService, OrdersService, SandboxService
 
 from autorepeater.execution_data import ExecutionData, ExecutionSnapshot
+from autorepeater.tinvest_requests import call_api
 from autorepeater.strategy_data import (InstrumentInfo, InstrumentMatch, InstrumentType,
                                         PriceQuote, StrategyData, DataAccessError)
 
@@ -53,8 +54,6 @@ def test_exception_facts_bound_cycles_and_respect_suppressed_context():
 
 def test_exception_facts_capture_application_location_only(monkeypatch):
     """The transport call site is useful without locals, source lines or SDK frames."""
-    from autorepeater.tinvest_requests import call_api  # pylint: disable=import-outside-toplevel
-
     def failing_api(**_):
         raise RequestError(StatusCode.DEADLINE_EXCEEDED, 'private', {'token': 'private'})
 
@@ -62,9 +61,10 @@ def test_exception_facts_capture_application_location_only(monkeypatch):
     with pytest.raises(RequestError) as raised:
         call_api(failing_api)
     facts = list_exception_facts(raised.value)
-    frame, = facts[0]['frames']
-    assert (frame['file'], frame['function']) == ('autorepeater/tinvest_requests.py', 'call_api')
-    assert frame['line'] > 0
+    assert [(frame['file'], frame['function']) for frame in facts[0]['frames']] == [
+        ('autorepeater/tinvest_requests.py', 'call_api'),
+        ('autorepeater/tinvest_diagnostics.py', 'call_once')]
+    assert all(frame['line'] > 0 for frame in facts[0]['frames'])
     assert 'private' not in json.dumps(facts)
 
 
@@ -439,6 +439,33 @@ def test_order_journal_records_safe_rpc_failures_and_quota_waits():
     assert {key: value for key, value in quota.items() if key != 'time'} == {
         'event': 'quota_retry', 'method': 'find_instrument', 'delay_seconds': 10}
     assert 'private' not in json.dumps(journal.events)
+
+
+def test_order_journal_ignores_actual_full_sdk_records(caplog, monkeypatch):
+    """Full SDK logs cannot enter the separate bounded machine evidence protocol."""
+    journal = sandbox_support.OrderJournal()
+    error = RequestError(StatusCode.RESOURCE_EXHAUSTED, 'server-quota-details', None)
+    terminal = RequestError(StatusCode.UNAVAILABLE, 'server-terminal-details', None)
+    outcomes = iter([error, terminal, GetOrdersResponse(orders=[])])
+
+    def shares(**_kwargs):
+        result = next(outcomes)
+        if isinstance(result, RequestError):
+            raise result
+        return result
+
+    monkeypatch.setattr('autorepeater.tinvest_requests.time.sleep', lambda _: None)
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        with pytest.raises(RequestError) as raised:
+            call_api(shares)
+        assert raised.value is terminal
+        call_api(shares)
+    assert len([record for record in caplog.records if hasattr(record, 'sdk_details')]) == 2
+    assert any(record.msg == 'SDK response: method=%s response=%s' for record in caplog.records)
+    for record in caplog.records:
+        journal.emit(record)
+    assert [event['event'] for event in journal.events] == ['quota_retry', 'api_failure']
+    assert 'server-' not in json.dumps(journal.events)
 
 
 def test_order_journal_retains_structured_native_terminal_reason():

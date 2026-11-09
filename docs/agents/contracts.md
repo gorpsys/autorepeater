@@ -157,14 +157,34 @@ main с пустой дельтой нормальный SKIP.
 | Владение/деньги/лоты | order_plan.py, purchase_plan.py, cash_pools.py, fx_funding.py |
 | Проход и отправка | execution.py (нейтральный), order_execution.py (SDK) |
 | Оркестрация/Client | repeater.py (нейтральный), runner.py, grpc_deadline.py |
-| Вывод/общие DTO | reporting.py, logging_config.py, money.py, portfolio.py |
+| Чистый вывод/общие DTO | reporting.py, display_data.py, money.py, portfolio.py |
+| SDK-диагностика/legacy обзор/конверсия | tinvest_diagnostics.py, legacy_display.py, tinvest_values.py |
+| Настройка логов | logging_config.py |
 | Входы/утилиты | main.py, serverless.py, handler.py, scripts/check_rebalance_policy.py, scripts/check_imoex_strategy.py |
 
 Стратегии не импортируют SDK/grpc, адаптеры, реестр, исполнение, Runner
 или друг друга. Общие DTO/политика/движок SDK не импортируют.
 COMPOSITE создаёт непрозрачных детей через strategy_contract.create_strategy.
 Reporting использует загруженные DTO/UID без дополнительных запросов
-ради расчётных логов. Явный просмотр счетов допустим в Runner.run().
+ради расчётных логов. Явный просмотр счетов в Runner.run() выполняет
+legacy_display; run_sync не просматривает все счета. Frozen DisplayAccount/
+DisplayPosition содержат только загруженные скаляры/Decimal/строки.
+Чистые formatter-функции не знают SDK, units/nano, клиента или reader-порта.
+Единственное исключение reporting — совместимый
+postiton_to_string(client, position), делегирующий legacy adapter;
+reporting.GetInstrumentException остаётся доступен из display_data.
+Legacy сохраняет порядок GetAccounts/GetPortfolio/FindInstrument и частичный
+вывод, прежние строки currency и числовую конверсию без новых проверок.
+Raw-only bond/unknown projection не читает числовые поля, оставляя их None;
+instrument_label для share/ETF формируется до чтения price после прежнего
+первого чтения quantity. Расчёт total отдельно конвертирует числа после печати.
+Это сохраняет прежние ошибки и допуск к CLI mainflow для постороннего счёта.
+Money хранит только Decimal-formatters, portfolio — TargetPortfolio/validation.
+Публичный tinvest_values.decimal_value(value, context) используется прежними
+strategy/execution путями вместо приватного межадаптерного импорта: арифметика,
+ошибки и Decimal-context sensitivity прежние; execution сохраняет nonnegative
+check. Строгий MoneyAmount.from_units_nano и отдельная permissive legacy-конверсия
+сохраняют свои контракты; эти три способа не взаимозаменяемы.
 AutoRepeater(strategy, data, execution_data, executor), sync_accounts/mainflow
 получают dst. sync_accounts дополнительно принимает явный keyword-only
 Valuation для read-only валютной оценки; прежний вызов без него совместим.
@@ -452,14 +472,32 @@ DataAccessError/ExecutionDataError сохраняют cause транспорта
 При RequestError PostOrder или повреждённом ответе OrderExecutionError
 сохраняет keyword-only request_id=None (старые вызовы с message совместимы).
 ERROR адаптера содержит отправленный request ID, проверенные UID/side/лоты
-intent и фиксированную причину, без str(RequestError)/kwargs/SDK repr.
+intent и фиксированную причину. Это компактная запись контекста;
+полный RequestError отдельно выводится SDK-границей, как описано ниже.
 RequestError сохраняется как cause, контекст не теряется при пробросе;
 broker ID логировать отдельно только из проверенного ответа.
 OrderExecutionError стоп прохода: mainflow продолжает события,
 run_sync/облако пробрасывают, ложного Success нет. Programming errors не маскировать.
 Следующее событие может запустить свежий расчёт, не retry неизвестной заявки.
-Cause не гарантирует очистки стороннего traceback; общий перенос errors/reporting
-из issue #16 не входит в этот контракт.
+SDK-диагностика не меняет тип/идентичность ошибки, cause и fail-stop.
+tinvest_diagnostics.call_once делает ровно один вызов: полный RequestError
+на ERROR с исходными details/metadata/traceback и доступным tracking_id,
+тот же response на DEBUG до конверсии. В cloud JSON дополнительно сохраняются
+api_method/grpc_status/sdk_details/sdk_metadata и существующий tracking_id;
+отсутствующий ID не придумывается. Полный входящий текст не усекается.
+call_api использует helper внутри прежнего quota loop, поэтому каждая ошибочная
+попытка имеет один полный ERROR и прежнее компактное terminal/quota сообщение.
+Stream отдельно логирует ошибки открытия/чтения и каждый полученный response;
+ленивость, EOF и reconnect сохраняются. Прежние прямые legacy reads используют
+call_once без нового quota retry. Repr успешного ответа вычисляется только при
+DEBUG; ошибка str/repr заменяется placeholder, не меняя результат/исключение.
+Не читать и не выводить клиента, kwargs, credentials и исходящие authorization
+metadata. Полные входящие SDK данные разрешены; новые RPC ради логов запрещены.
+diagnostic_text собственных событий/позиций сохраняется, полный event/fallback
+текст выводится на DEBUG; компактные финансовые факты остаются на обычном уровне.
+Машинные E2E evidence принимают прежние компактные записи, не полные SDK payloads.
+LOG_LEVEL задаёт INFO (default) или DEBUG для tinkoffBot локально и в облаке;
+--debug остаётся dry-run. Уровень логов не меняет разрешения торговли.
 Event_accounts непустой tuple уникальных непустых строк без пробелов;
 should_rebalance строго bool, это инициатор проверки, не разрешение сделки.
 Начальная синхронизация до подписки, одно position_events. После EOF или
