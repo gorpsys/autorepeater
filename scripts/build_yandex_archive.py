@@ -1,6 +1,6 @@
 """Build the cloud bundle from flat modules and the bundled JSON config tree."""
 import argparse
-from collections.abc import Iterator
+from dataclasses import asdict
 from email.parser import BytesParser
 from io import BytesIO
 import logging
@@ -8,44 +8,31 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 from typing import Any, TYPE_CHECKING
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts import cloud_archive_inputs as inputs
+from scripts import cloud_archive_manifest as inventory
+from scripts import cloud_archive_zip
 
 if TYPE_CHECKING:
     from scripts.sdk_wheel import ValidatedWheel
 
 
-def _config_files(directory: Path) -> Iterator[Path]:
-    for path in sorted(directory.iterdir()):
-        if path.name.startswith('.') or path.is_symlink():
-            continue
-        if path.is_dir():
-            yield from _config_files(path)
-        elif path.is_file() and path.suffix == '.json':
-            yield path
-
-
 def archive_files(project_root: str | Path) -> list[Path]:
     """Select only application roots, flat Python modules and nonhidden JSON."""
-    root = Path(project_root)
-    files = [root / name for name in (
-        'main.py', 'handler.py', 'requirements.txt', 'requirements-runtime.txt')]
-    files.extend(path for path in sorted((root / 'autorepeater').glob('*.py'))
-                 if not path.name.startswith('.') and not path.is_symlink())
-    files.extend(_config_files(root / 'autorepeater/configs'))
-    return files
+    return inputs.archive_files(project_root)
 
 
-def _vendored_entries(root: Path) -> dict[str, bytes]:
+def _vendored_entries(root: Path, requirements: bytes) -> dict[str, bytes]:
     """Prepare locked requirements and owned SDK bytes before touching the output."""
-    # Direct script/runpy entrypoints do not put the script's project on sys.path.
-    helper_root = str(Path(__file__).resolve().parents[1])
-    if helper_root not in sys.path:
-        sys.path.insert(0, helper_root)
     from scripts import runtime_lock, sdk_wheel  # pylint: disable=import-outside-toplevel
 
     document = runtime_lock.load_lock(root)
     runtime = runtime_lock.render_requirements(document)['requirements-runtime.txt'].encode()
-    runtime_lock.require((root / 'requirements-runtime.txt').read_bytes() == runtime,
+    runtime_lock.require(requirements == runtime,
                          'generated requirements drift')
     prefix = 'vendor/t-tech-investments/'
     manifest = runtime_lock.read_json(root / prefix / 'manifest.json')
@@ -90,67 +77,90 @@ def vendored_files(document: dict[str, Any], wheel: 'ValidatedWheel',
 
 def _default_entries(root: Path) -> dict[str, bytes]:
     """Give cloud pip pinned CA bytes; the SDK itself is still installed from its index."""
-    helper_root = Path(__file__).resolve().parents[1]
-    if str(helper_root) not in sys.path:
-        sys.path.insert(0, str(helper_root))
     from scripts import cloud_build_tls  # pylint: disable=import-outside-toplevel
     return cloud_build_tls.prepare(root)
 
 
-def _write_archive(root: Path, files: list[Path], entries: dict[str, bytes], output: Path) -> None:
-    with ZipFile(output, 'w', compression=ZIP_DEFLATED) as archive:
-        for path in files:
-            name = path.relative_to(root).as_posix()
-            if name not in entries:
-                archive.write(path, name)
-        for name, data in entries.items():
-            if name == 'pip3.12':
-                info = ZipInfo(name)
-                info.compress_type = ZIP_DEFLATED
-                info.create_system = 3
-                info.external_attr = 0o100755 << 16
-                archive.writestr(info, data)
-            else:
-                archive.writestr(name, data)
+def _merge_entries(application: dict[str, bytes], prepared: dict[str, bytes], *,
+                   vendored: bool = False) -> dict[str, bytes]:
+    permitted = {'requirements.txt', 'requirements-runtime.txt'} if vendored else set()
+    inventory.require(not (set(application) & set(prepared)) - permitted,
+                      'cloud archive entry collision')
+    entries = {**application, **prepared}
+    inventory.check_names([*entries, inventory.MANIFEST])
+    return entries
 
 
-def _check_archive(root: Path, files: list[Path], entries: dict[str, bytes], output: Path) -> None:
-    expected = {path.relative_to(root).as_posix() for path in files} | set(entries)
+def _write_archive(entries: dict[str, bytes], output: Path) -> None:
+    with ZipFile(output, 'w', compression=ZIP_DEFLATED, compresslevel=9) as archive:
+        for name in sorted(entries, key=lambda name: name.encode('utf-8')):
+            info = ZipInfo(name, date_time=inventory.TIMESTAMP)
+            info.compress_type = ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = int(inventory.file_mode(name), 8) << 16
+            archive.writestr(info, entries[name], compress_type=ZIP_DEFLATED, compresslevel=9)
+
+
+def _check_archive(entries: dict[str, bytes], output: Path) -> None:
+    expected = set(entries)
     with ZipFile(output) as archive:
         names = archive.namelist()
-        if len(names) != len(expected) or set(names) != expected or archive.testzip() is not None:
+        if len(names) != len(expected) or set(names) != expected:
             raise ValueError('invalid cloud archive members or CRC')
-        if any(archive.read(name) != data for name, data in entries.items()):
+        try:
+            actual = {name: archive.read(name) for name in names}
+        except BadZipFile as error:
+            raise ValueError('invalid cloud archive CRC') from error
+        if actual != entries:
             raise ValueError('cloud archive content drift')
-        if 'pip3.12' in entries and archive.getinfo('pip3.12').external_attr >> 16 != 0o100755:
-            raise ValueError('cloud pip wrapper is not executable')
+        inventory.verify(actual, archive.infolist(), comment=archive.comment)
+        cloud_archive_zip.verify_local_headers(archive)
 
 
-def build_archive(project_root: str | Path, output_path: str | Path | None = None, *,
-                  use_vendored_sdk: bool = False, offline_archive: bool = False) -> Path:
-    """Replace the ZIP, preserving selected files' relative paths and bytes."""
-    root = Path(project_root)
-    output = Path(output_path) if output_path is not None else root / 'build/yandex-function.zip'
-    files = archive_files(root)
+def _prepared_entries(root: Path, snapshot: inputs.ApplicationSnapshot, *,
+                      use_vendored_sdk: bool, offline_archive: bool) -> dict[str, bytes]:
+    """Combine the checked application snapshot with the existing payload owners."""
+    application = {file.name: file.data for file in snapshot.files}
     if offline_archive:
-        helper_root = str(Path(__file__).resolve().parents[1])
-        if helper_root not in sys.path:
-            sys.path.insert(0, helper_root)
         from scripts import cloud_dependencies  # pylint: disable=import-outside-toplevel
-        files = [p for p in files if p.name not in ('requirements.txt', 'requirements-runtime.txt')]
-        if any(p.is_symlink() or any(parent.is_symlink() for parent in p.parents) for p in files):
-            raise ValueError('unsafe application path')
-        application = {p.relative_to(root).as_posix(): p.read_bytes() for p in files}
-        entries = {**cloud_dependencies.prepare_payload(
-            root, application, use_vendored_sdk=use_vendored_sdk), **application}
-        files = []
-    else:
-        entries = _vendored_entries(root) if use_vendored_sdk else _default_entries(root)
+        application = {n: data for n, data in application.items()
+                       if n not in ('requirements.txt', 'requirements-runtime.txt')}
+        return _merge_entries(application, cloud_dependencies.prepare_payload(
+            root, dict(application), use_vendored_sdk=use_vendored_sdk))
+    return _merge_entries(application, _vendored_entries(
+        root, application['requirements-runtime.txt']) if use_vendored_sdk
+        else _default_entries(root), vendored=use_vendored_sdk)
+
+
+# Preserve the two existing and two additive public keyword-only options.
+# pylint: disable-next=too-many-arguments
+def build_archive(project_root: str | Path, output_path: str | Path | None = None, *,
+                  use_vendored_sdk: bool = False, offline_archive: bool = False,
+                  release: bool = False, expected_sha: str = '') -> Path:
+    """Replace the ZIP, preserving selected files' relative paths and bytes."""
+    root = inputs.project_path(project_root)
+    if release and offline_archive and not use_vendored_sdk:
+        raise ValueError('offline release requires vendored SDK')
+    output = Path(output_path) if output_path is not None else root / 'build/yandex-function.zip'
+    snapshot = inputs.snapshot(root, release=release, expected_sha=expected_sha)
+    if release:
+        inputs.recheck(root, snapshot, expected_sha=expected_sha)
+    entries = _prepared_entries(root, snapshot, use_vendored_sdk=use_vendored_sdk,
+                                offline_archive=offline_archive)
+    profile = 'offline' if offline_archive else 'vendored' if use_vendored_sdk else 'default'
+    policy = 'vendored' if use_vendored_sdk else 'auto' if offline_archive else 'cloud-index'
+    entries[inventory.MANIFEST] = inventory.render(
+        entries, mode='release' if release else 'local', profile=profile,
+        sdk_policy=policy, source=asdict(snapshot.source))
+    for file in snapshot.files:
+        inputs.validate_path(file.path, root)
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.yandex-archive-', dir=output.parent) as directory:
         staged = Path(directory) / output.name
-        _write_archive(root, files, entries, staged)
-        _check_archive(root, files, entries, staged)
+        _write_archive(entries, staged)
+        _check_archive(entries, staged)
+        if release:
+            inputs.recheck(root, snapshot, expected_sha=expected_sha)
         staged.replace(output)
     return output
 
@@ -162,11 +172,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--output', type=Path)
     parser.add_argument('--use-vendored-sdk', action='store_true')
     parser.add_argument('--offline-archive', action='store_true')
+    parser.add_argument('--release', action='store_true')
+    parser.add_argument('--expected-sha', default='')
     args = parser.parse_args(argv)
     if args.use_vendored_sdk or args.offline_archive:
         logging.basicConfig(level=logging.WARNING)
     build_archive(args.project_root, args.output, use_vendored_sdk=args.use_vendored_sdk,
-                  offline_archive=args.offline_archive)
+                  offline_archive=args.offline_archive, release=args.release,
+                  expected_sha=args.expected_sha)
 
 
 if __name__ == '__main__':

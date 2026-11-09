@@ -83,7 +83,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Build the existing cloud package
-        run: make claude-yandex-archive
+        run: make claude-yandex-archive ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA="$DEPLOY_SHA"
+      - name: Verify the ready release archive
+        run: make check-cloud-archive CLOUD_PACKAGE_SHA="$DEPLOY_SHA"
       - name: Install the pinned official yc binary
         timeout-minutes: 4
         run: |

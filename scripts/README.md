@@ -407,6 +407,10 @@ make claude-yandex-archive
 make claude-yandex-archive USE_VENDORED_SDK=1
 # Архив с готовыми зависимостями приложения, без установки пакетов в облаке
 make claude-yandex-archive USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1
+# Release из чистого checkout точного HEAD
+make claude-yandex-archive ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA="$(git rev-parse HEAD)"
+# Offline release требует явно выбранный локальный SDK
+make claude-yandex-archive ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA="$(git rev-parse HEAD)" USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1
 ```
 
 `build_yandex_archive.py` включает `main.py`, `handler.py`, плоские Python-модули
@@ -418,9 +422,63 @@ make claude-yandex-archive USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1
 Тесты извлекают архив вне репозитория и проверяют CLI/облако с подменённым SDK
 и заблокированной сетью.
 
-Оба флага принимают только значения `0` и `1`.
+`USE_VENDORED_SDK`, `OFFLINE_ARCHIVE` и `ARCHIVE_RELEASE` принимают только `0` и `1`.
 Сочетание `OFFLINE_ARCHIVE=1 USE_VENDORED_SDK=0` тоже допустимо:
-оно создаёт архив с готовыми зависимостями и автоматическим выбором источника SDK.
+в local оно создаёт архив с готовыми зависимостями и автоматическим выбором SDK.
+Release отвергает его до сети; используйте оба резервных флага со значением `1`.
+По умолчанию `ARCHIVE_RELEASE=0`: local сохраняет выбранные dirty, untracked
+и ignored исходники. `CLOUD_PACKAGE_SHA` передаёт ожидаемый полный 40-символьный
+HEAD и при непустом значении обязателен к совпадению также в local.
+
+Release требует Git root, совпадающий с корнем проекта, и чистое состояние
+всех tracked-файлов репозитория, включая файлы вне архива: staged/unstaged
+изменения, удаления и смена executable mode запрещены. Дополнительные eligible
+untracked/ignored входы тоже запрещены; нерелевантные untracked документы,
+build outputs и receipt вне allowlist не блокируют сборку. Worktree bytes
+сверяются с HEAD без Git filters, EOL-нормализации и stat cache; clean/process
+filters не запускаются; replacement refs отключены. Git executable mode
+определяется owner executable bit. Unmerged/intent-to-add, assume-unchanged, skip-worktree,
+sparse index/checkout и submodules не дают release-свидетельства. HEAD, состав
+и bytes повторно проверяются перед публикацией. Используйте приватный checkout
+без параллельных изменений; проверки не защищают от враждебной гонки с `open`.
+
+В local manifest `dirty=true` означает tracked drift где угодно либо
+дополнительные eligible входы, а не все ignored/untracked файлы. При отсутствии
+Git/repository/HEAD или неполных facts local без ожидаемого SHA записывает
+`git_state=unavailable`, `head=null`, `dirty=null`; это unknown, не clean.
+При Git timeout/failure выводится безопасное предупреждение без stderr.
+Release и local с ожидаемым SHA при недоступных facts отказывают.
+
+До чтения приложения и подготовки payload проверяются корень проекта и его
+ancestors, `autorepeater/`, `autorepeater/configs/` и все четыре explicit-файла
+(`main.py`, `handler.py`, оба requirements). Symlink roots/explicit-файлы,
+выбранные `.py` и нескрытые symlink-дети configs, включая directory links/циклы,
+теперь вызывают отказ вместо прежнего пропуска; замените их обычными файлами
+или каталогами внутри checkout. FIFO/socket/device и root с `..` тоже запрещены.
+Скрытые и неподходящие обычные файлы по-прежнему исключаются allowlist.
+Ошибка показывает безопасную категорию без внешнего target и содержимого JSON.
+
+Каждый новый ZIP содержит `archive-manifest.json`, schema version `1`:
+`mode` (local/release), `profile` (default/vendored/offline), `sdk_policy`
+(cloud-index/vendored/auto), `source` (HEAD/dirty/Git state), `zip_format`
+и `members`. Inventory перечисляет все конечные members, включая requirements,
+configs, лицензии и прежние вложенные manifests, с размером несжатых bytes,
+SHA-256 и Unix mode. Сам manifest исключён из inventory: множество имён ZIP
+строго равно ключам `members` плюс `archive-manifest.json`. Его целостность
+связана с CRC и существующим SHA-256 всего ZIP; inventory не удостоверяет автора.
+Checker отвергает duplicate JSON keys, неизвестную schema/поля, лишние/пропущенные
+members, неверные bytes/modes и нечистую release identity.
+
+Имена отсортированы по UTF-8 bytes, timestamp фиксирован на 1980-01-01,
+mode — `100644`, только `pip3.12` — `100755`; comments/extra отсутствуют,
+DEFLATE level 9. Часы, mtime, permissions, umask, timezone и SOURCE_DATE_EPOCH
+не влияют на ZIP. Проверяются и central directory, и local headers: фиксированные
+поля, имена, отсутствие extra и соответствие CRC/размеров. Побайтное равенство
+гарантируется при одинаковых конечных
+bytes, mode/profile/SDK policy, source state и точных версиях CPython/zlib.
+Их fingerprint обязателен в `zip_format.python` и `zip_format.zlib`.
+Между разными toolchains равенство не обещается; default ZIP не доказывает
+воспроизводимость последующей установки зависимостей облаком.
 Обычный сборщик использует только стандартную библиотеку Python.
 Он скачивает закреплённый wheel certifi из PyPI и проверяет его хеш, метаданные
 и RECORD существующим загрузчиком. Mozilla CA из этого wheel дополняются
@@ -475,7 +533,8 @@ python /path/to/autorepeater/scripts/build_yandex_archive.py --project-root /pat
 ```
 
 Для резервных режимов при прямом запуске скрипта используйте параметры
-`--use-vendored-sdk` и `--offline-archive`. Лицензии включённых в архив пакетов
+`--use-vendored-sdk` и `--offline-archive`; release задаётся `--release`,
+ожидаемый HEAD — `--expected-sha SHA`. Лицензии включённых в архив пакетов
 и оговорка для iprotopy описаны в
 [vendor/README.md](../vendor/README.md#лицензии-и-payload).
 
@@ -483,10 +542,16 @@ python /path/to/autorepeater/scripts/build_yandex_archive.py --project-root /pat
 
 ```bash
 make check-cloud-package CLOUD_PACKAGE_SHA="$(git rev-parse HEAD)"
+# Тот же сетевой smoke, с обязательной release identity обоих резервных архивов
+make check-cloud-package ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA="$(git rev-parse HEAD)"
+# Read-only проверка уже готового default release ZIP без сети и запуска приложения
+make check-cloud-archive CLOUD_PACKAGE_SHA="$(git rev-parse HEAD)"
+# Для reserve передать те же USE_VENDORED_SDK/OFFLINE_ARCHIVE, что при сборке
+make check-cloud-archive CLOUD_PACKAGE_SHA="$(git rev-parse HEAD)" USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1
 ```
 
-Если `CLOUD_PACKAGE_SHA` не задан, проверка использует текущий HEAD;
-CI передаёт полный SHA. Нужны CPython 3.12, Linux и доступ к сети
+Для `check-cloud-package`, если `CLOUD_PACKAGE_SHA` не задан, используется
+текущий HEAD; CI передаёт полный SHA. Нужны CPython 3.12, Linux и доступ к сети
 для скачивания wheel-пакетов из PyPI. Проверка создаёт собственные временные
 каталоги для содержимого пакета. Зависимости архива с резервным SDK
 устанавливаются по включённым в архив requirements без использования T-Bank
@@ -495,8 +560,22 @@ CI передаёт полный SHA. Нужны CPython 3.12, Linux и дост
 и импортируется без pip и скачивания пакетов.
 
 JSON-результат содержит SHA извлечённого коммита и хеш канонического
-представления lock-файла. Если в рабочем дереве есть незакоммиченные изменения,
-этот результат не доказывает, что проверен именно указанный коммит.
+представления lock-файла. В local это не доказывает чистоту указанного коммита;
+release требует её до подготовки и перед публикацией. CI передаёт
+`ARCHIVE_RELEASE=1` существующему package smoke.
+
+`check-cloud-archive` требует непустой полный `CLOUD_PACKAGE_SHA`, читает только
+`build/yandex-function.zip` и проверяет manifest, нормализованный ZIP и release
+identity без checkout, pip, сети, SDK или handler. Ожидаемые profile/SDK policy
+выводятся из тех же двух резервных флагов; local/старый ZIP без manifest,
+неверный SHA или состав не проходят. Прямой CLI эквивалент:
+
+```bash
+python -m scripts.check_cloud_bundle --archive build/yandex-function.zip --require-release --expected-sha FULL_SHA --expected-profile default --expected-sdk-policy cloud-index
+```
+
+Для vendored ожидаются `vendored/vendored`, для offline release —
+`offline/vendored`. Эта проверка не заменяет сетевой package smoke.
 
 В обоих режимах импортируются `main`, `handler`, SDK, нативные модули
 grpc/protoc и protobuf в изолированном процессе Python с флагами `-I` и `-S`.
@@ -543,6 +622,12 @@ E2E на коммите, отправленном в master, либо вручн
 ещё раз. Для события `workflow_run` проверяется путь
 `.github/workflows/sandbox-e2e.yml`, а не меняющееся название запуска.
 Деплой устаревшего SHA пропускается.
+
+Порядок обоих workflows: начальный gate → checkout его SHA → сборка с
+`ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA=SHA` → read-only `check-cloud-archive`
+с теми же резервными флагами → установка yc → повторный gate `--check-once`
+→ OIDC → публикация. Manifest внутри ZIP связывается с описанием версии
+существующим SHA-256 всего ZIP и последующей read-only ACTIVE-проверкой.
 
 `yandex_deploy.py` получает короткоживущий IAM-токен через GitHub OIDC.
 Окружение GitHub (`environment`) и постоянный облачный ключ не используются.

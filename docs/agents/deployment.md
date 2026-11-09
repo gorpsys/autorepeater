@@ -23,11 +23,26 @@ scripts/deploy_gate.py
 statuses читается newest-first из полного endpoint,
 не combined status без creator. Устаревший SHA пропускается. Перед OIDC
 повторная проверка. Сборка использует существующий CI и цель
-make claude-yandex-archive -> build/yandex-function.zip; резервные режимы
+make claude-yandex-archive ARCHIVE_RELEASE=1 CLOUD_PACKAGE_SHA=SHA
+-> build/yandex-function.zip; резервные режимы
 задаются USE_VENDORED_SDK=1 и OFFLINE_ARCHIVE=1. Сборка offline требует PyPI,
 но готовый архив не устанавливает зависимости в облаке. Оба workflow имеют
 общую очередь deploy-prod, cancel-in-progress=false, queue=max, checkout
-точного SHA и повторный gate перед credentials. yc 1.40.0 скачивается
+точного SHA и повторный gate перед credentials. До установки yc оба workflow
+выполняют make check-cloud-archive CLOUD_PACKAGE_SHA=SHA с теми же резервными
+флагами. Порядок: начальный gate → checkout SHA → release build → ready check
+→ yc → gate --check-once → OIDC → publish. Ready check читает только ZIP:
+проверяет archive-manifest.json schema1, полный inventory/bytes/Unix modes,
+ожидаемые profile/SDK policy и known/clean source HEAD; без pip/сети/handler.
+Local ZIP и старый архив без manifest такой проверки не проходят.
+Offline release требует USE_VENDORED_SDK=1 OFFLINE_ARCHIVE=1; автоматический
+SDK остаётся только для local. Release отвергает любые tracked-изменения
+всего checkout и eligible untracked/ignored входы; неизвестные Git facts — отказ.
+Symlink inputs нужно заменить обычными файлами/каталогами до сборки.
+Manifest исключает собственный hash; SHA-256 всего ZIP связывает его с
+описанием cloud version и read-only ACTIVE verification. Fingerprint точных
+CPython/zlib задаёт границу воспроизводимости ZIP; установка default requirements
+в облаке в эту гарантию не входит. yc 1.40.0 скачивается
 официально; резервного бинарника нет. OIDC без environment,
 subject repo:gorpsys/autorepeater:ref:refs/heads/master.
 GITHUB_OIDC_AUDIENCE=https://github.com/gorpsys — подтверждённый AUD федерации

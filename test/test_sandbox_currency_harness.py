@@ -207,6 +207,26 @@ def test_new_mixed_scenarios_offline(offline_live, tmp_path, monkeypatch, algori
     broker.client.operations.get_operations.assert_not_called()
 
 
+@pytest.mark.parametrize('algorithm,source', [
+    ('INDEX', 'CROSS'), ('COMPOSITE', 'MIX'), ('ACCOUNT', 'MIXED')])
+def test_sandbox_state_in_pieces_preserves_economic_checks(
+        offline_live, tmp_path, monkeypatch, algorithm, source):
+    """Real Runner receives raw states; only the harness interprets the Sandbox defect."""
+    live, broker = offline_live
+
+    def raw_state(**kwargs):
+        state = broker.orders[kwargs['order_id']]
+        return replace(state, lots_executed=(
+            state.lots_executed * broker.metadata[state.instrument_uid].lot))
+
+    broker.client.orders.get_order_state.side_effect = raw_state
+    scenarios.test_rub_cny_normal_application(live, tmp_path, monkeypatch, algorithm, source)
+    facts = [event for event in live[0].records if event['event'] == 'currency_order_money']
+    assert any(fact['executed'] > fact['requested'] for fact in facts)
+    assert all(fact['trade']['lots'] == fact['requested'] for fact in facts)
+    assert all(fact['pieces'] == fact['requested'] * fact['trade']['lot_size'] for fact in facts)
+
+
 @pytest.mark.parametrize('scenario', [
     scenarios.test_shared_cny_owners_and_unallocated_cash,
     scenarios.test_reverse_exchange_only_for_rub_purchase,

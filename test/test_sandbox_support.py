@@ -79,6 +79,105 @@ def fixture_session():
     return SandboxSession(client, lifecycle, order_id_factory=lambda: 'stable-request')
 
 
+def _filled_order(response_type=OrderState, **changes):
+    fields = {'order_id': 'broker', 'instrument_uid': 'uid',
+              'direction': OrderDirection.ORDER_DIRECTION_BUY,
+              'execution_report_status': OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL,
+              'lots_requested': 2, 'lots_executed': 2}
+    return response_type(**(fields | changes))
+
+
+@pytest.mark.parametrize('response_type,lot,raw', [
+    (PostOrderResponse, 1000, 2), (OrderState, 1, 2), (OrderState, 10, 2),
+    (OrderState, 10, 20), (OrderState, 1000, 2000)])
+def test_checked_order_keeps_raw_units(response_type, lot, raw, caplog):
+    """Only Sandbox OrderState FILL may report physical pieces instead of lots."""
+    response = _filled_order(response_type, lots_executed=raw)
+    with caplog.at_level(logging.WARNING, logger='tinkoffBot'):
+        executed = SandboxSession.check_order(
+            response, SimpleNamespace(uid='uid', lot=lot), 2,
+            OrderDirection.ORDER_DIRECTION_BUY, 'broker')
+    assert executed == 2
+    assert response.lots_executed == raw
+    facts = [json.loads(record.args[0]) for record in caplog.records
+             if record.msg == 'Market diagnostic: %s']
+    if raw != 2:
+        fact, = facts
+        assert fact['event'] == 'sandbox_order_quantity_units'
+        assert (fact['raw_executed'], fact['executed_lots'], fact['lot']) == (raw, 2, lot)
+        assert fact['interpretation'] == 'pieces'
+        assert fact['order_id'] == 'broker'
+    else:
+        assert not facts
+
+
+@pytest.mark.parametrize('changes', [
+    {'lots_executed': 3}, {'lots_executed': 19}, {'lots_executed': 21},
+    {'lots_executed': 0}, {'lots_executed': -1}, {'lots_executed': True},
+    {'lots_executed': 20.0}, {'lots_requested': True}, {'lots_requested': 3},
+    {'instrument_uid': 'other'}, {'order_id': 'foreign'},
+    {'direction': OrderDirection.ORDER_DIRECTION_SELL}, {'direction': 1},
+    {'execution_report_status': 1},
+    {'execution_report_status': OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_NEW,
+     'lots_executed': 20},
+])
+def test_checked_order_rejects_unexplained_facts(changes):
+    """An arbitrary factor, wrong identity or malformed fact cannot become a FILL."""
+    with pytest.raises(SandboxFailure, match='lot facts mismatch'):
+        SandboxSession.check_order(_filled_order(**changes), SimpleNamespace(uid='uid', lot=10),
+                                   2, OrderDirection.ORDER_DIRECTION_BUY, 'broker')
+
+
+@pytest.mark.parametrize('lot', [True, 0, -1, 10.0, None])
+def test_checked_order_requires_known_positive_lot(lot):
+    """Never infer a conversion factor from the inconsistent state itself."""
+    with pytest.raises(SandboxFailure, match='lot facts mismatch'):
+        SandboxSession.check_order(_filled_order(lots_executed=20),
+                                   SimpleNamespace(uid='uid', lot=lot), 2,
+                                   OrderDirection.ORDER_DIRECTION_BUY, 'broker')
+
+
+def test_post_order_pieces_are_not_accepted():
+    """The observed workaround must not widen the PostOrder receipt contract."""
+    with pytest.raises(SandboxFailure, match='lot facts mismatch'):
+        SandboxSession.check_order(_filled_order(PostOrderResponse, lots_executed=20),
+                                   SimpleNamespace(uid='uid', lot=10), 2,
+                                   OrderDirection.ORDER_DIRECTION_BUY, 'broker')
+
+
+def test_pieces_looking_state_does_not_hide_physical_overfill(session, monkeypatch):
+    """Independent positions still reject real excess execution despite matching raw units."""
+    session.client.orders.post_order.return_value = _filled_order(PostOrderResponse)
+    session.client.orders.get_order_state.return_value = _filled_order(lots_executed=20)
+    snapshots = create_autospec(session.state, spec_set=True, side_effect=[
+        SimpleNamespace(quantities={}), SimpleNamespace(
+            quantities={'uid': Decimal(200)}, limits_ready=True,
+            active_orders=(), available_cash={})])
+    monkeypatch.setattr(session, 'state', snapshots)
+    clock = iter([0, 0, 31])
+    monkeypatch.setattr(session, 'monotonic', lambda: next(clock))
+    with pytest.raises(SandboxFailure, match='positions did not settle'):
+        session.buy_setup('dst', SimpleNamespace(uid='uid', lot=10), 2)
+    session.client.orders.post_order.assert_called_once()
+    assert snapshots.call_count == 2
+
+
+@pytest.mark.parametrize('side', ['BUY', 'SELL'])
+def test_rub_harness_reconstructs_positions_and_operations_in_pieces(session, side):
+    """OrderState units do not multiply the independent physical/history oracle twice."""
+    from e2e.test_sandbox import _expected_app_positions  # pylint: disable=import-outside-toplevel
+    direction = getattr(OrderDirection, 'ORDER_DIRECTION_' + side)
+    session.client.orders.get_order_state.return_value = _filled_order(
+        lots_executed=20, direction=direction)
+    response = {'uid': 'uid', 'requested': 2, 'side': side, 'order_id': 'broker'}
+    expected = _expected_app_positions(session, 'dst', [SimpleNamespace(uid='uid', lot=10)],
+                                       {'uid': Decimal(40)}, [response])
+    assert expected.quantities == {'uid': Decimal(60 if side == 'BUY' else 20)}
+    assert expected.operation_totals == {('uid', side): Decimal(20)}
+    session.client.orders.get_order_state.assert_called_once_with(
+        account_id='dst', order_id='broker')
+
+
 def test_pay_in_keeps_nano_and_never_retries(session):
     """The broker receives exactly the requested units and nano once."""
     session.pay_in('dst', Decimal('2000.000000001'))

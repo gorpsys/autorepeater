@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from scripts import install_dependencies as installer
+from scripts import cloud_archive_inputs, cloud_archive_manifest
 from scripts import package_wheels, runtime_lock, sdk_wheel
 
 
@@ -77,18 +78,15 @@ def check_platform() -> None:
 
 def safe_path(name: str) -> bool:
     """Shared safe payload-member policy for builders and ready-bundle checks."""
-    parts = name.split('/')
-    return bool(name) and ':' not in name and '\\' not in name and all(
-        p and p not in ('.', '..', '.idea', '__pycache__', '.venv')
-        and not p.startswith('.env') for p in parts) and not any(
-            ord(c) < 32 or ord(c) == 127 for c in name)
+    return cloud_archive_inputs.safe_member_name(name)
 
 
 def check_paths(files: dict[str, bytes], application: dict[str, bytes]) -> None:
     """Reject dependency collisions with the application before copying files."""
     roots = {name.split('/')[0] for name in application} | {
         'autorepeater', 'main.py', 'handler.py', 'requirements.txt',
-        'requirements-runtime.txt', MANIFEST, 'THIRD_PARTY_NOTICES',
+        'requirements-runtime.txt', MANIFEST, cloud_archive_manifest.MANIFEST,
+        'THIRD_PARTY_NOTICES',
     }
     require(all(safe_path(name) and name.split('/')[0] not in roots for name in files),
             'dependency path collision or reserved path')

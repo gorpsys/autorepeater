@@ -18,6 +18,7 @@ from t_tech.invest.services import Services
 
 from autorepeater.execution_data import ExecutionSnapshot
 from autorepeater.execution_market import ExecutionMarket
+from autorepeater.market_diagnostics import emit_market_fact, safe_symbol
 from autorepeater.strategy_data import InstrumentInfo, InstrumentType
 from autorepeater.tinvest_execution_data import TInvestExecutionData
 from autorepeater.tinvest_strategy_data import TInvestStrategyData
@@ -218,7 +219,7 @@ class SandboxSession:  # pylint: disable=too-many-instance-attributes
         deadline = self.monotonic() + 30
         broker_id = response.order_id
         while True:
-            self.check_order(response, instrument.uid, lots, OrderDirection.ORDER_DIRECTION_BUY,
+            self.check_order(response, instrument, lots, OrderDirection.ORDER_DIRECTION_BUY,
                              broker_id)
             self.records.append({'event': 'setup_response', 'request_id': request_id,
                                  'time': time.time(), **asdict(order_fields(response))})
@@ -231,7 +232,7 @@ class SandboxSession:  # pylint: disable=too-many-instance-attributes
                                  account_id=account_id, order_id=broker_id)
         state = safe_call(self.client.orders.get_order_state,
                           account_id=account_id, order_id=broker_id)
-        self.check_order(state, instrument.uid, lots, OrderDirection.ORDER_DIRECTION_BUY, broker_id)
+        self.check_order(state, instrument, lots, OrderDirection.ORDER_DIRECTION_BUY, broker_id)
         if state.execution_report_status != FILL:
             raise SandboxFailure('setup broker state is not FILL')
         expected = dict(before)
@@ -243,20 +244,35 @@ class SandboxSession:  # pylint: disable=too-many-instance-attributes
         self.wait_positions(account_id, expected)
 
     @staticmethod
-    def check_order(response: PostOrderResponse | OrderState, uid: str, lots: int,
-                    direction: OrderDirection, broker_id: str) -> None:
-        """Independent broker identity, enums and quantities, never intent fallbacks."""
+    def check_order(response: PostOrderResponse | OrderState, instrument: InstrumentInfo, lots: int,
+                    direction: OrderDirection, broker_id: str) -> int:
+        """Check raw broker facts; tolerate the observed Sandbox FILL units defect only."""
         identity = (isinstance(broker_id, str) and bool(broker_id)
                     and response.order_id == broker_id
-                    and response.instrument_uid == uid and response.direction == direction)
+                    and response.instrument_uid == instrument.uid
+                    and response.direction == direction)
         enums = (isinstance(response.direction, OrderDirection)
                  and isinstance(response.execution_report_status, OrderExecutionReportStatus))
         counts = (all(not isinstance(value, bool) and isinstance(value, int)
-                      for value in (response.lots_requested, response.lots_executed))
-                  and 0 <= response.lots_executed <= response.lots_requested == lots
-                  and (response.execution_report_status != FILL or response.lots_executed == lots))
+                      for value in (lots, instrument.lot,
+                                    response.lots_requested, response.lots_executed))
+                  and instrument.lot > 0 and 0 < lots == response.lots_requested)
         if not identity or not enums or not counts:
             raise SandboxFailure('broker order identity or lot facts mismatch')
+        executed = response.lots_executed
+        if (isinstance(response, OrderState) and response.execution_report_status == FILL
+                and instrument.lot > 1 and executed == lots * instrument.lot):
+            executed = lots
+            emit_market_fact({
+                'event': 'sandbox_order_quantity_units', 'source': 'GetOrderState',
+                'interpretation': 'pieces', 'uid': safe_symbol(instrument.uid),
+                'order_id': safe_symbol(broker_id), 'requested_lots': lots,
+                'raw_executed': response.lots_executed, 'executed_lots': executed,
+                'lot': instrument.lot})
+        if not (0 <= executed <= lots
+                and (response.execution_report_status != FILL or executed == lots)):
+            raise SandboxFailure('broker order identity or lot facts mismatch')
+        return executed
 
     def list_operations(self, account_id: str) -> list[OperationEvidence]:
         """New disposable accounts have a bounded history; request the complete run window."""
