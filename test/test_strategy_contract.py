@@ -1,6 +1,7 @@
 # pylint: disable=import-outside-toplevel
 """Shared contracts over own data, plus independent algorithm launch coverage."""
 import inspect
+import logging
 import subprocess
 import sys
 from dataclasses import dataclass, fields, is_dataclass
@@ -479,7 +480,7 @@ def test_independent_algorithm_launches(entrypoint, invalid_config, launch, monk
     assert_launch_execution(launch, streaming)
 
 
-def assert_launch_execution(launch, streaming):
+def assert_launch_execution(launch, streaming, *, browse=False):
     """Verify the unchanged Runner and engine respect the independent strategy's contract."""
     from autorepeater import runner as runner_module
     from t_tech import invest
@@ -496,7 +497,8 @@ def assert_launch_execution(launch, streaming):
     assert data.get_last_prices.call_args_list == [call(['uid'])] * count
     assert data.position_events.call_args_list == ([call(('dst',))] * 2 if streaming else [])
     assert client.users.get_accounts.call_args_list == ([call()] if streaming else [])
-    client.instruments.find_instrument.assert_not_called()
+    assert client.instruments.find_instrument.call_args_list == (
+        [call(query='foreign')] if browse else [])
     client.orders.post_order.assert_called_once_with(
         instrument_id='uid', quantity=16, direction=invest.OrderDirection.ORDER_DIRECTION_BUY,
         account_id='dst', order_type=invest.OrderType.ORDER_TYPE_BESTPRICE, order_id=ANY)
@@ -504,6 +506,56 @@ def assert_launch_execution(launch, streaming):
     assert client.orders.get_orders.call_count == client.operations.get_positions.call_count
     assert all(item.kwargs['request'].account_id == 'dst'
                for item in client.orders.get_max_lots.call_args_list)
+
+
+@pytest.mark.parametrize('mode', ['run', 'run_sync'])
+@pytest.mark.parametrize('level', [logging.INFO, logging.DEBUG])
+def test_runner_display_and_diagnostics_keep_sdk_calls_and_intents(mode, level, launch, caplog):
+    """Actual Runner/engine browse once only in CLI mode, then execute the same BUY."""
+    from t_tech import invest
+    from autorepeater import runner as runner_module, strategies
+
+    client = launch[0]
+    destination = client.operations.get_portfolio.return_value
+    foreign = invest.PortfolioResponse(positions=[invest.PortfolioPosition(
+        instrument_uid='foreign', instrument_type='share',
+        current_price=invest.MoneyValue('rUb', 1, 1), quantity=invest.Quotation(2, 0))])
+    client.operations.get_portfolio.side_effect = lambda account_id: (
+        foreign if account_id == 'other' else destination)
+    client.users.get_accounts.return_value = invest.GetAccountsResponse(accounts=[
+        invest.Account(id='other', name='Other')])
+    client.instruments.find_instrument.return_value = invest.FindInstrumentResponse(instruments=[
+        invest.InstrumentShort(uid='foreign', ticker='FOREIGN', name='Foreign')])
+    runner = runner_module.Runner(
+        'test-token', strategies.prepare_strategy('INDEPENDENT', 'quote:uid'), 'dst')
+    with caplog.at_level(level, logger=LOGGER_NAME):
+        if mode == 'run':
+            with pytest.raises(EndOfTestStream):
+                runner.run()
+        else:
+            runner.run_sync()
+    assert_launch_execution(launch, mode == 'run', browse=mode == 'run')
+    assert client.instruments.find_instrument.call_args_list == (
+        [call(query='foreign')] if mode == 'run' else [])
+    assert client.operations.get_portfolio.call_args_list == (
+        ([call(account_id='other')] if mode == 'run' else [])
+        + [call(account_id='dst')] * (6 if mode == 'run' else 2))
+    assert client.operations.get_positions.call_args_list == [
+        call(account_id='dst')] * (6 if mode == 'run' else 2)
+    assert client.orders.get_orders.call_args_list == [
+        call(account_id='dst')] * (6 if mode == 'run' else 2)
+    assert client.market_data.get_trading_status.call_args_list == [
+        call(instrument_id='uid')] * (3 if mode == 'run' else 1)
+    assert client.orders.get_max_lots.call_count == (3 if mode == 'run' else 1)
+    assert destination.positions[-1].quantity.units == 48
+    client.orders.cancel_order.assert_not_called()
+    assert sum(message.startswith('Intent UID uid side=BUY lots=16 ')
+               for message in caplog.messages) == 1
+    responses = [record for record in caplog.records
+                 if record.message.startswith('SDK response:')]
+    assert bool(responses) == (level == logging.DEBUG)
+    assert all(record.levelno == logging.DEBUG for record in responses)
+    assert ('Foreign(FOREIGN) - 2.0 - rUb - 2.000000002' in caplog.messages) == (mode == 'run')
 
 
 def test_strategies_execute_in_sdk_blocked_subprocess():

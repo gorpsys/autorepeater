@@ -97,6 +97,25 @@ diff без исполняемых строк проходит без измер
 `make_environment.py` проверяет зависимости; `make_offline.py` формирует
 и запускает команды проверок. GitHub Actions использует те же цели Make.
 
+### Диагностика приложения
+
+Для CLI и облачной функции `LOG_LEVEL` задаёт INFO (по умолчанию) либо DEBUG.
+Регистр и внешние пробелы игнорируются; пустое/другое значение даёт ValueError
+при настройке до Client. Меняется только logger приложения tinkoffBot;
+повторная настройка сохраняет единственный handler и облачный JSON formatter.
+`--debug` остаётся локальным dry-run, LOG_LEVEL не меняет отправку заявок.
+
+Полные входящие SDK/API ошибки всегда выводятся на ERROR с исходным traceback,
+details/metadata и доступным tracking ID; JSON содержит api_method/grpc_status/
+sdk_details/sdk_metadata и предоставленный tracking_id. Успешные ответы до
+конверсии, raw events и fallback-позиции доступны на DEBUG без усечения.
+Default INFO сохраняет краткие финансовые сообщения. Клиент, kwargs,
+credentials и исходящие authorization metadata не читаются/не выводятся;
+новых RPC ради диагностики нет. Machine evidence принимает прежние компактные
+события; полные SDK payloads не расширяют этот протокол.
+Примеры включения — в [описании логов](../README.md#логи-и-ошибки),
+контракты display/helper — в [SDK-адаптере](../docs/execution-adapter.md#sdk-diagnostics-and-display-boundaries).
+
 ## Источники и резерв
 
 Основной источник SDK — официальный индекс T-Bank;

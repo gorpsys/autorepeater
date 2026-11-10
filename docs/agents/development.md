@@ -65,7 +65,12 @@ python main.py --algoritm COMPOSITE -s BALANCED -d <dst> --debug
 Src для всех встроенных алгоритмов является точным name JSON; ACCOUNT
 source_account_id находится внутри конфига и передаётся API без преобразований.
 Регистр/пробелы не нормализуются. -t/--threshold и -r/--reserve отвергаются.
-Debug строит и проверяет планы с чтением данных, без submit_order.
+CLI --debug строит и проверяет планы с чтением данных, без submit_order.
+LOG_LEVEL независимо задаёт уровень tinkoffBot: INFO по умолчанию либо DEBUG,
+без учёта регистра и с удалением внешних пробелов. Пустое/другое значение —
+ValueError при настройке до Client. Локальная и JSON cloud настройка одинаковы;
+повторная настройка не добавляет handlers и не заменяет cloud formatter.
+LOG_LEVEL=DEBUG показывает полные успешные SDK-ответы, но не включает dry-run.
 Облако по умолчанию COMPOSITE/BALANCED, run_sync без стрима и без debug.
 Query algoritm/src при отсутствии ключа использует ALGORITM/SRC_ACCOUNT;
 BALANCED default только для COMPOSITE. Пустой ключ не заменять окружением.
@@ -124,9 +129,27 @@ manifest checker не сертифицирует. Read-only check-cloud-archive 
 [инструкции сборки](../../scripts/README.md#сборка-облачного-архива).
 
 Все деньги/количества Decimal, форматирование без экспоненты, целые с .0,
-nano до 9 знаков. Сохранять публичное имя postiton_to_string для совместимости.
-INFO причины/ограничения, ERROR ошибки, WARNING неоднозначные UID.
-Токены не выводить, SDK-запросы ради логов не добавлять.
+nano до 9 знаков. Сохранять публичный reporting.postiton_to_string(client, position)
+как единственный compatibility wrapper и reporting.GetInstrumentException.
+Чистый display получает PortfolioSnapshot, mapping InstrumentMatch и MoneyAmount | None;
+SDK reads/conversion остаются в tinvest_account_overview, общий portfolio_entry/
+instrument_matches используется и TInvestStrategyData. Отменённые legacy parity tests
+не переносить: проверять bounded call_once, UID cache, полную загрузку до rendering,
+продолжение отказов каждого счёта и независимость свежих trading reads до эффектов.
+Total только из broker MoneyValue; тестировать отсутствие/повреждение/ноль,
+валютные группы и incomplete subtotal, без суммы котировок и FX reads.
+Проверять чистые formatter с заблокированными SDK/I/O и точный compatibility import.
+Public tinvest_values.decimal_value сохраняет strategy/execution конверсию;
+строгий MoneyAmount не заменять этим helper. Новые runtime-файлы включать в
+--diff-file без staging при проверке незакоммиченного diff.
+INFO причины/ограничения, WARNING неоднозначные UID; ERROR содержит полную
+входящую ошибку SDK с cause/traceback/доступным tracking ID, DEBUG — полный
+успешный response до конверсии и raw event/fallback text. При default INFO
+не вычислять repr успешного ответа ради диагностического wrapper.
+Клиента, kwargs, токены и исходящие metadata не читать/не выводить;
+новых SDK-запросов ради логов не добавлять. В тестах входящий server marker
+обязан сохраниться, отдельный credential marker в request/client — отсутствовать.
+Machine evidence/его фильтры остаются отдельным компактным протоколом.
 Новые зависимости согласовывать до добавления.
 Ручные правки apply_patch; сохранять чужие dirty changes, без rollback.
 

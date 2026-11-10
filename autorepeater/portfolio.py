@@ -1,31 +1,6 @@
-"""Shared portfolio reading and the strategy target contract."""
-from collections.abc import Sequence
+"""Pure strategy target contract and validation."""
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol
-
-
-class DisplayPosition(Protocol):  # pylint: disable=too-few-public-methods
-    """SDK-shaped fields needed by the legacy account display, without SDK imports."""
-    instrument_type: str
-    instrument_uid: str
-
-
-class DisplayPortfolio(Protocol):  # pylint: disable=too-few-public-methods
-    """Read-only view of positions shown by the account display."""
-    positions: Sequence[DisplayPosition]
-
-
-class PortfolioReader(Protocol):  # pylint: disable=too-few-public-methods
-    """Minimal legacy portfolio-read service used by reporting."""
-
-    def get_portfolio(self, *, account_id: str) -> DisplayPortfolio:
-        """Read positions without changing them."""
-
-
-class PortfolioClient(Protocol):  # pylint: disable=too-few-public-methods
-    """Client surface required by the legacy reporting helper."""
-    operations: PortfolioReader
 
 
 @dataclass
@@ -55,8 +30,3 @@ def validate_target(target: TargetPortfolio) -> None:
         price = target.prices.get(uid)
         if not isinstance(price, Decimal) or not price.is_finite():
             raise ValueError(f'invalid target price for UID: {uid}')
-
-
-def get_portfolio(client: PortfolioClient, account_id: str) -> DisplayPortfolio:
-    """Load one portfolio without filtering positions or reporting it."""
-    return client.operations.get_portfolio(account_id=account_id)

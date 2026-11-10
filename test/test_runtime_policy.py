@@ -13,6 +13,7 @@ from t_tech.invest import (
     OrderDirection, OrderExecutionReportStatus, OrderType, PostOrderResponse, RequestError,
 )
 from t_tech.invest.services import OrdersService
+from t_tech.invest.logging import Metadata
 
 from autorepeater.execution_data import (
     AccountReadiness, ExecutionData, ExecutionSnapshot, TradeRules,
@@ -177,9 +178,10 @@ def fixture_sdk_runtime(runtime):
 
 
 def failed_post_response(code):
-    """Each failure starts with an otherwise valid DTO or a private transport error."""
+    """Separate permitted server diagnostics from malformed response fields."""
     if code is not None:
-        return RequestError(code, 'private-sdk-details', {'token': 'private-sdk-details'})
+        return RequestError(code, 'server-sdk-details',
+                            Metadata('server-tracking', None, None, None, 'server message'))
     return PostOrderResponse(
         instrument_uid='stock', direction='private-sdk-details', order_id='broker-first',
         lots_requested=10, lots_executed=10,
@@ -193,6 +195,16 @@ def stock_post_call(request_id):
         account_id='dst', instrument_id='stock', quantity=10,
         direction=OrderDirection.ORDER_DIRECTION_BUY,
         order_type=OrderType.ORDER_TYPE_BESTPRICE, order_id=request_id)
+
+
+def assert_sdk_failure_logged(caplog, failure):
+    """Exactly one complete transport log survives both orchestration boundaries."""
+    full = [record for record in caplog.records if hasattr(record, 'sdk_details')]
+    assert len(full) == int(isinstance(failure, RequestError))
+    if isinstance(failure, RequestError):
+        assert (full[0].sdk_details, full[0].tracking_id) == (
+            'server-sdk-details', 'server-tracking')
+        assert full[0].exc_info[1] is failure
 
 
 @pytest.mark.parametrize('code', [StatusCode.DEADLINE_EXCEEDED, StatusCode.UNAVAILABLE, None])
@@ -222,14 +234,18 @@ def test_sdk_failure_propagates_through_sync_and_cloud_boundary(
     monkeypatch.setattr(serverless, 'configure_yc_logging', Mock())
     with pytest.raises(OrderExecutionError) as cloud:
         serverless.handler({'queryStringParameters': {
-            'algoritm': 'OFFLINE', 'src': 'source', 'token': 'offline', 'dst': 'dst'}}, None)
+            'algoritm': 'OFFLINE', 'src': 'source',
+            'token': 'outgoing-credential-only', 'dst': 'dst'}}, None)
     assert cloud.value is stopped.value
     assert cloud.value.__cause__ is stopped.value.__cause__
     assert cloud.value.request_id == 'first-request'
-    assert runner.mock_calls == [call(token='offline', prepared_strategy=prepared, dst='dst'),
-                                 call().run_sync()]
+    assert runner.mock_calls == [
+        call(token='outgoing-credential-only', prepared_strategy=prepared, dst='dst'),
+        call().run_sync()]
     assert orders.mock_calls == [stock_post_call('first-request')]
     assert 'private-sdk-details' not in caplog.text
+    assert 'outgoing-credential-only' not in caplog.text
+    assert_sdk_failure_logged(caplog, failure)
 
 
 class EndOfReceiptStream(Exception):
@@ -287,6 +303,7 @@ def test_sdk_unknown_result_stops_pass_but_mainflow_processes_next_event(
     assert any(record.levelno == logging.INFO and 'request_id=next-request' in record.message
                and 'broker_order_id=broker-next' in record.message for record in caplog.records)
     assert 'private-sdk-details' not in caplog.text
+    assert_sdk_failure_logged(caplog, failure)
 
 
 @pytest.mark.parametrize('flag', ['-t', '--threshold'])

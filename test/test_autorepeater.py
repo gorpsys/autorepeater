@@ -60,21 +60,13 @@ from autorepeater.index_config import IndexConfig, IndexInstrument
 from autorepeater.index_config import load_index_config, load_index_configs
 from autorepeater.index_strategy import IndexQuote, IndexStrategy
 from autorepeater.index_strategy import build_index_target, calculate_index_target
-from autorepeater.money import blocked_to_string
-from autorepeater.money import currency_to_decimal
-from autorepeater.money import currency_to_decimal_price
-from autorepeater.money import currency_to_string
-from autorepeater.money import get_quantity_position
-from autorepeater.money import money_to_string
-from autorepeater.money import no_money_to_string
-from autorepeater.portfolio import get_portfolio
+from autorepeater.tinvest_strategy_data import portfolio_entry
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.portfolio import validate_target
 from autorepeater.repeater import AutoRepeater
 from autorepeater.execution_data import AccountReadiness, ExecutionData, ExecutionSnapshot
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.tinvest_execution_data import TInvestExecutionData
-from autorepeater.reporting import GetInstrumentException
 from autorepeater.strategy_contract import AlgorithmDefinition, Strategy
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.strategy_data import InstrumentInfo
@@ -135,7 +127,8 @@ class TestException(Exception):
 def test_money_to_string(currency, units, nano, expected):
     """money to string"""
     money = MoneyValue(currency=currency, units=units, nano=nano)
-    result = money_to_string(money)
+    result = reporting.postiton_to_string(None, PortfolioPosition(
+        instrument_type='currency', current_price=money, quantity=Quotation(1, 0)))
 
     assert result == expected
 
@@ -164,7 +157,9 @@ def test_money_to_string(currency, units, nano, expected):
 def test_blocked_to_string(currency, units, nano, expected):
     """blocked money to string"""
     money = MoneyValue(currency=currency, units=units, nano=nano)
-    result = blocked_to_string(money)
+    result = 'blocked ' + reporting.postiton_to_string(
+        None, PortfolioPosition(instrument_type='currency', current_price=money,
+                                quantity=Quotation(1, 0)))
 
     assert result == expected
 
@@ -195,7 +190,7 @@ def test_blocked_to_string(currency, units, nano, expected):
 )
 def test_no_money_to_string(instrument, expected):
     """instrument to string"""
-    result = no_money_to_string(instrument)
+    result = reporting.display_instrument_label(instrument.name, instrument.ticker)
 
     assert result == expected
 
@@ -219,13 +214,15 @@ def test_no_money_to_string(instrument, expected):
 def test_currency_to_decimal(money, quantity_units, quantity_nano, expected):
     """currency to decimal"""
     position = PortfolioPosition(
+        instrument_type='currency',
         current_price=money,
         quantity=Quotation(
             units=quantity_units,
             nano=quantity_nano,
         ),
     )
-    result = currency_to_decimal(position)
+    display = portfolio_entry(position)
+    result = reporting.display_position_value(display.current_price, display.quantity)
     assert result == expected
 
 
@@ -252,13 +249,14 @@ def test_currency_to_decimal_price(
         expected):
     """currency price to decimal"""
     position = PortfolioPosition(
+        instrument_type='currency',
         current_price=money,
         quantity=Quotation(
             units=quantity_units,
             nano=quantity_nano,
         ),
     )
-    result = currency_to_decimal_price(position)
+    result = portfolio_entry(position).current_price
     assert result == expected
 
 
@@ -278,13 +276,14 @@ def test_currency_to_decimal_price(
 def test_currency_to_string(money, quantity_units, quantity_nano, expected):
     """currency to string"""
     position = PortfolioPosition(
+        instrument_type='currency',
         current_price=money,
         quantity=Quotation(
             units=quantity_units,
             nano=quantity_nano,
         ),
     )
-    result = currency_to_string(position)
+    result = reporting.display_position_to_string(portfolio_entry(position), {})
 
     assert result == expected
 
@@ -308,13 +307,14 @@ def test_currency_to_string(money, quantity_units, quantity_nano, expected):
 def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
     """quantity position as Decimal"""
     position = PortfolioPosition(
+        instrument_type='currency',
         current_price=money,
         quantity=Quotation(
             units=quantity_units,
             nano=quantity_nano,
         ),
     )
-    result = get_quantity_position(position)
+    result = portfolio_entry(position).quantity
     assert result == expected
 
 
@@ -493,7 +493,7 @@ def client_tinvest():
     instrument_names = {'1': ('share1', 'SHR'), '2': ('etf2', 'ETF')}
     search_results = {
         uid: FindInstrumentResponse(
-            instruments=[InstrumentShort(name=name, ticker=ticker)])
+            instruments=[InstrumentShort(uid=uid, name=name, ticker=ticker)])
         for uid, (name, ticker) in instrument_names.items()
     }
     instruments = {
@@ -691,30 +691,6 @@ def test_postiton_to_string(
     assert result == expected
     assert client.mock_calls == ([call.instruments.find_instrument(query=uid)]
                                  if instrument_type in ['share', 'etf'] else [])
-
-
-def test_get_instrument(client):
-    """test_get_instrument"""
-    instrument_id = "1"
-    instrument = InstrumentShort(name='share1', ticker='SHR')
-    client.instruments.find_instrument.side_effect = None
-    client.instruments.find_instrument.return_value = FindInstrumentResponse(
-        instruments=[instrument])
-    result = reporting.get_instrument(client, instrument_id)
-    assert result is instrument
-    client.instruments.find_instrument.assert_called_once_with(query='1')
-
-
-@pytest.mark.parametrize('instruments', [[], [InstrumentShort(), InstrumentShort()]])
-def test_get_instrument_fail(client, instruments):
-    """test_get_instrument_fail"""
-    instrument_id = "none_id"
-    client.instruments.find_instrument.side_effect = None
-    client.instruments.find_instrument.return_value = FindInstrumentResponse(
-        instruments=instruments)
-    with pytest.raises(GetInstrumentException, match='error get instrument'):
-        reporting.get_instrument(client, instrument_id)
-    client.instruments.find_instrument.assert_called_once_with(query='none_id')
 
 
 def test_account_strategy_basic_target(client):
@@ -1232,7 +1208,7 @@ def test_account_strategy_loads_fresh_snapshot(client):
 
 def test_account_strategy_load_error(client, caplog):
     """A failed source read propagates its error instead of becoming a liquidation target."""
-    error = RequestError(code=StatusCode.UNAVAILABLE, details='source unavailable', metadata=())
+    error = RequestError(StatusCode.UNAVAILABLE, 'source unavailable', ())
     client.operations.get_portfolio.side_effect = error
 
     with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME), \
@@ -1241,14 +1217,17 @@ def test_account_strategy_load_error(client, caplog):
 
     assert exc_info.value.__cause__ is error
     assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
-    assert len(caplog.records) == 2
+    assert len(caplog.records) == 3
     assert caplog.records[0].getMessage() == 'src account'
-    failure = caplog.records[1]
+    full = caplog.records[1]
+    assert full.sdk_details == 'source unavailable'
+    assert full.exc_info[1] is error
+    failure = caplog.records[2]
     assert failure.levelno == logging.ERROR
     assert failure.msg == 'API request failed: method=%s status=%s elapsed_seconds=%.3f'
     assert failure.args[:2] == ('MagicMock', 'UNAVAILABLE')
     assert failure.args[2] >= 0
-    assert 'source unavailable' not in caplog.text
+    assert 'source unavailable' in caplog.text
 
 
 @pytest.mark.parametrize('positions', [
@@ -1317,24 +1296,6 @@ def rotation_portfolios_fixture(client):
     return src_positions, dst_positions
 
 
-def test_print_all_portfolios(client, caplog):
-    """Account output includes empty portfolios and calculated currency totals."""
-    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
-        reporting.print_all_portfolio(client)
-
-    client.users.get_accounts.assert_called_once_with()
-    assert client.operations.get_portfolio.call_args_list == [
-        call(account_id='1'), call(account_id='2')]
-    assert client.mock_calls == [call.users.get_accounts(),
-                                 call.operations.get_portfolio(account_id='1'),
-                                 call.operations.get_portfolio(account_id='2')]
-    assert caplog.messages == [
-        'account name (1)', '------------', 'RUB - 2.4', 'total: 2.400000000', '============',
-        'account name (2)', '------------', 'total: 0', '============']
-    assert all(record.levelno == logging_config.IMPORTANT for record in caplog.records)
-    client.orders.post_order.assert_not_called()
-
-
 def test_position_unknown_type(client):
     """Unknown instrument types retain the SDK's string representation."""
     position = PortfolioPosition(instrument_type='unknown')
@@ -1342,38 +1303,17 @@ def test_position_unknown_type(client):
     assert client.mock_calls == []
 
 
-@pytest.mark.parametrize('positions', [[], [PortfolioPosition(instrument_type='currency')]])
-def test_get_portfolio(client, caplog, positions):
-    """Shared reading preserves the SDK snapshot without logging or additional queries."""
-    response = PortfolioResponse(positions=positions)
-    client.operations.get_portfolio.side_effect = None
-    client.operations.get_portfolio.return_value = response
-    with caplog.at_level(logging.DEBUG, logger=logging_config.LOGGER_NAME):
-        assert get_portfolio(client, '4') is response
-    assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
-    assert caplog.records == []
-
-
-def test_get_portfolio_error(client, caplog):
-    """Portfolio loading passes the original SDK error to its caller."""
-    error = RequestError(code=StatusCode.UNAVAILABLE, details='portfolio unavailable', metadata=())
-    client.operations.get_portfolio.side_effect = error
-    with caplog.at_level(logging.DEBUG, logger=logging_config.LOGGER_NAME), \
-            pytest.raises(RequestError) as raised:
-        get_portfolio(client, '4')
-    assert raised.value is error
-    assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
-    assert caplog.records == []
-
-
 def test_skipped_event_reporting_uses_only_strategy_diagnostics(caplog):
     """Skipped events keep DTO diagnostics without the obsolete raw-event API."""
     event = PositionEvent(False, '', (), (), 'skipped event diagnostic')
-    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
+    with caplog.at_level(logging.DEBUG, logger=logging_config.LOGGER_NAME):
         reporting.print_skipped_strategy_event(event)
 
-    assert caplog.messages == ['skipped event diagnostic']
-    assert [record.levelno for record in caplog.records] == [logging_config.IMPORTANT]
+    assert caplog.messages == [
+        'skipped event diagnostic',
+        'Skipping synchronization: event did not trigger rebalance; '
+        'account= has_position=False securities=0 money=0']
+    assert [record.levelno for record in caplog.records] == [logging.DEBUG, logging.INFO]
     assert not hasattr(reporting, 'print_skipped_event')
 
 

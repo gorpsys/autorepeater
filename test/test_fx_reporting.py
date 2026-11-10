@@ -2,6 +2,8 @@
 from dataclasses import replace
 from decimal import Decimal as D
 import logging
+import subprocess
+import sys
 from test.test_fx_execution import receipt, setup_plan
 from test.test_fx_funding import funding
 from test.test_order_plan import leaf, rules
@@ -13,6 +15,41 @@ from autorepeater.cash_facts import FeeInclusion, MoneyAmount
 from autorepeater.execution import _submit
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.strategy_data import InstrumentType, PortfolioEntry
+
+
+def test_loaded_fx_and_display_models_render_with_sdk_and_io_blocked(guarded_import_script):
+    """Native reporting and the new display DTOs share only loaded application values."""
+    script = guarded_import_script(('t_tech', 'grpc', 'autorepeater.tinvest_account_overview'), '''
+from dataclasses import fields
+from decimal import Decimal
+from types import SimpleNamespace
+from autorepeater import reporting
+from autorepeater.display_data import DisplayAccount
+from autorepeater.strategy_data import PortfolioSnapshot, InstrumentMatch, InstrumentType, PortfolioEntry
+from autorepeater.money import format_decimal
+from autorepeater.portfolio import TargetPortfolio, validate_target
+from autorepeater.tinvest_values import decimal_value
+from test.test_fx_funding import funding
+
+assert all(field.type in (str, str | None, Decimal | None)
+           for field in fields(DisplayAccount))
+target = TargetPortfolio({'uid': Decimal('2')}, {'uid': Decimal('1.5')})
+validate_target(target)
+assert format_decimal(Decimal('1E-9')) == '0.000000001'
+assert decimal_value(SimpleNamespace(units=1, nano=1), 'price') == Decimal('1.000000001')
+assert reporting.display_instrument_label('Name', 'TICK') == 'Name(TICK)'
+position = PortfolioEntry('uid', InstrumentType.SHARE, 'RUB', Decimal('1.5'), Decimal('2'), '')
+metadata = {'uid': InstrumentMatch('uid', 'TICK', 'Name', InstrumentType.SHARE, '')}
+assert reporting.display_position_to_string(position, metadata) == 'Name(TICK) - 2.0 - RUB - 3.0'
+reporting.print_display_account_header(DisplayAccount('id', 'Account'))
+reporting.print_display_portfolio(PortfolioSnapshot((position,)), metadata, None)
+reporting.print_rebalance_plan(funding(lot=10), True)
+print('loaded models and FX reporting ok')
+''')
+    result = subprocess.run([sys.executable, '-c', script], check=False, capture_output=True,
+                            text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'loaded models and FX reporting ok\n'
 
 
 def test_debug_funding_reports_native_marks_rates_needs_route_and_lot_residual(caplog):

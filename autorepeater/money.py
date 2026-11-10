@@ -1,4 +1,4 @@
-"""Helpers for money, quantities, and portfolio position formatting."""
+"""Pure Decimal formatting helpers."""
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import TypeVar
@@ -33,59 +33,3 @@ def format_decimal_map(values: Mapping[KeyT, Decimal]) -> str:
     """Format diagnostic money/quantity maps without Decimal repr or exponents."""
     return '{' + ', '.join(f'{key}: {format_decimal(value)}'
                            for key, value in values.items()) + '}'
-
-
-def money_to_string(money):
-    """convert money to human-readable string"""
-    result = money.currency
-    value = (Decimal(money.units) +
-             Decimal(money.nano) / Decimal('1000000000'))
-    formatted = format_decimal(value)
-    result += ' - ' + formatted
-    return result
-
-
-def blocked_to_string(blocked):
-    """convert blocked money to human-readable string"""
-    result = 'blocked ' + money_to_string(blocked)
-    return result
-
-
-def no_money_to_string(share):
-    """convert no money instrument to human-readable string"""
-    result = share.name + '(' + share.ticker + ')'
-    return result
-
-
-def currency_to_decimal(position):
-    """convert position full price value to Decimal"""
-    price = (Decimal(position.current_price.units) +
-             Decimal(position.current_price.nano) / Decimal('1000000000'))
-    quantity = (Decimal(position.quantity.units) +
-                Decimal(position.quantity.nano) / Decimal('1000000000'))
-    # Округляем результат до 9 знаков после запятой (максимальная точность
-    # nano)
-    return (price * quantity).quantize(Decimal('0.000000001'))
-
-
-def currency_to_decimal_price(position):
-    """convert position price value to Decimal"""
-    return (Decimal(position.current_price.units) +
-            Decimal(position.current_price.nano) / Decimal('1000000000'))
-
-
-def currency_to_string(position):
-    """convert position price value to human-readable string"""
-    result = position.current_price.currency
-    value = currency_to_decimal(position)
-
-    formatted = format_decimal(value)
-
-    result += ' - ' + formatted
-    return result
-
-
-def get_quantity_position(position):
-    """get quantity from position as Decimal"""
-    return (Decimal(position.quantity.units) +
-            Decimal(position.quantity.nano) / Decimal('1000000000'))

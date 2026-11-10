@@ -1,6 +1,5 @@
 """T-Invest read-side adapter for strategy data."""
 from collections.abc import Iterable, Iterator, Sequence
-from decimal import Decimal, InvalidOperation
 
 from t_tech.invest import (
     Etf, Instrument, InstrumentIdType, InstrumentStatus, PortfolioPosition,
@@ -21,12 +20,11 @@ from autorepeater.strategy_data import PositionEvent
 from autorepeater.strategy_data import PriceQuote
 from autorepeater.strategy_data import SecurityBlocking
 from autorepeater.tinvest_requests import call_api
+from autorepeater.tinvest_diagnostics import log_request_error, log_response
 from autorepeater.tinvest_fx_data import TInvestFxData
 from autorepeater.tinvest_security_data import TInvestSecurityData
+from autorepeater.tinvest_values import decimal_value
 from autorepeater.valuation import ValuationSources
-
-
-NANO_FACTOR = Decimal('1000000000')
 
 
 def _instrument_type(value: str) -> InstrumentType:
@@ -37,31 +35,6 @@ def _instrument_type(value: str) -> InstrumentType:
         'bond': InstrumentType.BOND,
         'currency': InstrumentType.CURRENCY,
     }.get(value, InstrumentType.OTHER)
-
-
-def _decimal_value(value: object, context: str) -> Decimal:
-    """Convert an SDK units/nano value and identify malformed source fields."""
-    if value is None:
-        raise ValueError(f'{context} is missing')
-
-    units = getattr(value, 'units', None)
-    nano = getattr(value, 'nano', None)
-    converted = []
-    for field_name, part in (('units', units), ('nano', nano)):
-        if part is None or isinstance(part, bool):
-            raise ValueError(f'{context}.{field_name} is invalid')
-        try:
-            decimal_part = Decimal(part)
-        except (TypeError, ValueError, InvalidOperation) as error:
-            raise ValueError(f'{context}.{field_name} is invalid') from error
-        if not decimal_part.is_finite():
-            raise ValueError(f'{context}.{field_name} is not finite')
-        converted.append(decimal_part)
-
-    result = converted[0] + converted[1] / NANO_FACTOR
-    if not result.is_finite():
-        raise ValueError(f'{context} is not finite')
-    return result
 
 
 def _transport_error(error: RequestError) -> DataAccessError:
@@ -77,6 +50,39 @@ def _instrument_info(instrument: Share | Etf | Instrument,
         instrument_type=instrument_type, class_code=instrument.class_code,
         lot=instrument.lot, currency=instrument.currency,
         api_trade_available=instrument.api_trade_available_flag)
+
+
+def portfolio_entry(position: PortfolioPosition) -> PortfolioEntry:
+    """Detach one broker position using the established strategy conversion."""
+    uid = position.instrument_uid
+    blocked = getattr(position, 'blocked', None)
+    blocked_lots = getattr(position, 'blocked_lots', None)
+    # SDK dataclass defaults can be unset sentinels in offline/source fixtures.
+    if type(blocked) is object:  # pylint: disable=unidiomatic-typecheck
+        blocked = None
+    if type(blocked_lots) is object:  # pylint: disable=unidiomatic-typecheck
+        blocked_lots = None
+    return PortfolioEntry(
+        uid=uid,
+        instrument_type=_instrument_type(position.instrument_type),
+        current_price=decimal_value(position.current_price,
+                                    f'portfolio position {uid} current_price'),
+        currency=position.current_price.currency,
+        quantity=decimal_value(position.quantity, f'portfolio position {uid} quantity'),
+        diagnostic_text=str(position),
+        blocked=blocked,
+        blocked_lots=decimal_value(blocked_lots, f'portfolio position {uid} blocked_lots')
+        if blocked_lots is not None else None,
+    )
+
+
+def instrument_matches(instruments) -> list[InstrumentMatch]:
+    """Detach ordered search results without changing trading acceptance."""
+    return [InstrumentMatch(
+        uid=instrument.uid, ticker=instrument.ticker, name=instrument.name,
+        instrument_type=_instrument_type(instrument.instrument_type),
+        class_code=instrument.class_code,
+    ) for instrument in instruments]
 
 
 class TInvestStrategyData:
@@ -107,7 +113,7 @@ class TInvestStrategyData:
             raise _transport_error(error) from error
 
         return PortfolioSnapshot(positions=tuple(
-            self._portfolio_entry(position) for position in response.positions))
+            portfolio_entry(position) for position in response.positions))
 
     @measure_stage('metadata.find')
     def find_instruments(self, query: str) -> list[InstrumentMatch]:
@@ -122,16 +128,7 @@ class TInvestStrategyData:
         except RequestError as error:
             raise _transport_error(error) from error
 
-        matches = [
-            InstrumentMatch(
-                uid=instrument.uid,
-                ticker=instrument.ticker,
-                name=instrument.name,
-                instrument_type=_instrument_type(instrument.instrument_type),
-                class_code=instrument.class_code,
-            )
-            for instrument in response.instruments
-        ]
+        matches = instrument_matches(response.instruments)
         self._match_types.update((item.uid, item.instrument_type) for item in matches)
         if self._find_cache is not None and matches:
             self._find_cache[query] = tuple(matches)
@@ -203,7 +200,7 @@ class TInvestStrategyData:
                 raise ValueError(f'instrument {uid}: price is missing')
             result.append(PriceQuote(
                 uid=uid,
-                price=_decimal_value(
+                price=decimal_value(
                     quotation.price, f'instrument {uid} price'),
                 time=quotation.time,
             ))
@@ -217,34 +214,9 @@ class TInvestStrategyData:
                 accounts=list(account_ids))
             iterator = iter(responses)
         except RequestError as error:
+            log_request_error('positions_stream', error)
             raise _transport_error(error) from error
         return self._position_events(iterator)
-
-    @staticmethod
-    def _portfolio_entry(position: PortfolioPosition) -> PortfolioEntry:
-        uid = position.instrument_uid
-        blocked = getattr(position, 'blocked', None)
-        blocked_lots = getattr(position, 'blocked_lots', None)
-        # SDK dataclass defaults can be unset sentinels in offline/source fixtures.
-        if type(blocked) is object:  # pylint: disable=unidiomatic-typecheck
-            blocked = None
-        if type(blocked_lots) is object:  # pylint: disable=unidiomatic-typecheck
-            blocked_lots = None
-        return PortfolioEntry(
-            uid=uid,
-            instrument_type=_instrument_type(position.instrument_type),
-            current_price=_decimal_value(
-                position.current_price,
-                f'portfolio position {uid} current_price'),
-            currency=position.current_price.currency,
-            quantity=_decimal_value(
-                position.quantity,
-                f'portfolio position {uid} quantity'),
-            diagnostic_text=str(position),
-            blocked=blocked,
-            blocked_lots=_decimal_value(blocked_lots, f'portfolio position {uid} blocked_lots')
-            if blocked_lots is not None else None,
-        )
 
     @classmethod
     def _position_event(cls, response: PositionsStreamResponse) -> PositionEvent:
@@ -266,7 +238,7 @@ class TInvestStrategyData:
                 SecurityBlocking(blocked=item.blocked)
                 for item in position.securities),
             money=tuple(
-                MoneyBlocking(blocked_value=_decimal_value(
+                MoneyBlocking(blocked_value=decimal_value(
                     item.blocked_value,
                     f'position event {account_id} money[{index}].blocked_value'))
                 for index, item in enumerate(position.money)),
@@ -282,5 +254,7 @@ class TInvestStrategyData:
             except StopIteration:
                 return
             except RequestError as error:
+                log_request_error('positions_stream', error)
                 raise _transport_error(error) from error
+            log_response('positions_stream', response)
             yield cls._position_event(response)

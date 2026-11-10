@@ -127,8 +127,9 @@ def test_quota_attempts_and_waits_are_separate_stage_totals(books, monkeypatch, 
     client, _ = books
     method = client.instruments.get_instrument_by
     response = method.return_value
-    method.side_effect = [RequestError(StatusCode.RESOURCE_EXHAUSTED, 'private', None),
-                          RequestError(StatusCode.RESOURCE_EXHAUSTED, 'private', None), response]
+    method.side_effect = [
+        RequestError(StatusCode.RESOURCE_EXHAUSTED, 'server quota', None),
+        RequestError(StatusCode.RESOURCE_EXHAUSTED, 'server quota', None), response]
     sleep = Mock()
     monkeypatch.setattr('autorepeater.tinvest_requests.time.sleep', sleep)
     monkeypatch.setattr(diagnostics, 'monotonic', Mock(side_effect=[
@@ -146,7 +147,8 @@ def test_quota_attempts_and_waits_are_separate_stage_totals(books, monkeypatch, 
     assert method.call_count == 3
     assert all(attempt.kwargs == {'id': 'uid'} for attempt in method.call_args_list)
     assert sleep.call_count == 2 and all(wait.args == (10,) for wait in sleep.call_args_list)
-    assert 'private' not in caplog.text
+    full = [record for record in caplog.records if hasattr(record, 'sdk_details')]
+    assert len(full) == 2 and all(record.sdk_details == 'server quota' for record in full)
 
 
 def test_no_e2e_stage_clocks_or_state_for_normal_metadata_reads(books, monkeypatch):

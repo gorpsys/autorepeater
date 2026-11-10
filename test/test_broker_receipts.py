@@ -173,9 +173,9 @@ def test_invalid_intent_never_creates_request_id_or_calls_sdk(changes):
 
 @pytest.mark.parametrize('code', [StatusCode.DEADLINE_EXCEEDED, StatusCode.UNAVAILABLE])
 def test_unknown_submission_keeps_request_context_without_retry(code, monkeypatch, caplog):
-    """The sent ID survives transport failure without logging private error details."""
+    """Full incoming diagnostics accompany the same safe domain error and request ID."""
     executor, orders, factory = sdk_executor()
-    error = RequestError(code, f'token={SECRET} kwargs={SECRET}', {'metadata': SECRET})
+    error = RequestError(code, 'server diagnostic marker', {'message': 'server metadata'})
     orders.post_order.side_effect = error
     sleeper = Mock()
     monkeypatch.setattr('autorepeater.tinvest_requests.time.sleep', sleeper)
@@ -188,10 +188,29 @@ def test_unknown_submission_keeps_request_context_without_retry(code, monkeypatc
                and 'expected-uid' in record.message and 'SELL' in record.message
                and 'lots=2' in record.message for record in caplog.records)
     assert SECRET not in caplog.text
+    full, = [record for record in caplog.records if hasattr(record, 'sdk_details')]
+    assert full.sdk_details == 'server diagnostic marker'
+    assert full.sdk_metadata == str(error.metadata)
+    assert full.exc_info[1] is error
     assert SECRET not in str(raised.value)
     assert orders.mock_calls == [expected_call('submit_order')]
     assert factory.mock_calls == [call()]
     sleeper.assert_not_called()
+
+
+@pytest.mark.parametrize('method', METHODS)
+def test_debug_response_precedes_receipt_validation(method, caplog):
+    """Malformed received facts stay visible without resending the trading intent."""
+    executor, orders, _ = sdk_executor()
+    response = sdk_response(method, lots_requested='server-malformed-lots')
+    rpc = orders.post_order if method == 'submit_order' else orders.get_order_state
+    rpc.return_value = response
+    with caplog.at_level(logging.DEBUG, logger='tinkoffBot'):
+        with pytest.raises(OrderExecutionError, match='invalid order lot counts'):
+            invoke(executor, method)
+    assert any(record.msg == 'SDK response: method=%s response=%s'
+               and record.args[1] == repr(response) for record in caplog.records)
+    assert orders.mock_calls == [expected_call(method)]
 
 
 def test_valid_response_logs_distinct_request_and_broker_facts(caplog):

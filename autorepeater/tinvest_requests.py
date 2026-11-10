@@ -9,6 +9,7 @@ from t_tech.invest import RequestError
 from autorepeater.grpc_deadline import remaining_read_timeout
 from autorepeater.logging_config import logger
 from autorepeater.market_diagnostics import measure_rpc_part
+from autorepeater.tinvest_diagnostics import call_once
 
 Result = TypeVar('Result')
 
@@ -25,7 +26,7 @@ def call_api(method: Callable[..., Result], **kwargs: object) -> Result:
             started = time.perf_counter()
             try:
                 with measure_rpc_part('attempt'):
-                    return method(**kwargs)
+                    return call_once(method, **kwargs)
             except RequestError as error:
                 if error.code != StatusCode.RESOURCE_EXHAUSTED:
                     status = error.code.name if isinstance(error.code, StatusCode) else 'UNKNOWN'

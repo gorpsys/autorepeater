@@ -123,15 +123,16 @@ that ID without generating a request ID or submitting another order.
 On a PostOrder RequestError or malformed response, OrderExecutionError preserves
 the optional keyword-only `request_id` context; existing message-only calls
 remain compatible. The adapter emits ERROR with that same request ID, validated
-intent UID/side/lots and a fixed reason. It excludes RequestError text, raw kwargs,
-malformed field values and SDK repr. A transport RequestError is preserved as
+intent UID/side/lots and a fixed reason. This compact context record excludes raw
+kwargs and malformed field values; the SDK boundary separately logs the complete
+incoming RequestError, as described below. A transport RequestError is preserved as
 the exception cause. Malformed GetOrderState responses emit ERROR with the
 requested broker ID and a fixed reason, then propagate OrderExecutionError.
 Propagation keeps the context and cause: CLI stops the current pass and continues
 events, while run_sync/cloud propagate failure without Success. A later event
 may initiate a fresh pass. Programming errors are not caught as broker failures.
-Preserving cause does not sanitize third-party tracebacks; the broader error and
-reporting work in issue #16 is outside this change.
+The diagnostic boundary preserves the original exception identity, traceback and
+cause without changing fail-stop behavior.
 
 These are local DTO, adapter and lifecycle checks. They do not establish that
 every live response populates the schema, or constitute sandbox/production or
@@ -306,9 +307,11 @@ Invalid timestamps are never
 replaced with observation time. Missing metadata or an invalid API permission
 marker also logs only selected identifiers/category/currency/flag. Missing,
 invalid and unloaded fields have distinct markers, without inferred RUB/False.
-No raw response, instrument name, transport exception text or diagnostic RPC
-is added. Successful fresh books emit no snapshots. Sandbox framework context
-adds the current stage, scenario and phase without changing evidence schemas.
+These compact rejection records add no raw response, instrument name, transport
+exception text or diagnostic RPC. Successful fresh books emit no rejection
+snapshots; complete SDK responses are separately available at DEBUG. Sandbox
+framework context adds the current stage, scenario and phase without changing
+evidence schemas.
 
 Book rejection facts also retain ticker/class/currency from the already loaded
 instrument, or an explicit missing label. Observational monotonic and UTC clocks
@@ -316,8 +319,9 @@ record request start, response and check, request duration and response-to-check
 delay. Receipt age uses observational UTC; check age retains the original
 validation clock. Neither clock replaces market time or changes the 180s guard.
 E2E aggregates named metadata/catalog/book operations and separates RPC attempts
-from quota waits; nested stage totals are inclusive. Successful payloads are not
-streamed and no extra lookups, retries or clock calls for validation are added.
+from quota waits; nested stage totals are inclusive. Complete successful payloads
+are not forwarded to machine evidence. No extra lookups, retries or clock calls
+for validation are added.
 
 The FX catalog boundary supplements the same ValueError with a safe note and
 one field/constraint event. Exact internal FxPair guard messages identify their
@@ -477,6 +481,71 @@ Polling windows do not interrupt in-flight RPCs or the established quota retry
 loop; the cloud invocation timeout remains the overall deadline.
 
 ## Transport
+
+### SDK diagnostics and display boundaries
+
+`tinvest_diagnostics.call_once(method, **kwargs)` makes exactly one SDK call.
+It logs each incoming RequestError at ERROR with its complete text and original
+traceback, then re-raises the same object. Cloud JSON includes api_method,
+grpc_status, sdk_details, sdk_metadata and tracking_id when supplied by SDK
+Metadata. No ID is inferred, no incoming text is truncated. Programming errors
+are neither wrapped nor retried. Successful responses are logged in full at
+DEBUG before conversion; the wrapper computes repr only with DEBUG enabled.
+A failing str/repr produces a type/formatting placeholder without changing the
+response or original exception. Client state, request kwargs, credentials and
+outgoing authorization metadata are not inspected or logged.
+
+`call_api` invokes this helper inside its unchanged quota loop: each failed
+attempt has one full ERROR plus the existing compact quota/terminal record.
+Stream opening/iteration failures and each received response use the same
+diagnostic helpers without materializing the iterator or changing EOF/reconnect.
+Existing diagnostic_text strings remain in own DTOs; full event/fallback text
+moves to DEBUG while compact financial facts remain at their usual levels.
+Machine evidence keeps its existing compact filters and schemas.
+
+`LOG_LEVEL` accepts INFO (default) or DEBUG, case-insensitively with surrounding
+whitespace stripped; empty/other values fail configuration before Client.
+Local and cloud configure the application logger only, without duplicate
+handlers or replacing the cloud JSON formatter. CLI `--debug` remains dry-run;
+LOG_LEVEL does not change trade permissions or add broker reads.
+
+`tinvest_account_overview` owns an independent read-only browse in Runner.run;
+run_sync does not browse accounts. GetAccounts, each GetPortfolio and metadata
+FindInstrument use call_once with no retry. Shared public portfolio_entry and
+instrument_matches detach the same own PortfolioEntry/InstrumentMatch values
+used by TInvestStrategyData without changing trading conversion or calls.
+Before rendering an account, load its complete PortfolioSnapshot and name/ticker
+metadata. Each unique nonempty noncurrency UID has at most one exact-UID lookup
+per browse; failures are cached. Lookup failure keeps positions and broker total,
+using UID and an explicit metadata unavailable marker. Portfolio read/conversion
+failure reports that account unavailable and continues; GetAccounts RequestError
+reports overview unavailable. Programming and rendering errors propagate.
+
+Pure reporting consumes PortfolioSnapshot, a loaded InstrumentMatch mapping and
+MoneyAmount | None. Its sole SDK compatibility edge remains the local delegation
+from postiton_to_string(client, position) to position_to_string; the exported
+GetInstrumentException remains from display_data. Valid currency/share/ETF output
+keeps original currency case and name(ticker). Exact UID uniqueness is required;
+RequestError preserves identity, decimal_value and currency_code validate inputs.
+Bond/unknown compatibility alone may return str(position) without numeric reads/RPC.
+The incidental permissive legacy conversion, TypeError ordering, repeated raw reads
+and partial account display are retired (history H46); no DisplayPosition remains.
+
+Only the same response.total_amount_portfolio converted via MoneyAmount.from_units_nano
+supplies the labelled broker portfolio total with its currency. Missing/invalid totals
+are unavailable, never invented zero/RUB or price-times-quantity sums. Valid zero
+is retained. exact_sum groups broker totals by currency with no FX conversion;
+any missing account/total labels every known sum incomplete subtotal and counts
+unavailable accounts. Metadata failure alone does not make proven totals incomplete.
+Bond/other lines show quantity and broker quote units without inventing money values.
+Overview snapshots/cache never reach AutoRepeater: fresh trading reads, permissions,
+budgets and fail-stop checks remain independent even after a selected overview failure.
+
+`tinvest_values.decimal_value(value, context)` shares the original strategy/execution
+units/nano arithmetic and errors, including Decimal-context sensitivity; execution
+nonnegative and strict MoneyAmount.from_units_nano remain separate contracts.
+
+### Deadlines and retries
 
 Runner (both modes) and the explicit calibration script install the same
 `grpc.UnaryUnaryClientInterceptor` through the actual SDK
