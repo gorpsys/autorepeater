@@ -131,7 +131,7 @@ Raw-only postiton_to_string для bond/unknown раньше не читал ч�
 после печати. Frozen DTO поэтому допускает незагруженные поля None и готовый
 instrument_label; adapter сохраняет прежнюю permissive конверсию, literal
 currency, порядок ошибок и частичный вывод. Это проекция прежнего поведения,
-не новая финансовая валидация. Источник: [420 offline parity cases](../../test/test_legacy_display.py),
+не новая финансовая валидация. Источник: [420 historical parity cases](https://github.com/gorpsys/autorepeater/blob/d5fa302d2beac60ed8ce50d77e6e2d7389897cd3/test/test_legacy_display.py),
 [решение B4](../plans/20261109144456-sdk-diagnostics-and-display-boundaries-implementation-plan.md#разделение-legacy-display--c16),
 [действующие слои](contracts.md#контракт-и-слои).
 
@@ -146,6 +146,20 @@ execution nonnegative и строгий MoneyAmount остаются отдел�
 LOG_LEVEL=DEBUG; внутренний перенос display/helper сам по себе совместим.
 Это назначение версии, а не свидетельство E2E, тега или production-деплоя;
 [процедура выпуска](../../scripts/README.md#версии-и-выпуск) сохраняется.
+
+H46. 10.11.2026 владелец отменил incidental legacy parity из H44 ради самостоятельного
+обзора счетов. Строгая конверсия постороннего портфеля теперь безопасно прекращает
+только его вывод; торговый проход независимо читает свежие проверенные данные.
+DisplayPosition/legacy_display и 420 parity cases удалены. Общие portfolio_entry/
+instrument_matches дают собственные snapshots/metadata до печати. Broker total
+берётся только из total_amount_portfolio с валютой; price*quantity неверен для
+bond/неизвестных quote units и не используется в total. Валютные суммы отмечают
+недоступные счета, metadata failures сохраняют доказанный total. H44 и замечание
+H45 о permissive legacy arithmetic описывают отменённый этап, а не текущий контракт.
+Источник: [B8 и решение владельца](../plans/20261109144456-sdk-diagnostics-and-display-boundaries-implementation-plan.md#b8-заменить-legacy-display-самостоятельной-операцией-обзора-счетов),
+[bounded overview tests](../../test/test_tinvest_account_overview.py),
+[чистое форматирование](../../test/test_display_reporting.py),
+[действующие слои](contracts.md#контракт-и-слои).
 
 ## Пополнение истории
 

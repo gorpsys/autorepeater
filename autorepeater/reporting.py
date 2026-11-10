@@ -7,16 +7,19 @@ from decimal import Decimal, localcontext
 import json
 from typing import TYPE_CHECKING, TypeVar
 
-from autorepeater.cash_facts import order_cash_bound
+from autorepeater.cash_facts import MoneyAmount, order_cash_bound
 from autorepeater.constants import IMPORTANT
 from autorepeater.logging_config import logger
 from autorepeater.market_diagnostics import safe_symbol
 from autorepeater.money import format_decimal
-from autorepeater.display_data import DisplayAccount, DisplayPosition
+from autorepeater.display_data import DisplayAccount
 from autorepeater.display_data import GetInstrumentException
 from autorepeater.portfolio import TargetPortfolio
-from autorepeater.strategy_data import InstrumentInfo, InstrumentType, PortfolioEntry, PositionEvent
-from autorepeater.strategy_plan import exact_product
+from autorepeater.strategy_data import (
+    InstrumentInfo, InstrumentMatch, InstrumentType, PortfolioEntry, PortfolioSnapshot,
+    PositionEvent,
+)
+from autorepeater.strategy_plan import exact_product, exact_sum
 
 if TYPE_CHECKING:
     from autorepeater.execution import ExecutionReceipt
@@ -70,30 +73,41 @@ def print_index_selection_warning(ticker: str, chosen: InstrumentInfo,
 def postiton_to_string(client, position) -> str:
     """Compatibility boundary for the historical SDK-shaped public call."""
     # Intentional local compatibility edge; the adapter uses the pure formatters above.
-    from autorepeater.legacy_display import convert_position  # pylint: disable=import-outside-toplevel,cyclic-import
-    return display_position_to_string(convert_position(client, position))
+    # pylint: disable=import-outside-toplevel,cyclic-import
+    from autorepeater.tinvest_account_overview import position_to_string
+    return position_to_string(client, position)
 
 
 def display_instrument_label(name: str, ticker: str) -> str:
-    """Format loaded instrument strings with the legacy concatenation semantics."""
+    """Format already validated instrument strings."""
     return name + '(' + ticker + ')'
 
 
 def display_position_value(price: Decimal, quantity: Decimal) -> Decimal:
-    """Round each legacy position before the caller adds it to the total."""
-    return (price * quantity).quantize(NANO_QUANT)
+    """Display a money-per-piece estimate, independently of broker totals."""
+    product = exact_product(price, quantity)
+    with localcontext() as context:
+        context.prec = max(28, product.adjusted() + 11)
+        return product.quantize(NANO_QUANT)
 
 
-def display_position_to_string(position: DisplayPosition) -> str:
-    """Format loaded values, preserving currency case and legacy TypeError."""
-    if position.instrument_type in ('currency', 'share', 'etf'):
+def display_position_to_string(
+        position: PortfolioEntry, metadata: Mapping[str, InstrumentMatch]) -> str:
+    """Render own values; bond and other quotes never imply a monetary position value."""
+    match = metadata.get(position.uid)
+    label = display_instrument_label(match.name, match.ticker) if match else position.uid
+    if position.instrument_type in (
+            InstrumentType.CURRENCY, InstrumentType.SHARE, InstrumentType.ETF):
         value = display_position_value(position.current_price, position.quantity)
         money = position.currency
         money += ' - ' + format_decimal(value)
-        if position.instrument_type == 'currency':
+        if position.instrument_type == InstrumentType.CURRENCY:
             return money
-        return position.instrument_label + ' - ' + format_decimal(position.quantity) + ' - ' + money
-    return position.diagnostic_text
+        return label + ' - ' + format_decimal(position.quantity) + ' - ' + money
+    return (f'{label} uid={position.uid} type={position.instrument_type.value} '
+            f'quantity={format_decimal(position.quantity)} '
+            f'broker quote={format_decimal(position.current_price)} currency={position.currency} '
+            '(quote units; monetary position value unavailable)')
 
 
 def print_account_header(side: str) -> None:
@@ -101,16 +115,43 @@ def print_account_header(side: str) -> None:
     logger.log(IMPORTANT, '%s account', side)
 
 
-def print_display_position(position: DisplayPosition) -> None:
-    """Report an already converted legacy position without a client."""
-    if position.instrument_type in ('currency', 'share', 'etf'):
-        logger.log(IMPORTANT, display_position_to_string(position))
+def print_display_portfolio(
+        snapshot: PortfolioSnapshot, metadata: Mapping[str, InstrumentMatch],
+        total: MoneyAmount | None) -> None:
+    """Report a fully loaded account and its independent broker valuation."""
+    missing = set()
+    for entry in snapshot.positions:
+        if (entry.instrument_type != InstrumentType.CURRENCY and entry.uid not in metadata
+                and entry.uid not in missing):
+            logger.warning('metadata unavailable: uid=%s', entry.uid)
+            missing.add(entry.uid)
+        logger.debug('%s', entry.diagnostic_text)
+        logger.log(IMPORTANT, '%s', display_position_to_string(entry, metadata))
+    if total is None:
+        logger.warning('broker portfolio total unavailable')
     else:
-        if position.diagnostic_text:
-            logger.debug('%s', position.diagnostic_text)
-        logger.info('Position: uid=%s type=%s quantity=%s currency=%s price=%s',
-                    position.uid, position.instrument_type, format_decimal(position.quantity),
-                    position.currency, format_decimal(position.current_price))
+        logger.log(IMPORTANT, 'broker portfolio total: %s %s',
+                   format_decimal(total.amount), total.currency)
+    logger.log(IMPORTANT, '============')
+
+
+def print_overview_totals(totals: Sequence[MoneyAmount], unavailable: int) -> None:
+    """Aggregate exact broker totals within each actual currency, marking missing accounts."""
+    if not totals:
+        if unavailable:
+            logger.warning('broker portfolio totals unavailable; unavailable accounts=%d',
+                           unavailable)
+        else:
+            logger.info('Overview: no accounts')
+        return
+    for currency in dict.fromkeys(total.currency for total in totals):
+        amount = exact_sum(total.amount for total in totals if total.currency == currency)
+        if unavailable:
+            logger.log(IMPORTANT, 'incomplete subtotal: %s %s; unavailable accounts=%d',
+                       format_decimal(amount), currency, unavailable)
+        else:
+            logger.log(IMPORTANT, 'broker portfolio totals: %s %s',
+                       format_decimal(amount), currency)
 
 
 def _strategy_currency_to_string(position: PortfolioEntry) -> str:
@@ -184,15 +225,9 @@ def print_missing_destination(mode: str) -> None:
 
 
 def print_display_account_header(account: DisplayAccount) -> None:
-    """Print the identity before the adapter loads this account's portfolio."""
+    """Identify this account, including when its portfolio is unavailable."""
     logger.log(IMPORTANT, '%s (%s)', account.name, account.id)
     logger.log(IMPORTANT, '------------')
-
-
-def print_display_account_footer(total: Decimal) -> None:
-    """Finish only after every position has been printed and valued."""
-    print_total(total)
-    logger.log(IMPORTANT, '============')
 
 
 def print_skipped_strategy_event(event: PositionEvent) -> None:

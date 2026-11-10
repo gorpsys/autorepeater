@@ -130,12 +130,18 @@ manifest checker не сертифицирует. Read-only check-cloud-archive 
 
 Все деньги/количества Decimal, форматирование без экспоненты, целые с .0,
 nano до 9 знаков. Сохранять публичный reporting.postiton_to_string(client, position)
-как единственный legacy wrapper и reporting.GetInstrumentException.
-Display formatter получает собственные DTO; SDK reads/conversion остаются в
-legacy_display. Не ужесточать прежние currency/numeric inputs обзора всех счетов:
-его ошибка до mainflow может заблокировать выбранный счёт. Public
-tinvest_values.decimal_value переносит прежнюю strategy/execution конверсию;
-не заменять им строгий MoneyAmount или permissive legacy arithmetic.
+как единственный compatibility wrapper и reporting.GetInstrumentException.
+Чистый display получает PortfolioSnapshot, mapping InstrumentMatch и MoneyAmount | None;
+SDK reads/conversion остаются в tinvest_account_overview, общий portfolio_entry/
+instrument_matches используется и TInvestStrategyData. Отменённые legacy parity tests
+не переносить: проверять bounded call_once, UID cache, полную загрузку до rendering,
+продолжение отказов каждого счёта и независимость свежих trading reads до эффектов.
+Total только из broker MoneyValue; тестировать отсутствие/повреждение/ноль,
+валютные группы и incomplete subtotal, без суммы котировок и FX reads.
+Проверять чистые formatter с заблокированными SDK/I/O и точный compatibility import.
+Public tinvest_values.decimal_value сохраняет strategy/execution конверсию;
+строгий MoneyAmount не заменять этим helper. Новые runtime-файлы включать в
+--diff-file без staging при проверке незакоммиченного diff.
 INFO причины/ограничения, WARNING неоднозначные UID; ERROR содержит полную
 входящую ошибку SDK с cause/traceback/доступным tracking ID, DEBUG — полный
 успешный response до конверсии и raw event/fallback text. При default INFO

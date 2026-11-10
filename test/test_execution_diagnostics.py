@@ -8,7 +8,7 @@ import subprocess
 import sys
 from test.test_autorepeater import client_tinvest
 from test.test_runtime_policy import fixture_runtime
-from test.test_strategy_contract import fixture_launch
+from test.test_strategy_contract import EndOfTestStream, fixture_launch
 from test.test_order_plan import destination, leaf, rules
 from unittest.mock import call, patch
 
@@ -181,32 +181,35 @@ def test_missing_destination_reports_info(execution, mode, caplog):
 @pytest.mark.parametrize('mode', ['run', 'run_sync'])
 @pytest.mark.parametrize('level', [logging.INFO, logging.DEBUG])
 def test_runner_boundary_failure_retains_diagnostics_cause_and_stops(mode, level, launch, caplog):
-    """Both real launch paths stop on one failed read and expose its original SDK error."""
+    """Overview failure permits fresh trading reads, whose failure still stops effects."""
     client = launch[0]
     error = RequestError(StatusCode.INTERNAL, 'server error: полная причина\nnext line',
                          Metadata('tracking-runner', '100', 9, 7, 'server metadata'))
     error.__cause__ = RuntimeError('original transport failure')
-    read = (client.users.get_accounts if mode == 'run'
-            else client.operations.get_portfolio)
-    read.side_effect = error
+    client.operations.get_portfolio.side_effect = error
+    if mode == 'run':
+        client.users.get_accounts.side_effect = error
+        launch[1].position_events.side_effect = EndOfTestStream
     runner = runner_module.Runner(
         'outgoing-credential-only', strategies.prepare_strategy('INDEPENDENT', 'quote:uid'), 'dst')
     with caplog.at_level(level, logger=LOGGER_NAME), pytest.raises(
-            RequestError if mode == 'run' else ExecutionDataError) as caught:
+            EndOfTestStream if mode == 'run' else ExecutionDataError) as caught:
         getattr(runner, mode)()
     if mode == 'run':
-        assert caught.value is error
         client.users.get_accounts.assert_called_once_with()
-        assert client.operations.mock_calls == []
+        assert 'overview unavailable' in caplog.messages
+        assert any('Current pass stopped for destination dst' in message
+                   for message in caplog.messages)
     else:
         assert caught.value.__cause__ is error
         client.users.get_accounts.assert_not_called()
-        assert client.operations.method_calls == [
-            call.get_positions(account_id='dst'), call.get_portfolio(account_id='dst')]
-        client.orders.get_orders.assert_called_once_with(account_id='dst')
+    assert client.operations.method_calls == [
+        call.get_positions(account_id='dst'), call.get_portfolio(account_id='dst')]
+    client.orders.get_orders.assert_called_once_with(account_id='dst')
     details = [record for record in caplog.records
                if record.message.startswith('SDK request failed:')]
-    assert len(details) == 1
+    assert len(details) == (2 if mode == 'run' else 1)
+    assert all(record.exc_info[1] is error for record in details)
     record = details[0]
     assert record.levelno == logging.ERROR
     assert str(error) in record.message

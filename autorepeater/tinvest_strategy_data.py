@@ -52,6 +52,39 @@ def _instrument_info(instrument: Share | Etf | Instrument,
         api_trade_available=instrument.api_trade_available_flag)
 
 
+def portfolio_entry(position: PortfolioPosition) -> PortfolioEntry:
+    """Detach one broker position using the established strategy conversion."""
+    uid = position.instrument_uid
+    blocked = getattr(position, 'blocked', None)
+    blocked_lots = getattr(position, 'blocked_lots', None)
+    # SDK dataclass defaults can be unset sentinels in offline/source fixtures.
+    if type(blocked) is object:  # pylint: disable=unidiomatic-typecheck
+        blocked = None
+    if type(blocked_lots) is object:  # pylint: disable=unidiomatic-typecheck
+        blocked_lots = None
+    return PortfolioEntry(
+        uid=uid,
+        instrument_type=_instrument_type(position.instrument_type),
+        current_price=decimal_value(position.current_price,
+                                    f'portfolio position {uid} current_price'),
+        currency=position.current_price.currency,
+        quantity=decimal_value(position.quantity, f'portfolio position {uid} quantity'),
+        diagnostic_text=str(position),
+        blocked=blocked,
+        blocked_lots=decimal_value(blocked_lots, f'portfolio position {uid} blocked_lots')
+        if blocked_lots is not None else None,
+    )
+
+
+def instrument_matches(instruments) -> list[InstrumentMatch]:
+    """Detach ordered search results without changing trading acceptance."""
+    return [InstrumentMatch(
+        uid=instrument.uid, ticker=instrument.ticker, name=instrument.name,
+        instrument_type=_instrument_type(instrument.instrument_type),
+        class_code=instrument.class_code,
+    ) for instrument in instruments]
+
+
 class TInvestStrategyData:
     """Translate T-Invest read services into the strategy data contract."""
 
@@ -80,7 +113,7 @@ class TInvestStrategyData:
             raise _transport_error(error) from error
 
         return PortfolioSnapshot(positions=tuple(
-            self._portfolio_entry(position) for position in response.positions))
+            portfolio_entry(position) for position in response.positions))
 
     @measure_stage('metadata.find')
     def find_instruments(self, query: str) -> list[InstrumentMatch]:
@@ -95,16 +128,7 @@ class TInvestStrategyData:
         except RequestError as error:
             raise _transport_error(error) from error
 
-        matches = [
-            InstrumentMatch(
-                uid=instrument.uid,
-                ticker=instrument.ticker,
-                name=instrument.name,
-                instrument_type=_instrument_type(instrument.instrument_type),
-                class_code=instrument.class_code,
-            )
-            for instrument in response.instruments
-        ]
+        matches = instrument_matches(response.instruments)
         self._match_types.update((item.uid, item.instrument_type) for item in matches)
         if self._find_cache is not None and matches:
             self._find_cache[query] = tuple(matches)
@@ -193,32 +217,6 @@ class TInvestStrategyData:
             log_request_error('positions_stream', error)
             raise _transport_error(error) from error
         return self._position_events(iterator)
-
-    @staticmethod
-    def _portfolio_entry(position: PortfolioPosition) -> PortfolioEntry:
-        uid = position.instrument_uid
-        blocked = getattr(position, 'blocked', None)
-        blocked_lots = getattr(position, 'blocked_lots', None)
-        # SDK dataclass defaults can be unset sentinels in offline/source fixtures.
-        if type(blocked) is object:  # pylint: disable=unidiomatic-typecheck
-            blocked = None
-        if type(blocked_lots) is object:  # pylint: disable=unidiomatic-typecheck
-            blocked_lots = None
-        return PortfolioEntry(
-            uid=uid,
-            instrument_type=_instrument_type(position.instrument_type),
-            current_price=decimal_value(
-                position.current_price,
-                f'portfolio position {uid} current_price'),
-            currency=position.current_price.currency,
-            quantity=decimal_value(
-                position.quantity,
-                f'portfolio position {uid} quantity'),
-            diagnostic_text=str(position),
-            blocked=blocked,
-            blocked_lots=decimal_value(blocked_lots, f'portfolio position {uid} blocked_lots')
-            if blocked_lots is not None else None,
-        )
 
     @classmethod
     def _position_event(cls, response: PositionsStreamResponse) -> PositionEvent:

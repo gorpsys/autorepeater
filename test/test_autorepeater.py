@@ -60,14 +60,13 @@ from autorepeater.index_config import IndexConfig, IndexInstrument
 from autorepeater.index_config import load_index_config, load_index_configs
 from autorepeater.index_strategy import IndexQuote, IndexStrategy
 from autorepeater.index_strategy import build_index_target, calculate_index_target
-from autorepeater.legacy_display import get_portfolio, convert_position
+from autorepeater.tinvest_strategy_data import portfolio_entry
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.portfolio import validate_target
 from autorepeater.repeater import AutoRepeater
 from autorepeater.execution_data import AccountReadiness, ExecutionData, ExecutionSnapshot
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.tinvest_execution_data import TInvestExecutionData
-from autorepeater.reporting import GetInstrumentException
 from autorepeater.strategy_contract import AlgorithmDefinition, Strategy
 from autorepeater.strategy_data import DataAccessError
 from autorepeater.strategy_data import InstrumentInfo
@@ -85,7 +84,6 @@ from autorepeater.triggers import check_triggers
 from autorepeater import logging_config
 from autorepeater import index_config as index_config_module
 from autorepeater import reporting
-from autorepeater import legacy_display
 from autorepeater import runner as runner_module
 from autorepeater import serverless
 from autorepeater import strategies
@@ -129,8 +127,8 @@ class TestException(Exception):
 def test_money_to_string(currency, units, nano, expected):
     """money to string"""
     money = MoneyValue(currency=currency, units=units, nano=nano)
-    result = reporting.display_position_to_string(convert_position(None, PortfolioPosition(
-        instrument_type='currency', current_price=money, quantity=Quotation(1, 0))))
+    result = reporting.postiton_to_string(None, PortfolioPosition(
+        instrument_type='currency', current_price=money, quantity=Quotation(1, 0)))
 
     assert result == expected
 
@@ -159,9 +157,9 @@ def test_money_to_string(currency, units, nano, expected):
 def test_blocked_to_string(currency, units, nano, expected):
     """blocked money to string"""
     money = MoneyValue(currency=currency, units=units, nano=nano)
-    result = 'blocked ' + reporting.display_position_to_string(convert_position(
+    result = 'blocked ' + reporting.postiton_to_string(
         None, PortfolioPosition(instrument_type='currency', current_price=money,
-                                quantity=Quotation(1, 0))))
+                                quantity=Quotation(1, 0)))
 
     assert result == expected
 
@@ -223,7 +221,7 @@ def test_currency_to_decimal(money, quantity_units, quantity_nano, expected):
             nano=quantity_nano,
         ),
     )
-    display = convert_position(None, position)
+    display = portfolio_entry(position)
     result = reporting.display_position_value(display.current_price, display.quantity)
     assert result == expected
 
@@ -258,7 +256,7 @@ def test_currency_to_decimal_price(
             nano=quantity_nano,
         ),
     )
-    result = convert_position(None, position).current_price
+    result = portfolio_entry(position).current_price
     assert result == expected
 
 
@@ -285,7 +283,7 @@ def test_currency_to_string(money, quantity_units, quantity_nano, expected):
             nano=quantity_nano,
         ),
     )
-    result = reporting.display_position_to_string(convert_position(None, position))
+    result = reporting.display_position_to_string(portfolio_entry(position), {})
 
     assert result == expected
 
@@ -316,7 +314,7 @@ def test_get_quantity_position(money, quantity_units, quantity_nano, expected):
             nano=quantity_nano,
         ),
     )
-    result = convert_position(None, position).quantity
+    result = portfolio_entry(position).quantity
     assert result == expected
 
 
@@ -495,7 +493,7 @@ def client_tinvest():
     instrument_names = {'1': ('share1', 'SHR'), '2': ('etf2', 'ETF')}
     search_results = {
         uid: FindInstrumentResponse(
-            instruments=[InstrumentShort(name=name, ticker=ticker)])
+            instruments=[InstrumentShort(uid=uid, name=name, ticker=ticker)])
         for uid, (name, ticker) in instrument_names.items()
     }
     instruments = {
@@ -693,30 +691,6 @@ def test_postiton_to_string(
     assert result == expected
     assert client.mock_calls == ([call.instruments.find_instrument(query=uid)]
                                  if instrument_type in ['share', 'etf'] else [])
-
-
-def test_get_instrument(client):
-    """test_get_instrument"""
-    instrument_id = "1"
-    instrument = InstrumentShort(name='share1', ticker='SHR')
-    client.instruments.find_instrument.side_effect = None
-    client.instruments.find_instrument.return_value = FindInstrumentResponse(
-        instruments=[instrument])
-    result = legacy_display.get_instrument(client, instrument_id)
-    assert result is instrument
-    client.instruments.find_instrument.assert_called_once_with(query='1')
-
-
-@pytest.mark.parametrize('instruments', [[], [InstrumentShort(), InstrumentShort()]])
-def test_get_instrument_fail(client, instruments):
-    """test_get_instrument_fail"""
-    instrument_id = "none_id"
-    client.instruments.find_instrument.side_effect = None
-    client.instruments.find_instrument.return_value = FindInstrumentResponse(
-        instruments=instruments)
-    with pytest.raises(GetInstrumentException, match='error get instrument'):
-        legacy_display.get_instrument(client, instrument_id)
-    client.instruments.find_instrument.assert_called_once_with(query='none_id')
 
 
 def test_account_strategy_basic_target(client):
@@ -1322,70 +1296,11 @@ def rotation_portfolios_fixture(client):
     return src_positions, dst_positions
 
 
-def test_print_all_portfolios(client, caplog):
-    """Account output includes empty portfolios and calculated currency totals."""
-    with caplog.at_level(logging_config.IMPORTANT, logger=logging_config.LOGGER_NAME):
-        legacy_display.print_all_portfolio(client)
-
-    client.users.get_accounts.assert_called_once_with()
-    assert client.operations.get_portfolio.call_args_list == [
-        call(account_id='1'), call(account_id='2')]
-    assert client.mock_calls == [call.users.get_accounts(),
-                                 call.operations.get_portfolio(account_id='1'),
-                                 call.operations.get_portfolio(account_id='2')]
-    assert caplog.messages == [
-        'account name (1)', '------------', 'RUB - 2.4', 'total: 2.400000000', '============',
-        'account name (2)', '------------', 'total: 0', '============']
-    assert all(record.levelno == logging_config.IMPORTANT for record in caplog.records)
-    client.orders.post_order.assert_not_called()
-
-
 def test_position_unknown_type(client):
     """Unknown instrument types retain the SDK's string representation."""
     position = PortfolioPosition(instrument_type='unknown')
     assert reporting.postiton_to_string(client, position) == str(position)
     assert client.mock_calls == []
-
-
-@pytest.mark.parametrize('quantity', [0, -2])
-def test_print_legacy_fallback_keeps_raw_at_debug_and_exact_summary(client, caplog, quantity):
-    """Zero and signed fallback quantities never require division or metadata reads."""
-    position = PortfolioPosition(instrument_type='bond', instrument_uid='uid',
-                                 current_price=MoneyValue(currency='RUB', units=0, nano=1),
-                                 quantity=Quotation(units=quantity, nano=0))
-    with caplog.at_level(logging.DEBUG, logger=logging_config.LOGGER_NAME):
-        legacy_display.print_position(client, position)
-    assert caplog.messages == [
-        str(position), f'Position: uid=uid type=bond quantity={quantity}.0 '
-        'currency=RUB price=0.000000001']
-    assert [record.levelno for record in caplog.records] == [logging.DEBUG, logging.INFO]
-    assert client.mock_calls == []
-
-
-@pytest.mark.parametrize('positions', [[], [PortfolioPosition(instrument_type='currency')]])
-def test_get_portfolio(client, caplog, positions):
-    """Legacy reading preserves the snapshot with one DEBUG response record."""
-    response = PortfolioResponse(positions=positions)
-    client.operations.get_portfolio.side_effect = None
-    client.operations.get_portfolio.return_value = response
-    with caplog.at_level(logging.DEBUG, logger=logging_config.LOGGER_NAME):
-        assert get_portfolio(client, '4') is response
-    assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
-    assert caplog.messages == [f'SDK response: method=MagicMock response={response!r}']
-
-
-def test_get_portfolio_error(client, caplog):
-    """Portfolio loading passes the original SDK error to its caller."""
-    error = RequestError(code=StatusCode.UNAVAILABLE, details='portfolio unavailable', metadata=())
-    client.operations.get_portfolio.side_effect = error
-    with caplog.at_level(logging.DEBUG, logger=logging_config.LOGGER_NAME), \
-            pytest.raises(RequestError) as raised:
-        get_portfolio(client, '4')
-    assert raised.value is error
-    assert client.mock_calls == [call.operations.get_portfolio(account_id='4')]
-    assert len(caplog.records) == 1
-    assert caplog.records[0].sdk_details == 'portfolio unavailable'
-    assert caplog.records[0].exc_info[1] is error
 
 
 def test_skipped_event_reporting_uses_only_strategy_diagnostics(caplog):

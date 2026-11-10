@@ -509,23 +509,41 @@ Local and cloud configure the application logger only, without duplicate
 handlers or replacing the cloud JSON formatter. CLI `--debug` remains dry-run;
 LOG_LEVEL does not change trade permissions or add broker reads.
 
-`legacy_display` owns the existing account browse and SDK conversion; Runner.run
-keeps its GetAccounts/GetPortfolio/FindInstrument sequence and incremental
-output, while run_sync does not browse all accounts. Pure reporting functions
-consume frozen DisplayAccount/DisplayPosition scalars, Decimals and strings,
-without units/nano, SDK imports or I/O. The sole compatibility wrapper is
-`reporting.postiton_to_string(client, position)`; reporting.GetInstrumentException
-also remains available. Raw-only bond/unknown projection leaves unloaded
-numeric fields None; share/ETF instrument_label is formatted after the original
-quantity read and before price reads. Total conversion remains after printing.
-The previous permissive numeric and literal currency acceptance, errors and
-admission to CLI mainflow are preserved, including unrelated accounts.
+`tinvest_account_overview` owns an independent read-only browse in Runner.run;
+run_sync does not browse accounts. GetAccounts, each GetPortfolio and metadata
+FindInstrument use call_once with no retry. Shared public portfolio_entry and
+instrument_matches detach the same own PortfolioEntry/InstrumentMatch values
+used by TInvestStrategyData without changing trading conversion or calls.
+Before rendering an account, load its complete PortfolioSnapshot and name/ticker
+metadata. Each unique nonempty noncurrency UID has at most one exact-UID lookup
+per browse; failures are cached. Lookup failure keeps positions and broker total,
+using UID and an explicit metadata unavailable marker. Portfolio read/conversion
+failure reports that account unavailable and continues; GetAccounts RequestError
+reports overview unavailable. Programming and rendering errors propagate.
 
-`tinvest_values.decimal_value(value, context)` publicly shares the original
-strategy/execution units/nano arithmetic and errors; execution retains its
-nonnegative check. It preserves the previous scalar/sign/range acceptance and
-Decimal-context sensitivity. Strict MoneyAmount.from_units_nano paths and the
-separate permissive legacy converter keep their own contracts.
+Pure reporting consumes PortfolioSnapshot, a loaded InstrumentMatch mapping and
+MoneyAmount | None. Its sole SDK compatibility edge remains the local delegation
+from postiton_to_string(client, position) to position_to_string; the exported
+GetInstrumentException remains from display_data. Valid currency/share/ETF output
+keeps original currency case and name(ticker). Exact UID uniqueness is required;
+RequestError preserves identity, decimal_value and currency_code validate inputs.
+Bond/unknown compatibility alone may return str(position) without numeric reads/RPC.
+The incidental permissive legacy conversion, TypeError ordering, repeated raw reads
+and partial account display are retired (history H46); no DisplayPosition remains.
+
+Only the same response.total_amount_portfolio converted via MoneyAmount.from_units_nano
+supplies the labelled broker portfolio total with its currency. Missing/invalid totals
+are unavailable, never invented zero/RUB or price-times-quantity sums. Valid zero
+is retained. exact_sum groups broker totals by currency with no FX conversion;
+any missing account/total labels every known sum incomplete subtotal and counts
+unavailable accounts. Metadata failure alone does not make proven totals incomplete.
+Bond/other lines show quantity and broker quote units without inventing money values.
+Overview snapshots/cache never reach AutoRepeater: fresh trading reads, permissions,
+budgets and fail-stop checks remain independent even after a selected overview failure.
+
+`tinvest_values.decimal_value(value, context)` shares the original strategy/execution
+units/nano arithmetic and errors, including Decimal-context sensitivity; execution
+nonnegative and strict MoneyAmount.from_units_nano remain separate contracts.
 
 ### Deadlines and retries
 

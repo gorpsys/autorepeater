@@ -12,7 +12,7 @@ STRATEGIES = {f'autorepeater.{path.stem}' for path in PACKAGE.glob('*_strategy.p
 ASSEMBLY = {'autorepeater.strategies', 'autorepeater.runner',
             'autorepeater.repeater', 'autorepeater.tinvest_strategy_data',
             'autorepeater.tinvest_execution_data', 'autorepeater.order_execution',
-            'autorepeater.legacy_display', 'autorepeater.tinvest_diagnostics',
+            'autorepeater.tinvest_account_overview', 'autorepeater.tinvest_diagnostics',
             'autorepeater.tinvest_values'}
 NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
            'display_data',
@@ -23,7 +23,7 @@ NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
 ADAPTERS = {'autorepeater.' + name for name in (
     'tinvest_strategy_data', 'tinvest_execution_data', 'tinvest_fx_data',
     'tinvest_security_data', 'order_execution', 'tinvest_requests',
-    'tinvest_diagnostics', 'tinvest_values', 'legacy_display')}
+    'tinvest_diagnostics', 'tinvest_values', 'tinvest_account_overview')}
 PURE_DISPLAY = {'display_data', 'money', 'portfolio', 'reporting'}
 READERS = {'get_accounts', 'get_portfolio', 'get_instrument', 'find_instrument',
            'find_instruments', 'get_last_prices', 'get_instrument_by'}
@@ -92,8 +92,9 @@ def forbidden_imports(source, module):
 def compatibility_import(tree, node):
     """Permit one exact local delegation edge, never the wrapper's other dependencies."""
     return (isinstance(node, ast.ImportFrom) and node.level == 0
-            and node.module == 'autorepeater.legacy_display'
-            and [(alias.name, alias.asname) for alias in node.names] == [('convert_position', None)]
+            and node.module == 'autorepeater.tinvest_account_overview'
+            and [(alias.name, alias.asname) for alias in node.names] == [
+                ('position_to_string', None)]
             and any(isinstance(function, ast.FunctionDef)
                     and function.name == 'postiton_to_string' and node in function.body
                     for function in tree.body))
@@ -321,7 +322,8 @@ def test_checker_accepts_allowed_imports(module, source):
 
 
 @pytest.mark.parametrize('module', ['display_data', 'money', 'portfolio', 'reporting'])
-@pytest.mark.parametrize('dependency', ['legacy_display', 'tinvest_values', 'tinvest_diagnostics'])
+@pytest.mark.parametrize('dependency', [
+    'tinvest_account_overview', 'tinvest_values', 'tinvest_diagnostics'])
 def test_display_components_cannot_import_adapter_components(module, dependency):
     """Task 11 names its concrete adapter components without classifying future modules."""
     assert forbidden_imports(f'from .{dependency} import helper', f'autorepeater.{module}') == [
@@ -329,17 +331,17 @@ def test_display_components_cannot_import_adapter_components(module, dependency)
 
 
 @pytest.mark.parametrize('source', [
-    'from autorepeater.legacy_display import convert_position',
+    'from autorepeater.tinvest_account_overview import position_to_string',
     'def display_position_to_string(position):\n'
-    '    from autorepeater.legacy_display import convert_position',
+    '    from autorepeater.tinvest_account_overview import position_to_string',
     'def print_strategy_position(position):\n'
-    '    from autorepeater.legacy_display import convert_position',
+    '    from autorepeater.tinvest_account_overview import position_to_string',
     'def postiton_to_string(client, position):\n'
-    '    from autorepeater.legacy_display import get_portfolio',
+    '    from autorepeater.tinvest_account_overview import get_portfolio',
     'def postiton_to_string(client, position):\n'
-    '    from autorepeater.legacy_display import convert_position as convert',
+    '    from autorepeater.tinvest_account_overview import position_to_string as convert',
     'def postiton_to_string(client, position):\n'
-    '    from .legacy_display import convert_position',
+    '    from .tinvest_account_overview import position_to_string',
     'def postiton_to_string(client, position):\n'
     '    from t_tech.invest import Client',
     'def postiton_to_string(client, position):\n'
@@ -354,13 +356,13 @@ def test_exact_compatibility_edge_and_adapter_edges_are_allowed():
     """The wrapper delegates to the adapter, which can use SDK diagnostics and own DTOs."""
     assert forbidden_imports(
         'def postiton_to_string(client, position):\n'
-        '    from autorepeater.legacy_display import convert_position\n'
-        '    return display_position_to_string(convert_position(client, position))',
+        '    from autorepeater.tinvest_account_overview import position_to_string\n'
+        '    return position_to_string(client, position)',
         'autorepeater.reporting') == []
     for module, source in [
-            ('legacy_display', 'from t_tech.invest.services import Services'),
-            ('legacy_display', 'from .reporting import display_position_to_string'),
-            ('legacy_display', 'from .tinvest_diagnostics import call_once'),
+            ('tinvest_account_overview', 'from t_tech.invest.services import Services'),
+            ('tinvest_account_overview', 'from .reporting import display_position_to_string'),
+            ('tinvest_account_overview', 'from .tinvest_diagnostics import call_once'),
             ('tinvest_diagnostics', 'from t_tech.invest import RequestError'),
             ('tinvest_execution_data', 'from .tinvest_values import decimal_value'),
             ('tinvest_strategy_data', 'from .tinvest_values import decimal_value')]:
@@ -370,7 +372,7 @@ def test_exact_compatibility_edge_and_adapter_edges_are_allowed():
 @pytest.mark.parametrize('module, source', [
     ('tinvest_execution_data', 'from .tinvest_strategy_data import _decimal_value'),
     ('tinvest_strategy_data', 'from autorepeater.tinvest_execution_data import _quotation'),
-    ('legacy_display', 'from .tinvest_values import _decimal_value'),
+    ('tinvest_account_overview', 'from .tinvest_values import _decimal_value'),
     ('tinvest_execution_data', 'import autorepeater.tinvest_strategy_data as other\n'
      'value = other._decimal_value(raw, "price")'),
     ('tinvest_execution_data', 'from . import tinvest_strategy_data as other\n'
@@ -386,11 +388,11 @@ def test_private_interadapter_dependencies_are_rejected(module, source):
 
 
 @pytest.mark.parametrize('module, source', [
-    ('display_data', 'class DisplayPosition:\n    price: object'),
-    ('display_data', 'class DisplayPosition:\n    units: int'),
-    ('display_data', 'class DisplayPosition:\n    raw: MoneyValue'),
-    ('display_data', 'class DisplayPosition:\n    raw: "MoneyValue"'),
-    ('display_data', 'class DisplayPosition:\n    nano: Decimal'),
+    ('display_data', 'class DisplayAccount:\n    price: object'),
+    ('display_data', 'class DisplayAccount:\n    units: int'),
+    ('display_data', 'class DisplayAccount:\n    raw: MoneyValue'),
+    ('display_data', 'class DisplayAccount:\n    raw: "MoneyValue"'),
+    ('display_data', 'class DisplayAccount:\n    nano: Decimal'),
     ('money', 'def get_portfolio(client, account_id):\n    return client.read(account_id)'),
     ('portfolio', 'class Reader:\n    def get_portfolio(self, account_id): ...'),
     ('reporting', 'def display_position_value(price, quantity):\n    return quantity.units'),
@@ -408,6 +410,36 @@ def test_private_interadapter_dependencies_are_rejected(module, source):
 def test_pure_display_boundary_rejects_raw_fields_readers_and_io(module, source):
     """New presentation APIs take loaded own values; only the converter reads units/nano."""
     assert pure_boundary_violations(source, f'autorepeater.{module}')
+
+
+def test_account_overview_uses_existing_models_and_only_bounded_read_methods():
+    """This SDK operation has no second DTO/reader hierarchy or trading/quota methods."""
+    tree = ast.parse((PACKAGE / 'tinvest_account_overview.py').read_text(encoding='utf-8'))
+    assert not any(isinstance(node, ast.ClassDef) for node in ast.walk(tree))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    reads = [node.args[0].attr for node in calls
+             if isinstance(node.func, ast.Name) and node.func.id == 'call_once']
+    assert sorted(reads) == ['find_instrument', 'get_accounts', 'get_portfolio']
+    forbidden = {'call_api', 'sleep', 'get_positions', 'get_order_book', 'get_last_prices',
+                 'get_operations', 'post_order', 'cancel_order', 'get_max_lots'}
+    assert not any((isinstance(node.func, ast.Name) and node.func.id in forbidden)
+                   or (isinstance(node.func, ast.Attribute) and node.func.attr in forbidden)
+                   for node in calls)
+    imports = {alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+               for alias in node.names}
+    assert {'PortfolioSnapshot', 'InstrumentMatch', 'MoneyAmount', 'DisplayAccount',
+            'portfolio_entry', 'instrument_matches'} <= imports
+
+
+def test_both_sdk_consumers_use_the_shared_public_converters():
+    """Trading and overview must not grow divergent portfolio/search projections."""
+    for name in ('tinvest_strategy_data', 'tinvest_account_overview'):
+        tree = ast.parse((PACKAGE / f'{name}.py').read_text(encoding='utf-8'))
+        calls = {node.func.id for node in ast.walk(tree)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        assert {'portfolio_entry', 'instrument_matches'} <= calls
+        assert not any(isinstance(node, ast.FunctionDef) and node.name == '_portfolio_entry'
+                       for node in ast.walk(tree))
 
 
 def test_task11_production_boundaries():

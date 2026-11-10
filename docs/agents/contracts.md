@@ -158,33 +158,53 @@ main с пустой дельтой нормальный SKIP.
 | Проход и отправка | execution.py (нейтральный), order_execution.py (SDK) |
 | Оркестрация/Client | repeater.py (нейтральный), runner.py, grpc_deadline.py |
 | Чистый вывод/общие DTO | reporting.py, display_data.py, money.py, portfolio.py |
-| SDK-диагностика/legacy обзор/конверсия | tinvest_diagnostics.py, legacy_display.py, tinvest_values.py |
+| SDK-диагностика/обзор/конверсия | tinvest_diagnostics.py, tinvest_account_overview.py, tinvest_values.py |
 | Настройка логов | logging_config.py |
 | Входы/утилиты | main.py, serverless.py, handler.py, scripts/check_rebalance_policy.py, scripts/check_imoex_strategy.py |
 
 Стратегии не импортируют SDK/grpc, адаптеры, реестр, исполнение, Runner
 или друг друга. Общие DTO/политика/движок SDK не импортируют.
 COMPOSITE создаёт непрозрачных детей через strategy_contract.create_strategy.
-Reporting использует загруженные DTO/UID без дополнительных запросов
-ради расчётных логов. Явный просмотр счетов в Runner.run() выполняет
-legacy_display; run_sync не просматривает все счета. Frozen DisplayAccount/
-DisplayPosition содержат только загруженные скаляры/Decimal/строки.
+Reporting использует загруженные DTO/UID без дополнительных запросов.
+`tinvest_account_overview` выполняет независимый read-only обзор в Runner.run;
+run_sync не просматривает все счета. До печати позиций счёта полностью загрузить
+PortfolioSnapshot/PortfolioEntry и mapping InstrumentMatch по UID. DisplayAccount
+содержит только identity; DisplayPosition и raw-only display DTO не нужны.
+Общий public portfolio_entry/instrument_matches механически разделяет SDK-конверсию
+с TInvestStrategyData без изменения торговых calls/checks/errors.
+
+GetAccounts/GetPortfolio/FindInstrument используют только call_once без quota retry.
+GetAccounts RequestError означает overview unavailable. GetPortfolio RequestError/
+ValueError позиции означает portfolio unavailable этого счёта без частичного списка,
+после чего обзор продолжается. Каждый уникальный непустой невалютный UID ищется
+не более одного раза за обзор; ровно один точный UID с корректными name/ticker
+допускает имя, иначе UID и metadata unavailable. Отказ кешируется вместе с успехом.
+Metadata RequestError/ValueError/lookup error не теряет позиции или доказанный total.
+Programming errors и ошибки форматирования не маскируются.
+
+Только total_amount_portfolio того же ответа через MoneyAmount.from_units_nano
+даёт broker portfolio total с реальной валютой. Нет/неверен total — unavailable,
+без RUB/нуля/суммы price*quantity. Валидный ноль сохраняется. exact_sum суммирует
+только totals одной валюты, без FX; при любом недоступном счёте/total все суммы
+incomplete subtotal с числом недоступных счетов. Пустые счета не порождают валюты.
+Bond/OTHER показывают количество и явно broker quote без денежной стоимости.
+Для share/ETF/currency можно показывать money-per-piece estimate отдельно от total.
+
 Чистые formatter-функции не знают SDK, units/nano, клиента или reader-порта.
-Единственное исключение reporting — совместимый
-postiton_to_string(client, position), делегирующий legacy adapter;
-reporting.GetInstrumentException остаётся доступен из display_data.
-Legacy сохраняет порядок GetAccounts/GetPortfolio/FindInstrument и частичный
-вывод, прежние строки currency и числовую конверсию без новых проверок.
-Raw-only bond/unknown projection не читает числовые поля, оставляя их None;
-instrument_label для share/ETF формируется до чтения price после прежнего
-первого чтения quantity. Расчёт total отдельно конвертирует числа после печати.
-Это сохраняет прежние ошибки и допуск к CLI mainflow для постороннего счёта.
-Money хранит только Decimal-formatters, portfolio — TargetPortfolio/validation.
-Публичный tinvest_values.decimal_value(value, context) используется прежними
-strategy/execution путями вместо приватного межадаптерного импорта: арифметика,
-ошибки и Decimal-context sensitivity прежние; execution сохраняет nonnegative
-check. Строгий MoneyAmount.from_units_nano и отдельная permissive legacy-конверсия
-сохраняют свои контракты; эти три способа не взаимозаменяемы.
+Единственное исключение reporting — совместимый postiton_to_string(client, position),
+локально делегирующий position_to_string нового SDK-модуля; GetInstrumentException
+остаётся экспортом display_data. Lookup требует единственного точного UID;
+RequestError сохраняется тем же объектом, числа используют decimal_value,
+валюта — currency_code с сохранением исходного регистра в строке.
+Bond/unknown compatibility может вернуть str(position) без конверсии/RPC.
+Старые incidental TypeError/permissive acceptance/повторные reads отменены (H46).
+Обзор не передаёт снимки или кеш в AutoRepeater; ожидаемый отказ даже выбранного
+счёта не определяет допуск. Торговля независимо читает свежие данные и сохраняет
+fail-stop, permissions, budget и проверки до эффектов.
+Money хранит Decimal-formatters, portfolio — TargetPortfolio/validation.
+Публичный tinvest_values.decimal_value(value, context) сохраняет strategy/execution
+арифметику, ошибки и Decimal-context sensitivity; execution nonnegative и строгий
+MoneyAmount.from_units_nano остаются отдельными контрактами.
 AutoRepeater(strategy, data, execution_data, executor), sync_accounts/mainflow
 получают dst. sync_accounts дополнительно принимает явный keyword-only
 Valuation для read-only валютной оценки; прежний вызов без него совместим.
@@ -488,8 +508,8 @@ api_method/grpc_status/sdk_details/sdk_metadata и существующий trac
 call_api использует helper внутри прежнего quota loop, поэтому каждая ошибочная
 попытка имеет один полный ERROR и прежнее компактное terminal/quota сообщение.
 Stream отдельно логирует ошибки открытия/чтения и каждый полученный response;
-ленивость, EOF и reconnect сохраняются. Прежние прямые legacy reads используют
-call_once без нового quota retry. Repr успешного ответа вычисляется только при
+ленивость, EOF и reconnect сохраняются. Независимый обзор счетов использует
+call_once без quota retry. Repr успешного ответа вычисляется только при
 DEBUG; ошибка str/repr заменяется placeholder, не меняя результат/исключение.
 Не читать и не выводить клиента, kwargs, credentials и исходящие authorization
 metadata. Полные входящие SDK данные разрешены; новые RPC ради логов запрещены.

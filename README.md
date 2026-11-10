@@ -1017,7 +1017,7 @@ should_rebalance(event, dst_account_id) -> bool
 | repeater.py | AutoRepeater(strategy, data, execution_data, executor): порядок расчёта и обработка событий |
 | runner.py, grpc_deadline.py | Создание `Client` и адаптеров; таймаут отдельных запросов с одним ответом (unary RPC) — не более 10 секунд для CLI и облака |
 | reporting.py, display_data.py, money.py, portfolio.py | Чистый вывод из собственных DTO, Decimal-форматирование и общий TargetPortfolio |
-| legacy_display.py | Чтение SDK и конверсия для прежнего обзора счетов в Runner.run; run_sync не делает обзор |
+| tinvest_account_overview.py | Независимый read-only обзор счетов в Runner.run; run_sync не делает обзор |
 | tinvest_values.py, tinvest_diagnostics.py, logging_config.py | Общая прежняя units/nano-конверсия адаптеров, диагностика SDK и настройка логов |
 | main.py, serverless.py, handler.py | CLI и облачные точки входа |
 
@@ -1025,10 +1025,19 @@ should_rebalance(event, dst_account_id) -> bool
 Стратегии также не импортируют друг друга или реестр.
 COMPOSITE создаёт уже подготовленных детей через `strategy_contract.create_strategy`.
 Для расчётных логов reporting использует загруженные данные, без новых запросов API.
-Обзор счетов перед локальным проходом сохраняет порядок чтений и частичный
-вывод при ошибке. Совместимый `reporting.postiton_to_string(client, position)`
-делегирует legacy-адаптеру; остальные форматтеры получают готовые DTO.
-Явный просмотр счетов выполняется в `Runner.run()`.
+Обзор счетов в `Runner.run()` отдельно читает счета и их портфели, затем загружает
+имена/тикеры по уникальным UID. Ошибка одного портфеля явно отмечается и не мешает
+просмотру остальных; ошибка metadata оставляет UID вместо имени. `run_sync()`
+не просматривает все счета. Торговый проход независимо читает свежие данные.
+
+`broker portfolio total` — оценка брокера из `total_amount_portfolio` с его валютой,
+не доступные деньги и не торговый бюджет. Отсутствующий/повреждённый итог явно
+недоступен; настоящий ноль сохраняется. Суммы по счетам группируются по валютам
+без FX. Если итог хотя бы одного счёта недоступен, известные суммы подписаны
+`incomplete subtotal` с количеством таких счетов. Bond/прочие позиции показывают
+количество и broker quote без выдуманной денежной стоимости.
+Совместимый `reporting.postiton_to_string(client, position)` делегирует узкому
+SDK helper; остальные форматтеры получают собственные снимки и загруженные metadata.
 
 ### Данные для исполнения
 

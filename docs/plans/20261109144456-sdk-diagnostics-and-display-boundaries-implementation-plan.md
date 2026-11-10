@@ -772,3 +772,228 @@ server details как главную цель C13/C14; предположени�
 
 Итог: 2 итерации, 1 замечание, 1 исправлено, 0 отклонено, **PASS**.
 Счётчики сходятся: 1 + 0 = 1. Замечаний, оставленных без разбора, нет.
+
+### B8. Заменить legacy display самостоятельной операцией обзора счетов
+
+**Дополнение владельца от 10.11.2026.** Удалить `legacy_display` ради чистого
+кода отдельным новым commit в том же PR #56. Выполненные B1–B7 и их 42
+отметки остаются историей выполненной работы. Для B8 прежние требования C16
+о точном legacy acceptance/error parity, повторной конверсии после печати,
+порядке TypeError, частичном выводе и неизменном числе display RPC заменены
+контрактом ниже. Это также уточняет соответствующие строки старой матрицы,
+ограничения и выводы ревью выше; переписывать завершённые разделы не нужно.
+Торговые правила, SDK-диагностика C13/C14, C17 и fail-stop выбранной торговли
+сохраняются. Причина дополнения — рекомендация ревью: отдельная операция
+обзора на собственных снимках и чистом форматировании, с явной загрузкой
+имён/тикеров, денежными единицами total и правилами ошибок каждого счёта.
+
+**Files:**
+- Create: `autorepeater/tinvest_account_overview.py`,
+  `test/test_tinvest_account_overview.py`.
+- Modify: `autorepeater/tinvest_strategy_data.py` — только выделение общих
+  публичных конвертеров без изменения торговых reads/checks/errors;
+  `autorepeater/reporting.py`, `autorepeater/display_data.py`,
+  `autorepeater/runner.py`, `test/test_display_reporting.py`,
+  `test/test_architecture.py`, `test/test_autorepeater.py`,
+  `test/test_fx_reporting.py` и существующие offline Runner-тесты только
+  при необходимости обновления wiring/ожиданий обзора.
+- Remove: `autorepeater/legacy_display.py`, `test/test_legacy_display.py`.
+  Сценарии полезного вывода и диагностики перенести в новые тесты; прежний
+  oracle 420 exact parity cases и тесты повторных raw reads удалить как
+  проверки отменённого контракта, без переноса legacy-реализации в тесты.
+- Docs: `README.md`, `docs/agents/contracts.md`,
+  `docs/agents/development.md`, `docs/execution-adapter.md`, `CHANGELOG.md`,
+  новая поясняющая запись в `docs/agents/history.md` и диапазон индекса
+  `docs/agents/README.md`, этот план и progress.
+
+**Снимки и границы.** Новый SDK-модуль отвечает только за read-only обзор и
+его orchestration. Использовать существующие `PortfolioSnapshot`,
+`PortfolioEntry`, `InstrumentMatch`, `DisplayAccount` и `MoneyAmount`;
+не создавать второй набор portfolio/security DTO, reader-классов или портов.
+Удалить `DisplayPosition`, optional raw-only поля и preformatted label:
+reporting получает собственный портфель, mapping загруженных метаданных
+по UID и, отдельно, `MoneyAmount | None` брокерского total. SDK-response,
+client/reader, units/nano и функции чтения в эти аргументы не передаются.
+Публичные `portfolio_entry` и `instrument_matches` механически выделить
+из прежней конверсии `TInvestStrategyData`; оба SDK-потребителя используют
+одну реализацию. Сам `TInvestStrategyData` остаётся, его методы/StrategyData
+контракт, `call_api`, кеши и торговое поведение не меняются.
+
+`tinvest_account_overview` читает GetAccounts, затем по одному GetPortfolio
+в порядке брокера. Только `call_once`: один RPC на чтение, без quota loop,
+sleep, бесконечных повторов и торговых методов. До вывода позиций счёта
+полностью загрузить его собственный снимок и нужные name/ticker. Для каждого
+уникального непустого UID невалютной позиции вызвать FindInstrument максимум
+один раз за операцию; выбрать ровно один результат с точным совпадением UID.
+Повторные UID используют уже загруженный результат либо тот же явный отказ.
+Для валюты достаточно её загруженной валюты оценки/UID; дополнительный lookup
+имени не нужен. Полные incoming errors остаются ERROR, successes — DEBUG;
+клиент/kwargs/credentials не читать. Никакого print → повторный raw read.
+
+**Деньги и полезный вывод.** Итог берётся только из уже полученного
+`PortfolioResponse.total_amount_portfolio` (`MoneyValue` в vendored SDK
+1.51.0), конвертируется существующим `MoneyAmount.from_units_nano` и явно
+подписывается как «broker portfolio total» с валютой самого поля. Это
+брокерская оценка, не available cash, торговый бюджет или собственный equity
+расчёт. Не складывать `quantity * current_price` для вычисления total:
+так исключаются смешение валют, bond percent/points, неверные nominal/ACI
+и добавление cash второй раз. Не читать FX, книги, nominal, GetPositions или
+историю ради display. Нет/повреждено поле total — явно «total unavailable»,
+без нуля, RUB по умолчанию или подмены суммой видимых позиций. Настоящий
+нулевой MoneyValue с явной валютой остаётся нулём; пустой портфель без total
+не доказывает нулевой итог. После обзора вывести суммы брокерских totals
+по фактической валюте `MoneyAmount` через существующий `exact_sum`: RUB и USD
+никогда не складываются и не конвертируются. Если хотя бы один счёт из
+GetAccounts не прочитан или не имеет корректного total, все известные суммы
+явно пометить как «incomplete subtotal» с количеством недоступных счетов;
+это не полный grand total. При отказе GetAccounts агрегат недоступен, при
+пустом списке счетов денежных сумм/выдуманной валюты нет. Ошибка только
+metadata не делает доказанный брокерский total неполным. Накапливать готовые
+MoneyAmount и число недоступных totals, без дополнительного outcome DTO.
+
+Сохранить узнаваемые заголовки name/id, порядок позиций, name(ticker) при
+успешной загрузке, Decimal quantities и текущие котировки с их валютой.
+Для share/ETF/currency допустима прежняя строка денежной оценки позиции
+по установленному money-per-piece контракту; для bond/OTHER показывать
+quantity и явно обозначенную broker quote без выдуманной денежной стоимости
+позиции. Брокерский total не зависит от этого форматирования. SDK raw text
+остаётся только DEBUG; обычный вывод неизвестного типа содержит его UID и
+доступные собственные поля. Formatter не вызывает SDK/порт и не конвертирует
+исходные числа повторно; `format_decimal` и точные Decimal правила сохраняются.
+
+**Ошибки обзора.** GetAccounts RequestError — явное сообщение «overview
+unavailable», после которого обзор завершается. Ошибка GetPortfolio или
+ValueError конверсии позиции — заголовок конкретного счёта, явное «portfolio
+unavailable», без неполного списка/total; продолжить остальные счета.
+Ошибка/неоднозначность metadata lookup — сохранить числовые позиции и
+брокерский total, вывести UID вместо имени и явную отметку «metadata
+unavailable» для этого UID. Ошибка конверсии total — сохранить позиции, но
+явно сообщить недоступность total. Никакой отказ не маскируется пустым или
+успешным полным обзором. Ожидаемые RequestError/ValueError и lookup error
+обрабатываются на соответствующей read/conversion границе, без blanket
+`except Exception` вокруг formatting или trading; программные ошибки
+не скрываются. Повреждённые необязательные name/ticker не конкатенировать:
+они означают недоступные metadata, а не исторический TypeError.
+
+Runner.run по-прежнему вызывает обзор отдельно перед mainflow, а run_sync
+обзор не добавляет. Ожидаемый отказ обзора любого счёта, включая выбранный,
+не определяет допуск к торговле: mainflow самостоятельно читает свежие данные
+и сохраняет свои прежние fail-stop/permissions/budget проверки. Снимки и
+кеши обзора не передаются в AutoRepeater. Плохой посторонний счёт больше не
+является случайным условием отказа торговли выбранного счёта.
+
+**Узкая public compatibility.** Сохранить написание и сигнатуру
+`reporting.postiton_to_string(client, position)` и экспорт
+`reporting.GetInstrumentException` из `display_data`. Wrapper локально
+делегирует SDK helper нового модуля и затем использует чистое форматирование;
+никакого импорта удалённого legacy module. Для корректных currency/share/ETF
+сохранить полезную строку, исходный регистр валюты и name(ticker); lookup
+теперь требует единственный точный UID. Отсутствие/неоднозначность такого
+match — GetInstrumentException; RequestError пробрасывается тем же объектом
+после полной диагностики. Некорректные числа используют единый ValueError
+контракт `decimal_value`, некорректная денежная валюта — существующий
+`currency_code`; permissive bool/string/range legacy acceptance и точный
+порядок TypeError не сохранять. Для bond/unknown совместимый вызов может
+сохранить `str(position)` как прежний fallback без числовой конверсии и RPC;
+этот SDK fallback не используется новым обзором. Совместимость не должна
+возвращать отдельный converter, повторные чтения или новый legacy framework.
+
+- [x] RED: заменить отменённые parity-тесты проверками нового контракта:
+  свои snapshots/metadata, чистые renderer, брокерский валютный total и его
+  отсутствие/повреждение/настоящий ноль, bond/unknown без ошибочного суммирования;
+  агрегаты по валютам и явная неполнота при недоступном total любого счёта.
+- [x] Выделить и повторно использовать прежние SDK-конвертеры; реализовать
+  однократное чтение снимков/metadata и public compatibility нового модуля,
+  не меняя торговый StrategyData/SDK read контракт и diagnostics policy.
+- [x] Реализовать явные ошибки accounts/portfolio/metadata/total и продолжение
+  обзора; GREEN на strict autospec Services с точными RPC, UID cache,
+  отсутствием retry/FX/order RPC, сохранением полных errors/DEBUG responses.
+  Проверить, что плохой посторонний overview не блокирует mainflow, а ошибка
+  свежего выбранного торгового снимка по-прежнему останавливает его до эффектов.
+- [x] Подключить Runner.run, удалить legacy module/test и DisplayPosition,
+  обновить затронутые offline callsites; сохранить run_sync без обзора,
+  compatibility signature/exception и SDK/I/O-blocked pure rendering.
+- [x] Обновить действующие docs/CHANGELOG и конкретные AST/import guards
+  для нового SDK-модуля, собственных моделей и единственного compatibility
+  import; записать отмену incidental legacy behavior в history. Версия
+  остаётся ещё не выпущенной 7.2.0; старые результаты B1–B7 не переписывать.
+- [x] GREEN targeted pytest, `make lint`, `make coverage`, `git diff --check`,
+  release/archive offline checks; overall/diff >=90% с включением нового
+  runtime-модуля без фиктивного staging. Полный coverage-прогон не дублировать
+  полным make test без новой причины. Зафиксировать реальные результаты;
+  все application/test/docs изменения B8 — один отдельный новый commit
+  после review, без amend/rebase прежних commits. Dependencies/locks,
+  E2E tests/workflows/evidence, live E2E, broker/network/prod и credentials
+  в B8 не входят; прежний E2E SHA не выдавать за приёмку будущего SHA.
+
+Результат B8 (10.11.2026): новый tinvest_account_overview выполняет только
+однократные read-only GetAccounts/GetPortfolio/FindInstrument через call_once.
+До вывода позиций каждого счёта загружены собственный PortfolioSnapshot,
+нужные InstrumentMatch и отдельный MoneyAmount | None. Успешные и отказавшие
+lookup кешируются по точному UID на весь обзор; currency/пустой UID не требуют
+lookup. Ошибка портфеля исключает частичный список и продолжает остальные
+счета; metadata failure сохраняет числа/доказанный total и отмечает UID.
+GetAccounts RequestError явно завершает недоступный обзор; programming/render
+errors не перехватываются. Полные incoming ошибки и DEBUG responses используют
+прежнюю диагностику без quota retry, FX, книг, GetPositions или order RPC.
+
+Публичные portfolio_entry/instrument_matches механически выделены из
+TInvestStrategyData и повторно используются обоими потребителями; торговые
+calls/checks/errors, кеши, Decimal-конверсия и call_api прежние. Reporting
+использует собственные PortfolioEntry/metadata; bond/OTHER выводят quantity
+и broker quote с явными quote units без денежной оценки. Broker portfolio total
+происходит только из total_amount_portfolio того же response, включая настоящий
+ноль. Отсутствующий/неверный total явно unavailable; exact_sum объединяет
+только одинаковые валюты. Любой недоступный счёт/total делает каждую известную
+валютную сумму incomplete subtotal с количеством недоступных счетов.
+
+Удалены autorepeater/legacy_display.py, test/test_legacy_display.py,
+DisplayPosition и старые проверки повторных raw reads/420 exact parity cases.
+reporting.postiton_to_string сохраняет сигнатуру и экспорт GetInstrumentException,
+локально делегирует position_to_string нового SDK-модуля; валидные money strings
+сохраняют регистр валюты/name(ticker), lookup требует единственный точный UID.
+Bond/unknown compatibility сохраняет raw fallback без конверсии и RPC.
+Runner.run вызывает независимый обзор, run_sync его не делает. Свежий выбранный
+торговый read проверен после отказа foreign/selected overview на реальном
+AutoRepeater: прежний fail-stop останавливает планирование до эффектов.
+Дополнительно обновлены необходимые старые Runner-ожидания в
+test/test_execution_diagnostics.py; это не изменение торгового поведения.
+Действующие README/contracts/development/execution-adapter/CHANGELOG и
+AST/import guards обновлены; H46 объясняет отменённый этап H44. Версия 7.2.0.
+
+TDD RED: новый overview test module сначала дал 1 collection error из-за
+отсутствующего SDK-модуля; исходные 21 contract cases затем расширены до 27.
+GREEN: expanded targeted adapter/display/Runner/architecture/FX/converter набор
+1060 passed; итоговый focused набор с реальными диагностическими Runner paths
+273 passed. Проверены strict autospec Services, точные calls/counts, bounded quota
+failure, UID success/failure cache, полный load до rendering, единственная
+конверсия исходных scalar components и стабильность собственных Decimal,
+broker total missing/invalid/zero/mixed currencies/partial/all failed/empty,
+metadata errors, full errors/DEBUG responses, compatibility и SDK/I/O-blocked
+форматирование. Первый полный coverage-прогон выявил два старых ожидания
+фатального GetAccounts failure (6536 passed, 2 failed); они приведены к B8,
+после чего application/test bytes заморожены для финальных проверок.
+
+Финальные проверки существующим worktree .venv, без установки пакетов:
+make lint GREEN (Pylint 10.00/10, Flake8 fatal/full 0, Mypy 29 files);
+COVERAGE_CORE=sysmon make coverage GREEN — 6540 passed, 18 штатных warnings,
+332.35s, overall 99.44% (10430 statements, 10372 covered, 58 missing).
+Штатный diff — 100% (148 lines, 0 missing). Отдельный combined tracked diff
+от origin/master плюс новый untracked runtime-модуль без staging через
+--diff-file=/tmp/pr56-b8-all-source.diff — 100% (221 lines, 0 missing),
+JSON /tmp/pr56-b8-all-source-coverage.json. tinvest_account_overview — 68/68,
+reporting — 183/183, tinvest_strategy_data — 156/156 statements.
+Пороги/source/omit не менялись; generated .coverage/coverage.xml сохранены.
+Отдельный полный make test не дублировал успешный coverage-прогон.
+Release/archive offline tests — 242 passed; они также входят в финальный полный
+прогон. Actual scripts.release_version check от полного SHA базы
+87775a3b485a6b993a66a83c0e9368c21bdbe0bb — Release 7.2.0: check OK.
+git diff --check GREEN. Логи проверок — /tmp/pr56-b8-*.log; offline guard
+/tmp/pr56-offline-site, корень репозитория не добавлялся в PYTHONPATH.
+
+Шесть отметок B8 подтверждают завершённые локальные работы и проверки.
+Отдельный новый B8 commit, review, push и CI окончательного SHA выполняет
+корневой агент после review; здесь они ещё не выполнены. HEAD остаётся d5fa302,
+index не изменялся, прежние commits и 42 отметки B1–B7 сохранены.
+Зависимости/locks/vendor, E2E tests/workflows/evidence, credentials, broker/network,
+live E2E и production не затрагивались; старый E2E SHA не является приёмкой B8.
