@@ -16,6 +16,8 @@
 и версия 7.2.0 прошли финальную offline-проверку. Подробные результаты —
 в блоках ниже и progress-task11-sdk-diagnostics.txt. До отдельного этапа review
 не создавать code commit/push. Live E2E, production и credentials не затрагиваются.
+10.11.2026 по дополнительному поручению владельца выполнен B7: только
+setuptools 84.1.0 и штатные производные lock/requirements; local checks GREEN.
 
 Исходные рекомендации Task 11 по ограничению SDK-текста заменены более поздним
 решением владельца. Не выполнять одновременно старый запрет SDK repr и
@@ -355,7 +357,8 @@ DTO и Metadata. Client/сеть в unit-тестах не создавать.
 Порог overall/diff >=90%, исключения/пороги не менять. Для нового Python файла
 проверить включение untracked diff по действующей инструкции без фиктивного
 staging. Generated-изменения штатных целей сохранять в рамках задачи,
-не откатывать destructive-командами. Зависимости/locks не обновляются.
+не откатывать destructive-командами. B1–B6 не обновляют зависимости/locks;
+отдельное поручение владельца на security-исправление описано в B7.
 
 План — контрольный список выполняемой реализации. Отмечать `[x]` только после
 фактического выполнения и тестов; новые существенные решения сначала
@@ -591,6 +594,79 @@ dependencies/locks/vendor, Make/thresholds/exclusions не менялись.
 git diff --check GREEN. B6 завершён; commit/stage/push, live E2E, broker RPC,
 production deployment и его приёмка не выполнялись. Следующий этап — review.
 
+### B7. Устранить уязвимость setuptools по поручению владельца
+
+**Files:** `vendor/inventory.json`, сгенерированные `runtime-lock.json`,
+`runtime-file-lock.json`, `requirements-runtime*.txt`, этот план и `CHANGELOG.md`.
+
+- [x] Зафиксировать поручение владельца от 10.11.2026 и узкую область
+  Dependabot alert #7 / GHSA-xmj3-9gf7-h52w: только setuptools 84.0.0 → 84.1.0.
+- [x] Обновить авторитетный reviewed seed `vendor/inventory.json` с проверенными
+  upstream source/license/wheel facts; штатным `make update-runtime-lock`
+  и `scripts.install_dependencies --write-file-lock` пересоздать производные файлы.
+- [x] Проверить официальный SHA-256 wheel, идемпотентность генерации и точное
+  сохранение всех остальных пакетов; проверить отсутствие старых setuptools pins
+  в generated requirements, включая `requirements-dev-tools.txt`.
+- [x] Выполнить проверенную установку в отдельное окружение этого worktree,
+  `make check-runtime-lock`, `make lint`, `make coverage`, package/archive smoke
+  и `git diff --check` без live E2E, broker RPC и production.
+
+Основание — дословное поручение владельца: «t2-task11 - учти в пр
+https://github.com/gorpsys/autorepeater/security/dependabot/7».
+Alert #7 сообщает low GHSA-xmj3-9gf7-h52w для setuptools >=38.2.2,<84.1.0;
+минимальное исправление — ровно 84.1.0. Новые зависимости, обновления других
+пакетов, изменение генератора и отдельное повышение версии приложения не нужны:
+исправление входит в ещё не выпущенную 7.2.0 этого PR.
+На исходном HEAD `requirements-dev-tools.txt` уже не содержит setuptools:
+это generated export dev tools; setuptools поступает через runtime pins.
+CI, итоговый SHA и состояние внешнего alert проверяются после local B7 отдельно.
+
+Результат B7: единственный изменённый reviewed seed — setuptools в
+`vendor/inventory.json`. Проверены официальный PyPI wheel 84.1.0, размер
+819380 и SHA-256 `5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9`;
+annotated tag `v84.1.0` разрешается в исходный commit
+`77b7ace0aaf660beeb9b3f9da4aabf21cbcf3fa9`. Проверены pyproject/setup/module
+и MIT LICENSE исходников; wheel содержит тот же LICENSE, его SHA-256 прежний
+`86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741`.
+Генераторы выполнили каждый по два раза: `make update-runtime-lock` и
+`python -m scripts.install_dependencies --write-file-lock`; результаты
+байтово идемпотентны. Производные requirements вручную не редактировались.
+Новый canonical lock SHA-256 —
+`b5425d67186601cd17b08892c65685f332bb69bbe1b42d756ac3b88de2f19b91`.
+
+Независимое структурное сравнение с HEAD до B7 подтвердило неизменность
+остальных 48 inventory entries, 23 runtime packages и 23 file-lock artifacts.
+File lock заменил только setuptools wheel record (343 файла) и digest lock;
+его штатная генерация также изменила JSON-отступ с 4 на 2 пробела. Этот output
+сохранён целиком. `requirements.txt`, `requirements-dev.txt` и
+`requirements-dev-tools.txt` байтово прежние; старых setuptools pins/artifacts
+в текущем inventory/runtime lock/runtime requirements нет. Добавлена короткая
+запись CHANGELOG 7.2.0 без нового повышения версии приложения.
+
+В новом `.venv` только этого worktree выполнен `make setup
+VENV_PYTHON=/usr/bin/python3.12`: CPython 3.12.3, setuptools 84.1.0,
+актуальный verified receipt. Старое c32-окружение служило только read-only
+bootstrap для генерации. Все network/package команды выполнялись с `env -i`,
+`PIP_CONFIG_FILE=/dev/null`, `PIP_KEYRING_PROVIDER=disabled`, `NETRC=/dev/null`,
+`PIP_CACHE_DIR=/tmp/pr56-b7-pip-cache`, `PYTHONNOUSERSITE=1` и отключёнными
+global/system Git config. После sandbox DNS failure метаданные PyPI получены
+разрешённым повтором вне sandbox. Offline checks дополнительно использовали
+guard `/tmp/pr56-offline-site` без добавления корня репозитория в PYTHONPATH.
+
+Проверки GREEN: `make check-runtime-lock`, `scripts.vendor_inventory`,
+`scripts.release_version check --base 87775a3b485a6b993a66a83c0e9368c21bdbe0bb`,
+`make lint` (Pylint 10.00/10, Flake8 0/0, Mypy 29 files),
+`COVERAGE_CORE=sysmon make coverage` — 6982 passed, 18 warnings (293.32s),
+overall 99.44% (10408 statements, 58 missing), diff 100% (185 lines).
+Пороги/source/omit и код приложения/проверок не менялись; новые тесты,
+повторяющие только номер версии, не добавлялись. Generated coverage outputs
+сохранены. `make check-cloud-package CLOUD_PACKAGE_SHA=6f73770c776de687d81299f22509972d0b4c3746`
+прошёл сетевой smoke обоих vendored/offline архивов с новым lock: status=ok.
+Это local smoke фактических dirty bytes, а не release-приёмка будущего SHA;
+release CI требует чистый окончательный commit. `git diff --check` GREEN.
+Отдельный полный `make test` не дублировал успешный coverage-прогон.
+Live E2E, broker RPC, deployment, commit/stage/push и изменение alert не выполнялись.
+
 ## Comprehensive review реализации — исправление итерации 1
 
 Quality/implementation/testing/smells: замечаний нет. Единственное замечание
@@ -634,7 +710,8 @@ Commit/push, live E2E, broker RPC, production и другие checkout не за
 Отдельная ветка реализации для issue #16 уже создана от указанного master.
 После review и итоговой проверки остаются один содержательный code/test/docs
 commit и push/PR по поручению владельца; промежуточные блоки не коммитятся.
-Зависимостей план не добавляет.
+Новых зависимостей план не добавляет; B7 обновляет только setuptools по
+отдельному security-поручению владельца.
 Не коммитить токены/сертификаты/логи с credentials. Исследовательский отчёт и
 случайные untracked материалы не добавлять автоматически. План не переносить
 в другой каталог без принятой в проекте причины.
