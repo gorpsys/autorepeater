@@ -294,7 +294,7 @@ def test_final_inventory_covers_all_profiles_and_snapshotted_bytes(
     config = project / 'autorepeater/configs/данные.json'
     config.write_bytes(b'\xef\xbb\xbf{ "bytes": "\xff" }\r\n')
     original = {p.relative_to(project).as_posix(): p.read_bytes()
-                for p in builder.archive_files(project)}
+                for p in inputs.archive_files(project)}
     selected = ports[2 if offline else 1 if vendored else 0]
     prepared = selected.return_value
 

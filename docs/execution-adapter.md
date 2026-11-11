@@ -522,14 +522,13 @@ failure reports that account unavailable and continues; GetAccounts RequestError
 reports overview unavailable. Programming and rendering errors propagate.
 
 Pure reporting consumes PortfolioSnapshot, a loaded InstrumentMatch mapping and
-MoneyAmount | None. Its sole SDK compatibility edge remains the local delegation
-from postiton_to_string(client, position) to position_to_string; the exported
-GetInstrumentException remains from display_data. Valid currency/share/ETF output
-keeps original currency case and name(ticker). Exact UID uniqueness is required;
-RequestError preserves identity, decimal_value and currency_code validate inputs.
-Bond/unknown compatibility alone may return str(position) without numeric reads/RPC.
-The incidental permissive legacy conversion, TypeError ordering, repeated raw reads
-and partial account display are retired (history H46); no DisplayPosition remains.
+MoneyAmount | None, without importing SDK adapters or accepting a client/raw SDK
+position. The former postiton_to_string/position_to_string compatibility chain and
+reporting exception re-export were removed after verifying they had no consumers
+(history H47). GetInstrumentException belongs to display_data and is used by the
+overview adapter's exact-UID metadata lookup. The incidental permissive legacy
+conversion, TypeError ordering, repeated raw reads and partial account display
+were retired earlier (history H46); no DisplayPosition remains.
 
 Only the same response.total_amount_portfolio converted via MoneyAmount.from_units_nano
 supplies the labelled broker portfolio total with its currency. Missing/invalid totals

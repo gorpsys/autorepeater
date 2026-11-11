@@ -14,6 +14,7 @@ from zipfile import ZipFile
 import pytest
 
 from scripts import build_yandex_archive as builder
+from scripts import cloud_archive_inputs as inputs
 from scripts import cloud_archive_manifest as inventory
 from scripts import cloud_build_tls, runtime_lock, sdk_wheel
 
@@ -92,7 +93,7 @@ def test_archive_files_and_bytes(project, monkeypatch, tmp_path):
     monkeypatch.setenv('COMPOSITE_CONFIG_DIR', str(tmp_path / 'external'))
     monkeypatch.setenv('ACCOUNT_CONFIG_PATH', str(tmp_path / 'external/external.json'))
     assert {path.relative_to(project).as_posix()
-            for path in builder.archive_files(project)} == EXPECTED
+            for path in inputs.archive_files(project)} == EXPECTED
     archive_path = builder.build_archive(project)
     assert archive_path == project / 'build/yandex-function.zip'
     with ZipFile(archive_path) as archive:

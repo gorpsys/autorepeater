@@ -191,13 +191,11 @@ Bond/OTHER показывают количество и явно broker quote б
 Для share/ETF/currency можно показывать money-per-piece estimate отдельно от total.
 
 Чистые formatter-функции не знают SDK, units/nano, клиента или reader-порта.
-Единственное исключение reporting — совместимый postiton_to_string(client, position),
-локально делегирующий position_to_string нового SDK-модуля; GetInstrumentException
-остаётся экспортом display_data. Lookup требует единственного точного UID;
-RequestError сохраняется тем же объектом, числа используют decimal_value,
-валюта — currency_code с сохранением исходного регистра в строке.
-Bond/unknown compatibility может вернуть str(position) без конверсии/RPC.
-Старые incidental TypeError/permissive acceptance/повторные reads отменены (H46).
+Reporting не импортирует SDK-адаптеры; чтение и конверсия ответов принадлежат
+tinvest_account_overview. Его lookup использует GetInstrumentException из
+display_data и требует единственного точного UID с пригодными name/ticker.
+Прежний SDK-shaped wrapper и его исключение из pure boundary удалены после
+проверки отсутствия потребителей ([H47](history.md#разработка-и-приёмка)).
 Обзор не передаёт снимки или кеш в AutoRepeater; ожидаемый отказ даже выбранного
 счёта не определяет допуск. Торговля независимо читает свежие данные и сохраняет
 fail-stop, permissions, budget и проверки до эффектов.

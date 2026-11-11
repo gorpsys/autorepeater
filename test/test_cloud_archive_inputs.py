@@ -132,7 +132,7 @@ def test_relative_root_and_allowlist(tree, tmp_path, monkeypatch):
     (tree / 'autorepeater/ignored.txt').symlink_to(tmp_path / 'absent')
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv('INDEX_CONFIG_DIR', str(tmp_path / 'unrelated'))
-    assert {p.relative_to(tree).as_posix() for p in builder.archive_files(Path('project'))} == {
+    assert {p.relative_to(tree).as_posix() for p in inputs.archive_files(Path('project'))} == {
         'main.py', 'handler.py', 'requirements.txt', 'requirements-runtime.txt',
         'autorepeater/module.py', 'autorepeater/configs/deep/config.json'}
     assert checker.application_files(Path('project')) == {
@@ -157,7 +157,7 @@ def test_lexical_parent_is_rejected(tree, monkeypatch):
     """Normalization must not erase a forbidden parent component."""
     monkeypatch.chdir(tree.parent)
     with pytest.raises(ValueError, match='^unsafe application'):
-        builder.archive_files(Path('project') / '..' / 'project')
+        inputs.archive_files(Path('project') / '..' / 'project')
 
 
 @pytest.mark.parametrize('name', ['main.py', 'autorepeater/configs/deep'])
