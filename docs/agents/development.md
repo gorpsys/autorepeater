@@ -129,8 +129,8 @@ manifest checker не сертифицирует. Read-only check-cloud-archive 
 [инструкции сборки](../../scripts/README.md#сборка-облачного-архива).
 
 Все деньги/количества Decimal, форматирование без экспоненты, целые с .0,
-nano до 9 знаков. Сохранять публичный reporting.postiton_to_string(client, position)
-как единственный compatibility wrapper и reporting.GetInstrumentException.
+nano до 9 знаков. Reporting не импортирует SDK-адаптеры и не принимает клиента
+или raw SDK-позиции; исключений для прежнего compatibility wrapper нет.
 Чистый display получает PortfolioSnapshot, mapping InstrumentMatch и MoneyAmount | None;
 SDK reads/conversion остаются в tinvest_account_overview, общий portfolio_entry/
 instrument_matches используется и TInvestStrategyData. Отменённые legacy parity tests
@@ -138,7 +138,9 @@ instrument_matches используется и TInvestStrategyData. Отменё
 продолжение отказов каждого счёта и независимость свежих trading reads до эффектов.
 Total только из broker MoneyValue; тестировать отсутствие/повреждение/ноль,
 валютные группы и incomplete subtotal, без суммы котировок и FX reads.
-Проверять чистые formatter с заблокированными SDK/I/O и точный compatibility import.
+Проверять чистые formatter с заблокированными SDK/I/O и отсутствие импортов
+адаптеров, включая локальные импорты внутри функций. GetInstrumentException
+принадлежит display_data и используется lookup адаптера обзора.
 Public tinvest_values.decimal_value сохраняет strategy/execution конверсию;
 строгий MoneyAmount не заменять этим helper. Новые runtime-файлы включать в
 --diff-file без staging при проверке незакоммиченного diff.

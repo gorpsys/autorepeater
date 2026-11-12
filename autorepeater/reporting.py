@@ -13,7 +13,6 @@ from autorepeater.logging_config import logger
 from autorepeater.market_diagnostics import safe_symbol
 from autorepeater.money import format_decimal
 from autorepeater.display_data import DisplayAccount
-from autorepeater.display_data import GetInstrumentException
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_data import (
     InstrumentInfo, InstrumentMatch, InstrumentType, PortfolioEntry, PortfolioSnapshot,
@@ -27,10 +26,6 @@ if TYPE_CHECKING:
     from autorepeater.order_plan import OrderPlan
 
 KeyT = TypeVar('KeyT')
-
-# The exception remains part of the historical public compatibility boundary.
-__all__ = ['GetInstrumentException', 'postiton_to_string']
-
 
 NANO_QUANT = Decimal('0.000000001')
 
@@ -68,14 +63,6 @@ def print_index_selection_warning(ticker: str, chosen: InstrumentInfo,
                    'selected first uid=%s class_code=%s; candidates: %s',
                    safe_symbol(ticker, limit=32), safe_symbol(chosen.uid),
                    safe_symbol(chosen.class_code, limit=16), details)
-
-
-def postiton_to_string(client, position) -> str:
-    """Compatibility boundary for the historical SDK-shaped public call."""
-    # Intentional local compatibility edge; the adapter uses the pure formatters above.
-    # pylint: disable=import-outside-toplevel,cyclic-import
-    from autorepeater.tinvest_account_overview import position_to_string
-    return position_to_string(client, position)
 
 
 def display_instrument_label(name: str, ticker: str) -> str:

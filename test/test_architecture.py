@@ -80,24 +80,11 @@ def forbidden_imports(source, module):
     violations = []
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        if module == 'autorepeater.reporting' and compatibility_import(tree, node):
-            continue
         for dependency in import_dependencies(node, module):
             if any(dependency == banned or dependency.startswith(banned + '.')
                    for banned in forbidden):
                 violations.append((node.lineno, dependency))
     return sorted(violations)
-
-
-def compatibility_import(tree, node):
-    """Permit one exact local delegation edge, never the wrapper's other dependencies."""
-    return (isinstance(node, ast.ImportFrom) and node.level == 0
-            and node.module == 'autorepeater.tinvest_account_overview'
-            and [(alias.name, alias.asname) for alias in node.names] == [
-                ('position_to_string', None)]
-            and any(isinstance(function, ast.FunctionDef)
-                    and function.name == 'postiton_to_string' and node in function.body
-                    for function in tree.body))
 
 
 def private_adapter_dependencies(source, module):
@@ -158,9 +145,6 @@ def pure_boundary_violations(source, module):
     tree = ast.parse(source)
     violations = []
     for statement in tree.body:
-        if (name == 'reporting' and isinstance(statement, ast.FunctionDef)
-                and statement.name == 'postiton_to_string'):
-            continue
         for node in ast.walk(statement):
             for dependency in import_dependencies(node, module):
                 if dependency.split('.')[0] in IO_MODULES:
@@ -332,6 +316,9 @@ def test_display_components_cannot_import_adapter_components(module, dependency)
 
 @pytest.mark.parametrize('source', [
     'from autorepeater.tinvest_account_overview import position_to_string',
+    'def postiton_to_string(client, position):\n'
+    '    from autorepeater.tinvest_account_overview import position_to_string\n'
+    '    return position_to_string(client, position)',
     'def display_position_to_string(position):\n'
     '    from autorepeater.tinvest_account_overview import position_to_string',
     'def print_strategy_position(position):\n'
@@ -347,18 +334,13 @@ def test_display_components_cannot_import_adapter_components(module, dependency)
     'def postiton_to_string(client, position):\n'
     '    import grpc',
 ])
-def test_only_exact_local_compatibility_import_is_allowed(source):
-    """Compatibility grants neither other imports nor another renderer access to the SDK."""
+def test_reporting_rejects_adapter_imports_including_former_compatibility(source):
+    """Even a renderer with the former public name cannot depend on an SDK adapter."""
     assert len(forbidden_imports(source, 'autorepeater.reporting')) == 1
 
 
-def test_exact_compatibility_edge_and_adapter_edges_are_allowed():
-    """The wrapper delegates to the adapter, which can use SDK diagnostics and own DTOs."""
-    assert forbidden_imports(
-        'def postiton_to_string(client, position):\n'
-        '    from autorepeater.tinvest_account_overview import position_to_string\n'
-        '    return position_to_string(client, position)',
-        'autorepeater.reporting') == []
+def test_adapter_edges_to_sdk_diagnostics_and_pure_formatters_are_allowed():
+    """The read adapter can use SDK diagnostics and loaded-value presentation."""
     for module, source in [
             ('tinvest_account_overview', 'from t_tech.invest.services import Services'),
             ('tinvest_account_overview', 'from .reporting import display_position_to_string'),
@@ -403,6 +385,9 @@ def test_private_interadapter_dependencies_are_rejected(module, source):
     ('reporting', 'def print_display_account_footer(total):\n    Path("x").read_text()'),
     ('reporting', 'def display_instrument_label(name, ticker):\n    get_instrument(name)'),
     ('reporting', 'def another_renderer(client):\n    return client.find_instrument(query="x")'),
+    ('reporting', 'def postiton_to_string(client, position):\n'
+     '    return client.find_instrument(query=position.instrument_uid)'),
+    ('reporting', 'def postiton_to_string(position):\n    return position.quantity.units'),
     ('reporting', 'def display_instrument_label(client, ticker):\n    return ticker'),
     ('tinvest_values', 'import socket'),
     ('tinvest_values', 'def decimal_value(value, context):\n    open(context)'),

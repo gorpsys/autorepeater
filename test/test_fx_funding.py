@@ -123,15 +123,68 @@ def test_exact_fx_capacity_correction_preserves_other_owners(monkeypatch):
                         (1,): {'rub': D(0), 'cny': D(1)}}
 
 
-@pytest.mark.parametrize('amount', ['60.5', '69', '80'])
+@pytest.mark.parametrize('amount', ['60.499999999', '60.5', '69', '80'])
 def test_existing_currency_including_lot_surplus_pays_fees_without_restock(amount):
     """Enough principal+fee needs no FX even below the nominal reserve share."""
     inputs = FundingInputs(fees={'C': {'cny': D('.5')}})
     result = funding(cash={'cny': D(amount)}, own=rules('C', currency='cny'), inputs=inputs).funding
     assert not result.exchanges
+    if D(amount) < D('60.5'):
+        assert result.demands and not result.purchases
+        assert result.projected_cash == result.cash
+        return
     assert result.purchases[0].executable_now
     assert result.security_debits.amount((), 'cny') == D('60.5')
     assert result.projected_cash.amount((), 'cny') == D(amount) - D('60.5')
+
+
+@pytest.mark.parametrize('field', ['native_prices', 'fees', 'fx_fees'])
+def test_funding_inputs_reject_negative_prices_and_fees(field):
+    """Signed money cannot enter purchase or exchange funding as a cost."""
+    value = (MoneyAmount('cny', D('-0.000000001')) if field == 'native_prices'
+             else {'cny': D('-0.000000001')})
+    with pytest.raises(ValueError):
+        FundingInputs(**{field: {'C': value}})
+
+
+def test_reserve_shortage_without_purchase_demand_does_not_start_fx():
+    """An achieved target does not authorize an exchange just to refill its reserve."""
+    snapshot = replace(destination({'C': D(1)}), available_cash={}, fx_snapshot=market())
+    result = build_order_plan(
+        leaf(target={'C': D(1)}, budget='1000', floor='100'), snapshot,
+        {(): {'C': D(1)}}, {'C': D(720)}, rules('C', currency='cny'),
+        funding=FundingInputs(native_prices={'C': MoneyAmount('cny', D(60))},
+                              fx_rules=rules('cny-rub'))).funding
+    assert not result.demands and not result.purchases and not result.exchanges
+    assert result.projected_cash == result.cash
+
+
+@pytest.mark.parametrize('side', ['BUY', 'SELL'])
+@pytest.mark.parametrize('flag', ['api_trade_available', 'buy_available', 'sell_available'])
+def test_fx_metadata_permissions_constrain_only_the_requested_funding_direction(side, flag):
+    """Closed metadata blocks funding; opposite-side denial grants no extra restriction."""
+    fx = market()
+    book = fx.quotes['cny']
+    closed = replace(book, pair=replace(book.pair, **{flag: False}))
+    fx = FxSnapshot({'cny': closed}, NOW)
+    assert fx.rate('cny') == D(12)
+    uid, currency, price = ('C', 'cny', D(720)) if side == 'BUY' else ('R', 'rub', D(450))
+    cash = {'rub': D(1000)} if side == 'BUY' else {'cny': D(100)}
+    snapshot = replace(destination(), available_cash=cash, fx_snapshot=fx)
+    result = build_order_plan(
+        leaf(target={uid: D(1)}, budget='1200', floor='100'), snapshot, {(): {}},
+        {uid: price}, rules(uid, currency=currency, buy=0), funding=FundingInputs(
+            native_prices={uid: MoneyAmount(currency, price / fx.rate(currency))},
+            fx_rules=rules('cny-rub'))).funding
+    assert result.demands
+    blocked = flag in ('api_trade_available', side.lower() + '_available')
+    if blocked:
+        assert not result.purchases and not result.exchanges
+        assert result.projected_cash == result.cash
+    else:
+        exchange, = result.exchanges
+        assert exchange.side == side
+        assert result.purchases and not result.purchases[0].executable_now
 
 
 @pytest.mark.parametrize('existing,lots', [('0', 7), ('8.5', 6), ('60', 1)])

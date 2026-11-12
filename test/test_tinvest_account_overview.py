@@ -134,10 +134,14 @@ def test_account_failure_is_bounded_atomic_and_continues(client, caplog, failure
         assert record.exc_info[1] is failure and record.sdk_details == failure.details
 
 
-def test_bad_position_discards_account_before_metadata_or_rendering(client, caplog):
+@pytest.mark.parametrize('invalid', ['quantity', 'currency'])
+def test_bad_position_discards_account_before_metadata_or_rendering(client, caplog, invalid):
     """A malformed later position cannot leave a misleading partial account."""
     bad = position()
-    bad.quantity = SimpleNamespace(units=True, nano=0)
+    if invalid == 'quantity':
+        bad.quantity = SimpleNamespace(units=True, nano=0)
+    else:
+        bad.current_price.currency = ''
     client.operations.get_portfolio.side_effect = [response(position(), bad), response()]
     with caplog.at_level(logging.INFO, logger='tinkoffBot'):
         overview.print_all_portfolio(client)
@@ -205,35 +209,22 @@ def test_programming_and_render_errors_escape(client):
             overview.print_all_portfolio(client)
 
 
-def test_compatibility_exact_uid_numbers_currency_error_and_raw_fallback(client):
-    """The public typo, exception identity and useful strings survive without legacy rules."""
-    assert reporting.GetInstrumentException is GetInstrumentException
-    signature = inspect.signature(reporting.postiton_to_string)
-    assert tuple(signature.parameters) == ('client', 'position')
+def test_get_instrument_uses_exact_uid_and_preserves_lookup_failures(client):
+    """An unrelated first search hit cannot replace the exact loaded metadata."""
     client.instruments.find_instrument.return_value.instruments.insert(
         0, InstrumentShort(uid='wrong'))
-    assert reporting.postiton_to_string(client, position()) == \
-        'Company(TICK) - 2.000000001 - rUb - 198.000000099'
+    match = overview.get_instrument(client, 'uid')
+    assert (match.uid, match.name, match.ticker) == ('uid', 'Company', 'TICK')
+    assert client.mock_calls == [call.instruments.find_instrument(query='uid')]
     client.instruments.find_instrument.return_value = FindInstrumentResponse(instruments=[])
     with pytest.raises(GetInstrumentException):
-        reporting.postiton_to_string(client, position())
+        overview.get_instrument(client, 'uid')
     failure = RequestError(StatusCode.UNAVAILABLE, 'original', ())
     client.instruments.find_instrument.side_effect = failure
     with pytest.raises(RequestError) as raised:
-        reporting.postiton_to_string(client, position())
+        overview.get_instrument(client, 'uid')
     assert raised.value is failure
-    bad = position('currency')
-    bad.quantity = SimpleNamespace(units=True, nano=0)
-    with pytest.raises(ValueError, match='quantity.units is invalid'):
-        reporting.postiton_to_string(client, bad)
-    bad.quantity = Quotation(1, 0)
-    bad.current_price.currency = ''
-    with pytest.raises(ValueError, match='invalid monetary currency'):
-        reporting.postiton_to_string(client, bad)
-    fallback = PortfolioPosition(instrument_type='bond')
-    client.reset_mock()
-    assert reporting.postiton_to_string(client, fallback) == str(fallback)
-    assert not client.mock_calls
+    assert client.mock_calls == [call.instruments.find_instrument(query='uid')] * 3
 
 
 @pytest.mark.parametrize('failed_account', ['foreign', 'selected'])

@@ -1,5 +1,5 @@
 """Bounded, read-only account overview independent of the trading snapshot."""
-from t_tech.invest import PortfolioPosition, RequestError
+from t_tech.invest import RequestError
 from t_tech.invest.services import Services
 
 from autorepeater import reporting
@@ -21,17 +21,6 @@ def get_instrument(client: Services, uid: str) -> InstrumentMatch:
     if not all(isinstance(value, str) and value for value in (match.name, match.ticker)):
         raise GetInstrumentException('instrument metadata unavailable')
     return match
-
-
-def position_to_string(client: Services, position: PortfolioPosition) -> str:
-    """Narrow public compatibility helper; unsupported types retain their raw fallback."""
-    if position.instrument_type not in ('currency', 'share', 'etf'):
-        return str(position)
-    entry = portfolio_entry(position)
-    currency_code(entry.currency)
-    metadata = ({} if entry.instrument_type == InstrumentType.CURRENCY else
-                {entry.uid: get_instrument(client, entry.uid)})
-    return reporting.display_position_to_string(entry, metadata)
 
 
 def _metadata(client: Services, snapshot: PortfolioSnapshot,

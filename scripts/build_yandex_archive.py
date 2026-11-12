@@ -21,11 +21,6 @@ if TYPE_CHECKING:
     from scripts.sdk_wheel import ValidatedWheel
 
 
-def archive_files(project_root: str | Path) -> list[Path]:
-    """Select only application roots, flat Python modules and nonhidden JSON."""
-    return inputs.archive_files(project_root)
-
-
 def _vendored_entries(root: Path, requirements: bytes) -> dict[str, bytes]:
     """Prepare locked requirements and owned SDK bytes before touching the output."""
     from scripts import runtime_lock, sdk_wheel  # pylint: disable=import-outside-toplevel

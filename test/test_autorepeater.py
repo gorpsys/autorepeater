@@ -127,39 +127,9 @@ class TestException(Exception):
 def test_money_to_string(currency, units, nano, expected):
     """money to string"""
     money = MoneyValue(currency=currency, units=units, nano=nano)
-    result = reporting.postiton_to_string(None, PortfolioPosition(
-        instrument_type='currency', current_price=money, quantity=Quotation(1, 0)))
-
-    assert result == expected
-
-
-@pytest.mark.parametrize(
-    'currency, units, nano, expected',
-    [
-        ('RUB', 1, 500000000, 'blocked RUB - 1.5'),
-        ('RUB', -1, -500000000, 'blocked RUB - -1.5'),
-        ('RUB', 0, 0, 'blocked RUB - 0.0'),
-        # Максимальное значение nano
-        ('USD', 0, 999999999, 'blocked USD - 0.999999999'),
-        # Добавляем .0 для целого числа
-        ('EUR', 999999999, 0, 'blocked EUR - 999999999.0'),
-        ('RUB', 0, 1, 'blocked RUB - 0.000000001'),  # Минимальное значение nano
-    ],
-    ids=[
-        'positive_blocked',
-        'negative_blocked',
-        'zero_blocked',
-        'max_nano_blocked',
-        'max_units_blocked',
-        'min_nano_blocked'
-    ]
-)
-def test_blocked_to_string(currency, units, nano, expected):
-    """blocked money to string"""
-    money = MoneyValue(currency=currency, units=units, nano=nano)
-    result = 'blocked ' + reporting.postiton_to_string(
-        None, PortfolioPosition(instrument_type='currency', current_price=money,
-                                quantity=Quotation(1, 0)))
+    position = PortfolioPosition(
+        instrument_type='currency', current_price=money, quantity=Quotation(1, 0))
+    result = reporting.display_position_to_string(portfolio_entry(position), {})
 
     assert result == expected
 
@@ -386,27 +356,18 @@ def test_account_strategy_uses_own_data_port_and_models(caplog):
     ]
 
 
-@pytest.mark.parametrize('instrument_type', ['share', 'etf', 'currency', 'bond'])
-def test_strategy_position_output_matches_sdk_path(client, instrument_type):
-    """Own models preserve formatted values and the display query sequence."""
-    position = PortfolioPosition(
-        instrument_uid='1', instrument_type=instrument_type,
-        current_price=MoneyValue('RUB', 3, 1), quantity=Quotation(-2, -1))
-    client.operations.get_portfolio.side_effect = [PortfolioResponse(positions=[position])]
-    data = TInvestStrategyData(client)
-    entry = data.get_portfolio('4').positions[0]
-    client.reset_mock()
+@pytest.mark.parametrize('instrument_type, expected', [
+    (InstrumentType.SHARE, '1 - -2.000000001 - RUB - -6.000000005'),
+    (InstrumentType.ETF, '1 - -2.000000001 - RUB - -6.000000005'),
+    (InstrumentType.CURRENCY, 'RUB - -6.000000005'),
+    (InstrumentType.BOND, 'bond diagnostic'),
+])
+def test_strategy_position_output_keeps_negative_nano_values(instrument_type, expected):
+    """Loaded strategy values use exact decimal formatting and diagnostics."""
+    entry = PortfolioEntry('1', instrument_type, 'RUB', Decimal('3.000000001'),
+                           Decimal('-2.000000001'), 'bond diagnostic')
 
-    expected = reporting.postiton_to_string(client, position)
-    sdk_calls = client.mock_calls[:]
-    client.reset_mock()
-
-    rendered = reporting.strategy_position_to_string(entry)
-    assert rendered == (expected.replace('share1(SHR)', '1')
-                        if instrument_type in ('share', 'etf') else expected)
-    assert client.mock_calls == []
-    assert sdk_calls == ([call.instruments.find_instrument(query='1')]
-                         if instrument_type in ('share', 'etf') else [])
+    assert reporting.strategy_position_to_string(entry) == expected
 
 
 @pytest.mark.parametrize('count', [0, 2])
@@ -673,24 +634,25 @@ def test_set_debug(auto_repeater):
         'negative_values'
     ]
 )
-def test_postiton_to_string(
-        client,
+def test_loaded_display_position_to_string(
         instrument_type,
         price,
         quantity,
         uid,
         expected):
-    """test_postiton_to_string"""
+    """Loaded display positions preserve tiny products and large exact amounts."""
     position = PortfolioPosition(
         instrument_type=instrument_type,
         current_price=price,
         quantity=quantity,
         instrument_uid=uid,
     )
-    result = reporting.postiton_to_string(client, position)
+    metadata = {
+        '1': InstrumentMatch('1', 'SHR', 'share1', InstrumentType.SHARE, ''),
+        '2': InstrumentMatch('2', 'ETF', 'etf2', InstrumentType.ETF, ''),
+    }
+    result = reporting.display_position_to_string(portfolio_entry(position), metadata)
     assert result == expected
-    assert client.mock_calls == ([call.instruments.find_instrument(query=uid)]
-                                 if instrument_type in ['share', 'etf'] else [])
 
 
 def test_account_strategy_basic_target(client):
@@ -1278,31 +1240,6 @@ def test_account_strategy_event_predicate(client, position, expected, caplog):
     assert caplog.records == []
 
 
-@pytest.fixture(name='rotation_portfolios')
-def rotation_portfolios_fixture(client):
-    """Equal-value portfolios require selling 100 shares before buying 50 ETFs."""
-    src_positions = {'2': PortfolioPosition(
-        instrument_type='etf', instrument_uid='2',
-        current_price=MoneyValue(currency='RUB', units=2, nano=0),
-        quantity=Quotation(units=50, nano=0))}
-    dst_positions = {'1': PortfolioPosition(
-        instrument_type='share', instrument_uid='1',
-        current_price=MoneyValue(currency='RUB', units=1, nano=0),
-        quantity=Quotation(units=100, nano=0))}
-    client.operations.get_portfolio.side_effect = [
-        PortfolioResponse(positions=list(src_positions.values())),
-        PortfolioResponse(positions=list(dst_positions.values())),
-    ]
-    return src_positions, dst_positions
-
-
-def test_position_unknown_type(client):
-    """Unknown instrument types retain the SDK's string representation."""
-    position = PortfolioPosition(instrument_type='unknown')
-    assert reporting.postiton_to_string(client, position) == str(position)
-    assert client.mock_calls == []
-
-
 def test_skipped_event_reporting_uses_only_strategy_diagnostics(caplog):
     """Skipped events keep DTO diagnostics without the obsolete raw-event API."""
     event = PositionEvent(False, '', (), (), 'skipped event diagnostic')
@@ -1372,36 +1309,6 @@ def invest_environment_fixture(monkeypatch):
                  'COMPOSITE_CONFIG_DIR', 'ALGORITM'):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
-
-
-@pytest.fixture(name='named_strategy_factory')
-def named_strategy_factory_fixture(client, target_strategy, monkeypatch):
-    """Register a source with no account ID or source positions; SDK access is destination-only."""
-    target_strategy.build_target.return_value = TargetPortfolio(
-        {'1': Decimal('2'), '2': Decimal('3')},
-        {'1': Decimal('5'), '2': Decimal('10')})
-    target_strategy.should_rebalance.side_effect = [False, True, False]
-    factory = Mock(return_value=target_strategy)
-    monkeypatch.setitem(strategies.ALGORITHMS, 'TEST',
-                        AlgorithmDefinition(lambda src, context: src, factory))
-    portfolios = {'5': PortfolioResponse(positions=[
-        PortfolioPosition(
-            instrument_type='share', instrument_uid='1',
-            current_price=MoneyValue(currency='RUB', units=4, nano=0),
-            quantity=Quotation(units=5, nano=0)),
-        PortfolioPosition(
-            instrument_type='currency', instrument_uid='cash',
-            current_price=MoneyValue(currency='RUB', units=1, nano=0),
-            quantity=Quotation(units=80, nano=0)),
-    ])}
-    client.operations.get_portfolio.side_effect = lambda **kwargs: portfolios[kwargs['account_id']]
-    client.users.get_accounts.return_value = GetAccountsResponse(accounts=[])
-    client.operations_stream.positions_stream.side_effect = [
-        iter([PositionsStreamResponse(position=None), PositionsStreamResponse(position=PositionData(
-            account_id='5', securities=[], money=[])), PositionsStreamResponse(position=None)]),
-        TestException(),
-    ]
-    return factory
 
 
 @pytest.mark.parametrize('has_token', [False, True])
@@ -2225,52 +2132,6 @@ def test_index_event_predicate(client, index_sdk_config, position, expected, cap
         assert strategy.should_rebalance(event, '5') is expected
     assert client.mock_calls == []
     assert caplog.records == []
-
-
-@pytest.fixture(name='index_launch')
-def fixture_index_launch(client, tmp_path, index_config_data, invest_environment):
-    """Real index launches use a single affordable share and a destination to rotate."""
-    path = write_index_config(tmp_path, index_config_data)
-    invest_environment.setenv('IMOEX_CONFIG_PATH', str(path))
-    invest_environment.setenv('INVEST_TOKEN', 'test-token')
-    invest_environment.setenv('SRC_ACCOUNT', 'IMOEX')
-    invest_environment.setenv('ALGORITM', 'INDEX')
-    invest_environment.setenv('DST_ACCOUNT', '5')
-    invest_environment.setattr(
-        sys, 'argv', ['main.py', '--algoritm', 'INDEX', '-s', 'IMOEX', '-d', '5'])
-    found = {
-        'AFKS': FindInstrumentResponse(instruments=[
-            InstrumentShort(ticker='AFKS', uid='2', instrument_type='share', class_code='TQBR')]),
-        '1': FindInstrumentResponse(instruments=[InstrumentShort(ticker='OLD', name='old share')]),
-    }
-    client.instruments.find_instrument.side_effect = lambda **kwargs: found[kwargs['query']]
-    instruments = {
-        uid: InstrumentResponse(instrument=Instrument(
-            uid=uid, ticker=ticker, instrument_type='share', class_code='TQBR',
-            name=ticker, lot=1, currency='rub', api_trade_available_flag=True,
-            trading_status=SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING))
-        for uid, ticker in [('1', 'OLD'), ('2', 'AFKS')]
-    }
-    client.instruments.get_instrument_by.side_effect = lambda **kwargs: instruments[kwargs['id']]
-    client.market_data.get_last_prices.return_value = GetLastPricesResponse(last_prices=[
-        LastPrice(instrument_uid='2', price=Quotation(units=9, nano=0))])
-    client.operations.get_portfolio.side_effect = None
-    client.operations.get_portfolio.return_value = PortfolioResponse(positions=[
-        PortfolioPosition(instrument_type='share', instrument_uid='1',
-                          quantity=Quotation(units=5, nano=0),
-                          current_price=MoneyValue('RUB', 4, 0)),
-        PortfolioPosition(instrument_type='currency', instrument_uid='cash',
-                          quantity=Quotation(units=80, nano=0),
-                          current_price=MoneyValue('RUB', 1, 0)),
-    ])
-    client.users.get_accounts.return_value = GetAccountsResponse(accounts=[])
-    client.operations_stream.positions_stream.side_effect = [iter([
-        PositionsStreamResponse(position=None),
-        PositionsStreamResponse(position=PositionData(
-            account_id='5', money=[],
-            securities=[PositionsSecurities(instrument_uid='1', blocked=0)])),
-    ]), TestException()]
-    return invest_environment
 
 
 def test_index_config_success(tmp_path, index_config_data):
