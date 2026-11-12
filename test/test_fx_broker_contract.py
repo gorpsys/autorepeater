@@ -13,7 +13,7 @@ from t_tech.invest import (
 from t_tech.invest.services import OrdersService
 
 from autorepeater.cash_facts import (
-    CashBound, FeeInclusion, MoneyAmount, OrderAmounts, PurchaseCashNeed,
+    CashBound, FeeInclusion, MoneyAmount, OrderAmounts,
     SecurityQuote, SecurityQuoteUnit, order_cash_bound,
 )
 from autorepeater.execution import ExecutionReceipt
@@ -199,8 +199,11 @@ def test_only_well_formed_direct_rub_pairs_are_usable(changes):
     ('SELL', True, '0', '1999.999999999', {}, False),
     ('SELL', True, '0', '2000', {'sell_max_lots': 1}, False),
     ('BUY', False, '24200', '0', {}, False),
+    ('SELL', False, '0', '2000', {}, False),
     ('BUY', True, '24200', '0', {'api_trade_available': False}, False),
+    ('SELL', True, '0', '2000', {'api_trade_available': False}, False),
     ('BUY', True, '24200', '0', {'bestprice_order_available': False}, False),
+    ('SELL', True, '0', '2000', {'bestprice_order_available': False}, False),
     ('BUY', True, '24200', '0', {'currency': 'cny'}, False),
     ('BUY', True, '24200', '0', {'lot': 1}, False),
 ])
@@ -211,29 +214,6 @@ def test_fx_side_readiness_and_own_caps_are_required(side, ready, cash, base, ch
     rule = replace(TradeRules(1000, 'rub', True, True, Decimal('24200'), 2, 2), **changes)
     assert fx_quote().can_trade(side, 2, rule, {'rub': Decimal(cash), 'cny': Decimal(base)},
                                 ready=ready) is expected
-
-
-def test_purchase_fee_can_use_reserve_without_requiring_its_refill():
-    """The pure purchase predicate does not demand a second reserved cash balance."""
-    # Leaf budget=1000, target securities=900, reserve=100: no extra fee percentage.
-    need = PurchaseCashNeed(money('900'), money('5'))
-    assert need.debit_upper == money('905')
-    assert not need.requires_exchange(money('1000'))
-    # Even below the original target reserve, a purchase including its fee fits.
-    assert not need.requires_exchange(money('905'))
-    assert need.requires_exchange(money('904.999999999'))
-    # A reserve shortage alone never starts FX when no security purchase exists.
-    assert not PurchaseCashNeed(money('0'), money('0')).requires_exchange(money('0'))
-
-
-@pytest.mark.parametrize('changes', [
-    {'purchase': money('-1')}, {'fee_upper': money('-1')},
-    {'fee_upper': money('1', 'rub')},
-])
-def test_purchase_need_rejects_invalid_or_cross_currency_fields(changes):
-    """A fee is spendable only in the matching monetary dimension."""
-    with pytest.raises(ValueError):
-        replace(PurchaseCashNeed(money('900'), money('5')), **changes)
 
 
 @pytest.mark.parametrize('side', ['BUY', 'SELL'])
@@ -305,5 +285,3 @@ def test_invalid_side_and_money_quote_aci_are_rejected():
     with pytest.raises(ValueError):
         SecurityQuote('cny', Decimal(100), Decimal(102), SecurityQuoteUnit.MONEY_PER_PIECE,
                       accrued_interest=money('1')).estimate_per_piece()
-    with pytest.raises(ValueError):
-        PurchaseCashNeed(money('900'), money('5')).requires_exchange(money('1000', 'rub'))

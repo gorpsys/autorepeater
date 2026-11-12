@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from typing import Protocol
 
 from autorepeater.cash_facts import MoneyAmount, currency_code
-from autorepeater.execution_data import ExecutionSnapshot, TradeRules
+from autorepeater.execution_data import TradeRules
 from autorepeater.strategy_plan import exact_product, exact_sum, finite_decimal
 
 ORDER_BOOK_MAX_AGE_SECONDS = 180
@@ -149,17 +149,6 @@ class FxQuote:
             raise ValueError('FX receipt timestamp is in the future')
         if now - self.market_time > timedelta(seconds=ORDER_BOOK_MAX_AGE_SECONDS):
             raise ValueError('stale FX order book')
-
-    def can_trade(self, side: str, lots: int, rules: TradeRules,
-                  state: ExecutionSnapshot, *, now: datetime) -> bool:
-        """Fresh caller-scoped broker facts only, without reserve or calendar inference."""
-        self.validate_fresh(now)
-        if side not in ('BUY', 'SELL'):
-            raise ValueError('invalid FX side')
-        permission = self.pair.buy_available if side == 'BUY' else self.pair.sell_available
-        return (self.pair.api_trade_available and permission
-                and self.lot_quote.can_trade(side, lots, rules, state.available_cash,
-                                             ready=state.limits_ready))
 
 
 class FxData(Protocol):

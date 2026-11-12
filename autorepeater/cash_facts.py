@@ -133,27 +133,3 @@ def order_cash_bound(receipt: ExecutionReceipt, fields: OrderAmounts) -> CashBou
         adjustment = adjustment.copy_negate()
     bound = max(Decimal(0), exact_sum((total.amount, adjustment)))
     return CashBound(fields.order_id, fields.side, MoneyAmount(total.currency, bound))
-
-
-@dataclass(frozen=True, slots=True)
-class PurchaseCashNeed:
-    """A purchase plus its fee bound; reserve shortage alone is not a purchase."""
-    purchase: MoneyAmount
-    fee_upper: MoneyAmount
-
-    def __post_init__(self) -> None:
-        if (not isinstance(self.purchase, MoneyAmount) or self.purchase.amount < 0
-                or not _native_nonnegative(self.fee_upper, self.purchase.currency)):
-            raise ValueError('purchase and fee require nonnegative same-currency money')
-
-    @property
-    def debit_upper(self) -> MoneyAmount:
-        """Fees consume available owner money, including their existing reserve."""
-        amount = exact_sum((self.purchase.amount, self.fee_upper.amount))
-        return MoneyAmount(self.purchase.currency, amount)
-
-    def requires_exchange(self, available: MoneyAmount) -> bool:
-        """Only insufficient purchase funding can justify FX; this grants no rights."""
-        if not _native_nonnegative(available, self.purchase.currency):
-            raise ValueError('available money must use purchase currency')
-        return self.purchase.amount > 0 and available.amount < self.debit_upper.amount

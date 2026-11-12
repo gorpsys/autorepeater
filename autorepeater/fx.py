@@ -6,7 +6,7 @@ from decimal import Decimal
 from types import MappingProxyType
 
 from autorepeater.cash_facts import MoneyAmount, currency_code
-from autorepeater.fx_data import FxData, FxPair, FxQuote, fx_ratio, market_timestamp
+from autorepeater.fx_data import FxData, FxPair, FxQuote, market_timestamp
 from autorepeater.strategy_plan import exact_product
 
 
@@ -81,15 +81,6 @@ class FxSnapshot:
     def to_rub(self, amount: MoneyAmount) -> MoneyAmount:
         """Retain exact finite Decimal multiplication and explicit source currency."""
         return MoneyAmount('rub', exact_product(amount.amount, self.rate(amount.currency)))
-
-    def from_rub(self, amount: MoneyAmount, currency: str) -> MoneyAmount:
-        """Convert a RUB valuation to native units; no FX request or trading permission."""
-        if amount.currency != 'rub':
-            raise ValueError('from_rub requires rub money')
-        code = currency_code(currency)
-        if code == 'rub':
-            return amount
-        return MoneyAmount(code, fx_ratio(amount.amount, self.rate(code)))
 
 
 def build_fx_snapshot(data: FxData, currencies: Sequence[str], *,

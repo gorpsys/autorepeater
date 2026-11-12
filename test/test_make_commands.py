@@ -91,15 +91,6 @@ def test_safe_python_files_requires_git(git_repository, monkeypatch):
         make_offline.list_safe_python_files(git_repository)
 
 
-def create_read_text_spy():
-    """Build a Path.read_text replacement compatible with instance calls."""
-    def spy(self, *arguments, **keywords):
-        """Reject every content read."""
-        raise AssertionError(f'checked path was read: {self}')
-
-    return spy
-
-
 def write_python_script(path, log_path, behavior='log'):
     """Create a wrapper that records exact arguments before command behavior."""
     log_path.touch()

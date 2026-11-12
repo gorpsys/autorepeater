@@ -11,9 +11,8 @@ from grpc import StatusCode
 from t_tech.invest import RequestError, schemas as sdk
 from t_tech.invest.services import InstrumentsService, MarketDataService, OrdersService
 
-from autorepeater.execution_data import ExecutionDataError, ExecutionSnapshot
+from autorepeater.execution_data import ExecutionDataError
 from autorepeater.fx import build_fx_snapshot, select_direct_pair
-from autorepeater.strategy_data import PortfolioSnapshot
 from autorepeater.tinvest_fx_data import TInvestFxData
 
 D = Decimal
@@ -211,10 +210,8 @@ def test_closed_market_is_separate_from_valuation(reads, field):
     assert snapshot.rate('cny') == D(12)
     selected = snapshot.quotes['cny'].pair
     rules = adapter.get_trade_rules('account', selected)
-    state = ExecutionSnapshot(PortfolioSnapshot(()), D(0), {}, {},
-                              {'rub': D(50000)}, {}, (), True)
-    assert not snapshot.quotes['cny'].can_trade(
-        'BUY', 1, rules, state, now=NOW)
+    assert not snapshot.quotes['cny'].lot_quote.can_trade(
+        'BUY', 1, rules, {'rub': D(50000)}, ready=True)
 
 
 def test_catalog_metadata_api_permission_cannot_be_overridden(reads):

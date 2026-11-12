@@ -7,10 +7,8 @@ from unittest.mock import create_autospec
 import pytest
 
 from autorepeater.cash_facts import MoneyAmount
-from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.fx import FxSnapshot, build_fx_snapshot, select_direct_pair
 from autorepeater.fx_data import FxData, FxPair, FxQuote
-from autorepeater.strategy_data import PortfolioSnapshot
 from scripts.sandbox_lifecycle import SandboxFailure, safe_call
 from e2e.retry_policy import may_retry
 
@@ -30,16 +28,6 @@ def quote(**changes):
                    **changes)
 
 
-def rules(**changes):
-    """Fresh own caps; margin and market-order caps are never a substitute."""
-    return replace(TradeRules(1000, 'rub', True, True, D(24200), 2, 2), **changes)
-
-
-def state(cash, *, ready=True):
-    """Availability and readiness are read together, never inferred from the quote."""
-    return ExecutionSnapshot(PortfolioSnapshot(()), D(0), {}, {}, cash, {}, (), ready)
-
-
 def test_safe_call_preserves_real_fx_stale_guard_facts():
     """A wrapped real FX stale guard keeps its test-owned retry permission."""
     stamp = NOW - timedelta(seconds=181)
@@ -57,7 +45,6 @@ def test_rub_identity_has_no_reads():
         assert snapshot.rate('RUB') == D(1)
         amount = MoneyAmount('rub', D('123456789012345678901234567890.123456789'))
         assert snapshot.to_rub(amount) == amount
-        assert snapshot.from_rub(amount, 'rub') == amount
         assert not snapshot.quotes
     assert data.mock_calls == []
 
@@ -71,7 +58,6 @@ def test_one_snapshot_deduplicates_and_preserves_native_units():
     assert snapshot.rate('cny') == D(12)
     assert snapshot.to_rub(MoneyAmount('cny', D('100.000000001'))) == MoneyAmount(
         'rub', D('1200.000000012'))
-    assert snapshot.from_rub(MoneyAmount('rub', D(1200)), 'cny') == MoneyAmount('cny', D(100))
     assert snapshot.quotes['cny'].lot_quote.base_amount(2) == MoneyAmount('cny', D(2000))
     assert snapshot.quotes['cny'].lot_quote.quote_amount('BUY', 2) == MoneyAmount('rub', D(24200))
     assert snapshot.quotes['cny'].lot_quote.quote_amount('SELL', 2) == MoneyAmount('rub', D(23800))
@@ -105,13 +91,13 @@ def test_snapshot_rate_is_fixed_despite_decimal_context_changes():
 
 
 def test_conversion_and_lot_estimates_preserve_nanos_in_small_context():
-    """Division must not undo exact SDK conversion and multiplication."""
+    """Valuation and lot arithmetic preserve exact SDK nanos at low precision."""
     book = quote(bid=D('119.000000001'), ask=D('120.999999999'))
     snapshot = FxSnapshot({'cny': book}, NOW)
     with localcontext() as context:
         context.prec = 6
-        assert snapshot.from_rub(MoneyAmount('rub', D('1200.000000012')), 'cny') == (
-            MoneyAmount('cny', D('100.000000001')))
+        assert snapshot.to_rub(MoneyAmount('cny', D('100.000000001'))) == (
+            MoneyAmount('rub', D('1200.000000012')))
         assert book.lot_quote.quote_amount('BUY', 2) == MoneyAmount('rub', D('24199.9999998'))
         assert book.lot_quote.quote_amount('SELL', 2) == MoneyAmount('rub', D('23800.0000002'))
 
@@ -238,8 +224,8 @@ def test_missing_currency_never_defaults_to_one():
     snapshot = FxSnapshot({}, NOW)
     with pytest.raises(ValueError, match='rate'):
         snapshot.rate('cny')
-    with pytest.raises(ValueError, match='rub'):
-        snapshot.from_rub(MoneyAmount('usd', D(12)), 'rub')
+    with pytest.raises(ValueError, match='rate'):
+        snapshot.to_rub(MoneyAmount('cny', D(12)))
 
 
 def test_builder_checks_quote_identity_and_revalidates_before_return():
@@ -254,41 +240,9 @@ def test_builder_checks_quote_identity_and_revalidates_before_return():
         build_fx_snapshot(data, ['cny'], now=NOW)
 
 
-@pytest.mark.parametrize('side', ['BUY', 'SELL'])
-def test_valuation_and_route_survive_closed_trading_but_permission_does_not(side):
+def test_valuation_and_route_survive_closed_trading():
     """Read-only marks do not depend on an open market or an account's caps."""
     closed = pair(api_trade_available=False)
     assert select_direct_pair([closed], 'cny') == closed
     book = quote(pair=closed)
     assert FxSnapshot({'cny': book}, NOW).rate('cny') == D(12)
-    assert not book.can_trade(side, 1, rules(), state({'rub': D(50000), 'cny': D(2000)}),
-                              now=NOW)
-
-
-@pytest.mark.parametrize('side', ['BUY', 'SELL'])
-def test_trade_requires_fresh_broker_facts_and_direction_permission(side):
-    """TOM has no calendar wait, and a valuation grants no spending rights."""
-    cash = {'rub': D(24200), 'cny': D(2000)}
-    book = quote()
-    assert book.can_trade(side, 2, rules(), state(cash), now=NOW)
-    assert not book.can_trade(side, 2, rules(), state(cash, ready=False), now=NOW)
-    assert not book.can_trade(side, 2, rules(), state({}), now=NOW)
-    assert not book.can_trade(side, 2, rules(api_trade_available=False), state(cash), now=NOW)
-    assert not book.can_trade(side, 2, rules(bestprice_order_available=False), state(cash), now=NOW)
-    cap = {'buy_max_lots': 1} if side == 'BUY' else {'sell_max_lots': 1}
-    assert not book.can_trade(side, 2, rules(**cap), state(cash), now=NOW)
-    permission = {'buy_available': False} if side == 'BUY' else {'sell_available': False}
-    assert not quote(pair=pair(**permission)).can_trade(
-        side, 2, rules(), state(cash), now=NOW)
-    cash['rub' if side == 'BUY' else 'cny'] -= D('0.000000001')
-    assert not book.can_trade(side, 2, rules(), state(cash), now=NOW)
-    with pytest.raises(ValueError, match='stale'):
-        book.can_trade(side, 1, rules(), state(cash), now=NOW + timedelta(seconds=181))
-
-
-def test_buy_own_money_limit_is_not_reserve_or_margin():
-    """No floor, inferred future limits or arbitrary buffer is introduced."""
-    assert not quote().can_trade('BUY', 2, rules(buy_money_amount=D(24199)),
-                                 state({'rub': D(999999)}), now=NOW)
-    with pytest.raises(ValueError, match='side'):
-        quote().can_trade('OTHER', 1, rules(), state({}), now=NOW)

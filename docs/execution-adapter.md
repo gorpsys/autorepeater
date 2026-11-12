@@ -164,7 +164,7 @@ security midpoint and the direct FX midpoint are independent observations.
 `FxLotQuote` stores RUB bid/ask per nominal base currency units and the number
 of base units in one lot. Midpoint RUB per base unit divides by nominal;
 BUY cost uses ask, SELL proceeds use bid, and base movement uses lots times
-lot size. These are estimates before fees. `can_trade` intersects caller-scoped
+lot size. These are estimates before fees. `FxLotQuote.can_trade` intersects caller-scoped
 fresh native cash, readiness, API/BESTPRICE flags and own side-specific lot
 caps, plus own monetary limits for BUY. It supplies neither ownership rights
 nor a fee allowance. The caller must check total purchase funding separately.
@@ -198,13 +198,13 @@ operation and a BROKER_FEE operation; summing both would duplicate it. History
 operation IDs did not identify the orders in GetOrderState. The working path
 continues to use only broker order IDs, without history or GetOrderPrice RPCs.
 
-`PurchaseCashNeed` is a pure purchase-funding predicate: purchase cost plus
-one fee upper bound is checked against available money. The existing leaf
+`build_order_plan` delegates purchase funding to `fx_funding`, which checks
+purchase cost plus fee estimates against owner-scoped native cash. The existing leaf
 reserve may fund that fee, without an extra percentage or a second reserve
 charge. Money sufficient for the purchase and fee needs no exchange even if
 the remaining reserve falls below its target. With no security purchase,
-reserve shortage alone never calls for FX. This predicate grants no route,
-scope, lot or budget permission. The pure funding layer distributes reserve
+reserve shortage alone never calls for FX. Funding also checks route,
+scope, lot and budget permissions. The pure funding layer distributes reserve
 only within leaves by target RUB values per settlement currency, excludes
 COMPOSITE unallocated money, and subtracts existing permitted currency before
 rounding the necessary FX deficit. Reverse FX remains limited to financing
@@ -262,9 +262,12 @@ last_price, its timestamp and an implicit rate of 1 are never fallbacks.
 The caller can recheck freshness before effects and must read new data on
 expiry. A snapshot grants no ownership, spending or trading permission.
 
-`FxQuote.can_trade` separately intersects full metadata side permissions,
-API/BESTPRICE flags, own side-specific lot caps, own BUY money and the caller's
-fresh `ExecutionSnapshot` readiness/cash. No margin limits, inferred TOM
+`FxQuote` contains the observation and exposes `lot_quote` and `validate_fresh`.
+`FxSnapshot.to_rub` values native money; it provides no reverse conversion API.
+The funding planner checks full metadata API and side permissions and account
+readiness; `FxLotQuote.can_trade` checks API/BESTPRICE flags, own side-specific
+lot caps, own BUY money and caller-scoped native cash. The execution layer
+revalidates quote freshness before submission. No margin limits, inferred TOM
 calendar delay, reserve subtraction, price parameter or GetOrderPrice is added.
 Transport errors preserve their cause with a fixed safe public reason.
 `test/test_fx.py` and `test/test_tinvest_fx_data.py` verify these pure/read
