@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal, localcontext
 import json
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 from autorepeater.cash_facts import MoneyAmount, order_cash_bound
 from autorepeater.constants import IMPORTANT
@@ -18,10 +18,11 @@ from autorepeater.strategy_data import (
     InstrumentInfo, InstrumentMatch, InstrumentType, PortfolioEntry, PortfolioSnapshot,
     PositionEvent,
 )
-from autorepeater.strategy_plan import exact_product, exact_sum
+from autorepeater.strategy_plan import exact_product, exact_sum, nodes
 
 if TYPE_CHECKING:
     from autorepeater.execution import ExecutionReceipt
+    from autorepeater.execution_data import ExecutionSnapshot
     from autorepeater.fx import FxSnapshot
     from autorepeater.order_plan import OrderPlan
 
@@ -265,6 +266,27 @@ def print_order_money(receipt: ExecutionReceipt) -> None:
                 receipt.amounts.executed_commission.currency, _decimal_map(receipt.cash))
 
 
+def print_order_snapshot_deferred(snapshot: ExecutionSnapshot, stage: str) -> None:
+    """Show the blocked stage without re-evaluating its readiness decision."""
+    logger.info('Defer execution: active orders or unavailable/blocked limits; '
+                'stage=%s limits_ready=%s active_orders=%d available_cash=%s',
+                stage, snapshot.limits_ready, len(snapshot.active_orders),
+                _decimal_map(snapshot.available_cash))
+
+
+def print_sale_deferral(uid: str, reason: Literal['unavailable', 'residual']) -> None:
+    """Show why the current UID cannot fully sell in this phase."""
+    message = ('Defer SELL UID %s: currency or API/BESTPRICE unavailable'
+               if reason == 'unavailable'
+               else 'Defer SELL residual UID %s: physical lot/ownership/own cap')
+    logger.info(message, uid)
+
+
+def print_purchase_deferral() -> None:
+    """Show why an empty executable BUY queue cannot send an order."""
+    logger.info('Defer purchases: no funded executable underweight lot')
+
+
 def print_fx_snapshot(fx: FxSnapshot, *, stage: str = 'planning') -> None:
     """Report observed quote units and time without performing any market reads."""
     for currency, quote in sorted(fx.quotes.items()):
@@ -338,7 +360,6 @@ def _print_funding_orders(plan: OrderPlan) -> None:
 
 def print_rebalance_plan(plan: OrderPlan, debug: bool) -> None:
     """Report loaded targets, occurrence permissions and actual monetary bounds."""
-    from autorepeater.purchase_plan import nodes  # pylint: disable=import-outside-toplevel
     print_target(plan.strategy.target, plan.strategy.budget)
     for node in nodes(plan.strategy):
         decision = node.decision

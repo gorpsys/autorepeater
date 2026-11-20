@@ -1,4 +1,4 @@
-"""Pass-local native money ownership, independent of RUB security spending caps."""
+"""Pass-local spending limits and ownership of RUB and native cash."""
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_FLOOR, localcontext
@@ -6,14 +6,47 @@ from fractions import Fraction
 from types import MappingProxyType
 
 from autorepeater.cash_facts import MoneyAmount, currency_code
+from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.fx import FxSnapshot
-from autorepeater.purchase_plan import ZERO, difference, leaves, nodes
 from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import (
-    StrategyPlan, exact_product, exact_sum, finite_decimal, validate_path,
+    ZERO, StrategyPlan, difference, exact_product, exact_sum, finite_decimal, leaves, nodes,
+    validate_path,
 )
 
 Path = tuple[int, ...]
+
+
+def cash_bound(snapshot: ExecutionSnapshot, rules: dict[str, TradeRules]) -> Decimal:
+    """Intersect real RUB and own money; reserve already limits target budgets."""
+    rub = snapshot.available_cash.get('rub', ZERO)
+    bounds = [rule.buy_money_amount for rule in rules.values()
+              if rule.currency == 'rub' and rule.api_trade_available
+              and rule.bestprice_order_available and rule.buy_max_lots > 0]
+    # Each candidate checks its own bound after all earlier simulated spending.
+    return min(rub, max(bounds)) if bounds else ZERO
+
+
+def spending_limits(strategy: StrategyPlan, ownership: Mapping[Path, Mapping[str, Decimal]],
+                    marks: Mapping[str, Decimal]) -> dict[Path, Decimal]:
+    """Potential monetary gaps are caps, never presumed cash or sale proceeds."""
+    result = {}
+    for path, node in leaves(strategy).items():
+        value = exact_sum(exact_product(quantity, marks[uid])
+                          for uid, quantity in ownership[path].items())
+        result[path] = max(ZERO, difference(difference(node.budget, node.cash_floor), value))
+    return result
+
+
+def allocate_money(amount: Decimal, limits: Mapping[Path, Decimal]) -> dict[Path, Decimal]:
+    """Bounded proportional pool with exact residual conservation."""
+    paths = sorted(limits)
+    total = exact_sum(limits.values())
+    if not total:
+        return dict.fromkeys(paths, ZERO)
+    parts = proportional_split(min(amount, total), [limits[path] for path in paths],
+                               ceilings=[limits[path] for path in paths])
+    return dict(zip(paths, parts))
 
 
 def split_cash(total: Decimal, coefficients: Sequence[Decimal]) -> tuple[Decimal, ...]:
@@ -146,6 +179,48 @@ def sale_paths(origin: Path, by_path: Mapping[Path, StrategyPlan],
                 for prefix in crossing):
             result.add(path)
     return result
+
+
+def allocate_rub_after_sales(
+        strategy: StrategyPlan, ownership: Mapping[Path, Mapping[str, Decimal]],
+        marks: Mapping[str, Decimal], initial_money: Mapping[Path, Decimal],
+        available_rub: Decimal, sales: Sequence[tuple[Mapping[Path, Decimal], Decimal | None]],
+) -> tuple[dict[Path, Decimal], tuple[int, ...], bool]:
+    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    """Return funded RUB by owner, indexes of unproven scoped sales and zero-credit status."""
+    limits = spending_limits(strategy, ownership, marks)
+    initial = allocate_money(available_rub, {
+        path: min(limit, initial_money[path]) for path, limit in limits.items()})
+    remaining = difference(available_rub, exact_sum(initial.values()))
+    gaps = {path: difference(limit, initial[path]) for path, limit in limits.items()}
+    by_path = {node.path: node for node in nodes(strategy)}
+    all_paths = set(limits)
+    sale_credits = dict.fromkeys(limits, ZERO)
+    restricted = []
+    shared_pool = bool(sales)
+    for index, (pieces, amount) in enumerate(sales):
+        origins = sorted(pieces)
+        scopes = {origin: sale_paths(origin, by_path, limits) for origin in origins}
+        common_scope = all(scope == all_paths for scope in scopes.values())
+        shared_pool = shared_pool and common_scope
+        if amount is None:
+            # Fresh account cash does not identify an isolated seller's proceeds.
+            if not common_scope:
+                restricted.append(index)
+            continue
+        parts = proportional_split(amount, [pieces[origin] for origin in origins])
+        for origin, part in zip(origins, parts):
+            scoped = {path: max(ZERO, difference(gap, sale_credits[path]))
+                      if path in scopes[origin] else ZERO for path, gap in gaps.items()}
+            for path, credit in allocate_money(part, scoped).items():
+                sale_credits[path] = exact_sum((sale_credits[path], credit))
+    extra = allocate_money(remaining, sale_credits)
+    if shared_pool and any(amount is None for _, amount in sales):
+        residual = allocate_money(difference(remaining, exact_sum(extra.values())), {
+            path: difference(gap, extra[path]) for path, gap in gaps.items()})
+        extra = {path: exact_sum((extra[path], residual[path])) for path in limits}
+    funded = {path: exact_sum((initial[path], extra[path])) for path in limits}
+    return funded, tuple(restricted), bool(sales) and not exact_sum(extra.values())
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,7 +20,7 @@ from autorepeater.execution import ExecutionReceipt
 from autorepeater.execution_data import TradeRules
 from autorepeater.fx_data import FxLotQuote
 from autorepeater.order_execution import TInvestOrderExecutor
-from autorepeater.order_plan import OrderIntent
+from autorepeater.order_intent import OrderIntent
 
 
 def money(amount, currency='cny'):

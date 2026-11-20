@@ -8,7 +8,7 @@ from time import monotonic, sleep
 from autorepeater.cash_facts import MoneyAmount, currency_code, order_cash_bound
 from autorepeater.cash_pools import (
     CashPools, CashProceeds, cash_headroom, credit_cash_pools, native_allowance,
-    split_cash,
+    spending_limits, split_cash,
 )
 from autorepeater.execution import (
     ExecutionReceipt, _fresh, _positions_match, _submit,
@@ -20,13 +20,12 @@ from autorepeater.fx_funding import FundingInputs, build_funding_plan
 from autorepeater.logging_config import logger
 from autorepeater.market_diagnostics import safe_symbol
 from autorepeater.money import format_decimal
-from autorepeater.order_plan import (
-    OrderIntent, OrderPlan, ready, sale_intents, spending_limits, validate_rules,
-)
-from autorepeater.purchase_plan import ZERO, difference, funding_candidates, validate_intent
+from autorepeater.order_intent import OrderIntent, validate_intent
+from autorepeater.order_plan import OrderPlan, ready, sale_intents, validate_rules
+from autorepeater.purchase_plan import funding_candidates
 from autorepeater.reporting import print_fx_snapshot
 from autorepeater.strategy_allocation import proportional_split
-from autorepeater.strategy_plan import exact_product, exact_sum, validate_plan
+from autorepeater.strategy_plan import ZERO, difference, exact_product, exact_sum, validate_plan
 from autorepeater.valuation import SecurityData, Valuation
 
 SETTLEMENT_TIMEOUT = 30

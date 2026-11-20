@@ -1,4 +1,5 @@
 """SDK boundary and one-pass stopping rules, using offline fakes only."""
+from copy import deepcopy
 from dataclasses import replace
 from decimal import Decimal as D
 import inspect
@@ -14,12 +15,14 @@ from t_tech.invest.exceptions import RequestError
 from t_tech.invest import MoneyValue, OrderState, PostOrderResponse
 from t_tech.invest.services import OrdersService
 
+from autorepeater import cash_pools
 from autorepeater.execution_data import ExecutionData, ExecutionDataError
 from autorepeater.execution import (
     ExecutionReceipt, OrderExecutionError, OrderExecutor, execute_plan,
 )
 from autorepeater.order_execution import TInvestOrderExecutor
-from autorepeater.order_plan import OrderIntent, build_order_plan
+from autorepeater.order_intent import OrderIntent
+from autorepeater.order_plan import OrderPlan, build_order_plan
 from autorepeater import execution as execution_module
 
 
@@ -193,14 +196,19 @@ def test_sale_settlement_waits_for_readiness_and_matching_positions(clock, guard
         assert 'uid=X expected=0.0 actual=10.0' in caplog.text
 
 
-def test_sale_settlement_timeout_never_funds_buys(clock, caplog):
+@pytest.mark.parametrize('blocked', [True, False])
+def test_sale_settlement_timeout_never_funds_buys(clock, caplog, blocked):
     """Polling ends at the deadline with confirmed sales only, not guessed availability."""
-    executor = Mock()
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
-    data = Mock()
-    data.get_destination.return_value = replace(destination(), limits_ready=False)
-    with caplog.at_level('INFO', logger='tinkoffBot'):
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
+    data.get_destination.return_value = (replace(destination(), limits_ready=False) if blocked
+                                         else destination({'X': D(10)}))
+    data.get_trade_rules.return_value = rules('X', 'Y', 'Z')
+    with (caplog.at_level('INFO', logger='tinkoffBot'),
+          patch.object(execution_module, 'allocate_rub_after_sales', autospec=True) as allocate):
         result = execute_plan('offline', sale_plan(), data, executor)
+    allocate.assert_not_called()
     assert [item.side for item in result] == ['SELL', 'SELL']
     assert data.get_destination.call_count == 3
     assert clock.call_args_list == [call(2), call(2), call(1)]
@@ -284,12 +292,16 @@ def test_pending_sale_polls_same_order_until_fill(clock, initial_status, caplog)
 def test_pending_sale_timeout_stops_remaining_orders(clock, caplog):
     """A partial fill at timeout cannot authorize further sales or any purchases."""
     plan = sale_plan()
-    executor = Mock()
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     pending = receipt(plan.sells[0], 'PARTIALLYFILL', executed=5)
     executor.submit_order.return_value = pending
     executor.get_order_state.return_value = pending
-    with caplog.at_level('INFO', logger='tinkoffBot'), pytest.raises(OrderExecutionError):
-        execute_plan('offline', plan, Mock(), executor)
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
+    with (caplog.at_level('INFO', logger='tinkoffBot'), pytest.raises(OrderExecutionError),
+          patch.object(execution_module, 'allocate_rub_after_sales', autospec=True) as allocate):
+        execute_plan('offline', plan, data, executor)
+    allocate.assert_not_called()
+    assert not data.mock_calls
     executor.submit_order.assert_called_once()
     assert executor.get_order_state.call_count == 2
     assert clock.call_args_list == [call(2), call(2), call(1)]
@@ -759,3 +771,133 @@ def test_invalid_confirmed_cash_stops_before_refresh(cash, caplog):
     assert executor.submit_order.call_count == 1
     assert not data.mock_calls
     assert any('invalid confirmed cash' in line for line in caplog.messages)
+
+
+def _rub_cash_plan():
+    tree = parent((leaf((0,), {'A': D(100)}), leaf((1,), {'B': D(100)})),
+                  unassigned={'common': D(1)})
+    ownership = {(0,): {}, (1,): {}}
+    common = OrderIntent('common', 'SELL', 1, 1, {(): D(1)})
+    local = OrderIntent('local', 'SELL', 1, 1, {(0,): D(1)})
+    return OrderPlan(tree, destination(), ownership, {}, {}, dict.fromkeys(ownership, D(0)),
+                     (common, local), ())
+
+
+def _confirmed_rub_money(plan, snapshot, rules_after_sales, receipts):
+    # pylint: disable=protected-access
+    return execution_module._fresh_money(
+        plan, plan.ownership, snapshot, rules_after_sales, receipts)
+
+
+@pytest.mark.parametrize('cap,reverse,expected', [
+    (90, False, (60, 30)), (90, True, (45, 45)),
+    (200, False, (100, 50)), (200, True, (100, 100)),
+])
+def test_rub_cash_uses_own_cap_and_preserves_sale_credit_order(cap, reverse, expected):
+    """The highest enabled own RUB cap bounds broker cash, and #9 preserves order."""
+    plan = _rub_cash_plan()
+    if reverse:
+        plan = replace(plan, sells=tuple(reversed(plan.sells)))
+    limits = rules('A', 'B', 'disabled')
+    limits['A'] = replace(limits['A'], buy_money_amount=D(70))
+    limits['B'] = replace(limits['B'], buy_money_amount=D(cap))
+    limits['disabled'] = replace(limits['disabled'], buy_money_amount=D(500),
+                                 api_trade_available=False)
+    cash = destination(cash='140' if cap == 90 else '200')
+    receipts = tuple(receipt(intent, cash={'rub': D(100)}) for intent in plan.sells)
+    assert _confirmed_rub_money(plan, cash, limits, receipts) == {
+        (0,): D(expected[0]), (1,): D(expected[1]),
+    }
+
+
+@pytest.mark.parametrize('common,local,expected,scoped,zero', [
+    (D(0), None, 0, True, True), (D(0), D(0), 0, False, True),
+    (None, None, 45, False, False),
+])
+def test_rub_cash_distinguishes_unknown_proceeds_and_confirmed_zero(
+        common, local, expected, scoped, zero, caplog):
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Only unknown isolated sale proceeds produce the UID-specific diagnostic."""
+    plan = _rub_cash_plan()
+    if common is None:
+        plan = replace(plan, sells=plan.sells[:1])
+    limits = {uid: replace(rule, buy_money_amount=D(90))
+              for uid, rule in rules('A', 'B').items()}
+    receipts = tuple(receipt(intent, cash={'rub': amount} if amount is not None else {})
+                     for intent, amount in zip(plan.sells, (common, local)))
+    with caplog.at_level('INFO', logger='tinkoffBot'):
+        assert _confirmed_rub_money(
+            plan, destination(cash='140'), limits, receipts
+        ) == {(0,): D(expected), (1,): D(expected)}
+    assert caplog.messages == (
+        (['Defer scoped purchases: sale cash attribution unavailable UID local'] if scoped else [])
+        + (['Defer scoped purchases: fresh availability has no permitted funded lot']
+           if zero else [])
+    )
+
+
+@pytest.mark.parametrize('extra_isolated', [False, True])
+def test_rub_cash_mixed_credit_uses_each_origins_scope(extra_isolated, caplog):
+    """A common unknown receipt cannot use the leftover cash of a mixed known sale."""
+    inner = replace(parent((leaf((0, 0), {'A': D(100)}, budget='100'),
+                            leaf((0, 1), {'B': D(50)}, budget='50')), redistribute=True),
+                    path=(0,))
+    tree = parent((inner, leaf((1,), {'C': D(30)}, budget='30')),
+                  unassigned={'common': D(1)})
+    ownership = {(0, 0): {}, (0, 1): {}, (1,): {}}
+    money = {(0, 0): D(20), (0, 1): D(10), (1,): D(10)}
+    known = OrderIntent('known', 'SELL', 3, 1, {(0, 0): D(2), (1,): D(1)})
+    common = OrderIntent('common', 'SELL', 1, 1, {(): D(1)})
+    local = OrderIntent('local', 'SELL', 1, 1, {(0, 0): D(1)})
+    plan = OrderPlan(tree, destination(), ownership, {}, rules('A', 'B', 'C'), money,
+                     (known, common, local) if extra_isolated else (known, common), ())
+    receipts = (receipt(known, cash={'rub': D(90)}), receipt(common))
+    if extra_isolated:
+        receipts += (receipt(local),)
+    with caplog.at_level('INFO', logger='tinkoffBot'):
+        assert _confirmed_rub_money(
+            plan, destination(cash='130'), plan.rules, receipts
+        ) == {(0, 0): D(60), (0, 1): D(30), (1,): D(30)}
+    assert caplog.messages == (
+        ['Defer scoped purchases: sale cash attribution unavailable UID local']
+        if extra_isolated else [])
+
+
+def test_rub_buy_without_sales_uses_the_initial_snapshot(clock):
+    """The first BUY uses the initial plan data without intervening reads or waits."""
+    plan = build_order_plan(leaf(target={'A': D(2)}), destination(cash='2'),
+                            {(): {}}, {'A': D(1)}, rules('A'))
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+    intent, = plan.buys
+    executor.submit_order.return_value = receipt(intent)
+    assert execute_plan('offline', plan, data, executor) == (receipt(intent),)
+    assert executor.mock_calls == [call.submit_order('offline', intent)]
+    assert not data.mock_calls
+    clock.assert_not_called()
+
+
+@pytest.mark.parametrize('budget_b,initial,available,sales,expected', [
+    (100, (30, 10), 20, (), ((15, 5), (), False)),
+    (50, (0, 0), 60, (({(): D(1)}, None),), ((40, 20), (), False)),
+    (100, (0, 0), 90, (({(): D(1)}, D(0)), ({(0,): D(1)}, None)),
+     ((0, 0), (1,), True)),
+])
+def test_rub_allocation_is_pure_and_reports_facts(
+        budget_b, initial, available, sales, expected, caplog):
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Neutral facts suffice for allocation, without mutating inputs or reporting."""
+    tree = parent((leaf((0,), {'A': D(100)}),
+                   leaf((1,), {'B': D(budget_b)}, budget=str(budget_b))),
+                  unassigned={'common': D(1)})
+    inputs = ({(0,): {}, (1,): {}}, {'A': D(1), 'B': D(1)},
+              {(0,): D(initial[0]), (1,): D(initial[1])}, D(available), sales)
+    original = deepcopy((tree, *inputs))
+    error = AssertionError('cash allocation performed I/O')
+    with (caplog.at_level('DEBUG'), patch('builtins.open', side_effect=error),
+          patch('socket.socket', side_effect=error), patch('time.sleep', side_effect=error)):
+        result = cash_pools.allocate_rub_after_sales(tree, *inputs)
+    amounts, restricted, zero = expected
+    assert result == ({(0,): D(amounts[0]), (1,): D(amounts[1])}, restricted, zero)
+    assert (tree, *inputs) == original
+    assert not caplog.messages

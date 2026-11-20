@@ -1,97 +1,13 @@
 """SDK-free greedy monetary underweight reduction with equivalent batching."""
-from collections.abc import Iterator
-from dataclasses import dataclass
 from decimal import Decimal, ROUND_FLOOR, localcontext
-import logging
 
+from autorepeater import reporting
+from autorepeater.cash_pools import cash_bound
 from autorepeater.execution_data import ExecutionSnapshot, TradeRules
+from autorepeater.order_intent import OrderIntent, take_pieces, validate_intent
 from autorepeater.strategy_plan import (
-    StrategyPlan, exact_product, exact_sum, finite_decimal, validate_path,
+    ZERO, StrategyPlan, allocate_floor, difference, exact_product, exact_sum, leaves,
 )
-
-LOGGER = logging.getLogger('tinkoffBot')
-
-
-ZERO = Decimal(0)
-
-
-def difference(left: Decimal, right: Decimal) -> Decimal:
-    """Subtract finite values without losing a previously corrected residual."""
-    return exact_sum((left, right.copy_negate()))
-
-
-@dataclass(frozen=True)
-class OrderIntent:
-    """Only the aggregate is integral; occurrence contributions are pieces."""
-    uid: str
-    side: str
-    lots: int
-    lot_size: int
-    pieces: dict[tuple[int, ...], Decimal]
-
-
-def validate_intent(intent: object) -> None:
-    """Reject malformed physical orders before crossing the SDK boundary."""
-    if not isinstance(intent, OrderIntent) or not isinstance(intent.uid, str) or not intent.uid:
-        raise ValueError('intent requires a UID')
-    if intent.side not in ('BUY', 'SELL'):
-        raise ValueError('intent side must be BUY or SELL')
-    for value in (intent.lots, intent.lot_size):
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise ValueError('intent lots and lot_size must be positive integers')
-    if not isinstance(intent.pieces, dict) or not intent.pieces:
-        raise ValueError('intent pieces must contain ownership')
-    for path, quantity in intent.pieces.items():
-        validate_path(path)
-        finite_decimal(quantity, 'intent pieces', positive=True)
-    if exact_sum(intent.pieces.values()) != Decimal(intent.lots * intent.lot_size):
-        raise ValueError('intent ownership sum must equal lots * lot_size')
-
-
-def nodes(plan: StrategyPlan) -> Iterator[StrategyPlan]:
-    """Preorder occurrences, including unassigned money at internal nodes."""
-    yield plan
-    for child in plan.children:
-        yield from nodes(child)
-
-
-def leaves(plan: StrategyPlan) -> dict[tuple[int, ...], StrategyPlan]:
-    """Terminal targets retain their own spending limits."""
-    return {node.path: node for node in nodes(plan) if not node.children}
-
-
-def cash_bound(_strategy: StrategyPlan, snapshot: ExecutionSnapshot,
-               rules: dict[str, TradeRules]) -> Decimal:
-    """Intersect real RUB and own money; reserve already limits target budgets."""
-    rub = snapshot.available_cash.get('rub', ZERO)
-    bounds = [rule.buy_money_amount for rule in rules.values()
-              if rule.currency == 'rub' and rule.api_trade_available
-              and rule.bestprice_order_available and rule.buy_max_lots > 0]
-    # Different instrument bounds are never summed. Each candidate checks its
-    # own documented bound, reduced by all earlier simulated spending.
-    amount = min(rub, max(bounds)) if bounds else ZERO
-    return amount
-
-
-def take_pieces(amount: Decimal, capacities: dict[tuple[int, ...], Decimal]
-                ) -> dict[tuple[int, ...], Decimal]:
-    """Fill an aggregate in path order, never exceeding an owner's cap."""
-    result = {}
-    for path in sorted(capacities):
-        quantity = min(amount, capacities[path])
-        if quantity:
-            result[path] = quantity
-            amount = difference(amount, quantity)
-    if amount:
-        raise ValueError('ownership cannot cover physical lot')
-    return result
-
-
-def allocate_floor(amount: Decimal, divisor: Decimal) -> int:
-    """Integral ratio without precision-28 rounding up a monetary/piece cap."""
-    numerator, denominator = amount.as_integer_ratio()
-    div_numerator, div_denominator = divisor.as_integer_ratio()
-    return (numerator * div_denominator) // (denominator * div_numerator)
 
 
 def _candidate(uid: str, state: tuple[
@@ -154,10 +70,10 @@ def funding_candidates(strategy: StrategyPlan, ownership: dict[tuple[int, ...], 
                                                     key=lambda item: (-item[0], item[1])))
 
 
-def purchase_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
-                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
-                     marks: dict[str, Decimal], rules: dict[str, TradeRules],
-                     money: dict[tuple[int, ...], Decimal]) -> tuple[OrderIntent, ...]:
+def calculate_purchase_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                               ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                               marks: dict[str, Decimal], rules: dict[str, TradeRules],
+                               money: dict[tuple[int, ...], Decimal]) -> tuple[OrderIntent, ...]:
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """Highest absolute reduction first, UID then path; no per-lot million loop."""
     ownership = {path: dict(values) for path, values in ownership.items()}
@@ -165,7 +81,7 @@ def purchase_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
     quantities = dict(snapshot.quantities)
     used = {}
     result = []
-    initial = cash_bound(strategy, snapshot, rules)
+    initial = cash_bound(snapshot, rules)
     remaining = initial
     while remaining:
         state = (strategy, ownership, marks, rules, money, quantities, used,
@@ -186,6 +102,16 @@ def purchase_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
         intent = OrderIntent(uid, 'BUY', lots, rule.lot, pieces)
         validate_intent(intent)
         result.append(intent)
-    if not result:
-        LOGGER.info('Defer purchases: no funded executable underweight lot')
     return tuple(result)
+
+
+def purchase_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                     marks: dict[str, Decimal], rules: dict[str, TradeRules],
+                     money: dict[tuple[int, ...], Decimal]) -> tuple[OrderIntent, ...]:
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Report an empty executable BUY queue after its calculation completes."""
+    result = calculate_purchase_intents(strategy, snapshot, ownership, marks, rules, money)
+    if not result:
+        reporting.print_purchase_deferral()
+    return result

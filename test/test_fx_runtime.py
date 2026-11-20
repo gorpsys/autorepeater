@@ -19,7 +19,7 @@ from autorepeater.account_config import AccountConfig
 from autorepeater.account_strategy import AccountStrategy, PreparedAccountSource
 from autorepeater.strategy_contract import PreparedStrategy
 from autorepeater.order_execution import TInvestOrderExecutor
-from autorepeater.order_plan import OrderIntent
+from autorepeater.order_intent import OrderIntent
 from autorepeater.cash_facts import order_cash_bound
 
 
