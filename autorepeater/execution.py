@@ -7,20 +7,17 @@ from time import monotonic, sleep
 from typing import Protocol
 
 from autorepeater.cash_facts import OrderAmounts
-from autorepeater.cash_pools import sale_paths as _sale_paths
+from autorepeater.cash_pools import allocate_rub_after_sales, cash_bound
 from autorepeater.execution_data import (
     ExecutionData, ExecutionDataError, ExecutionSnapshot, TradeRules,
 )
 from autorepeater.money import format_decimal, format_decimal_map
-from autorepeater.order_plan import (
-    OrderIntent, OrderPlan, ZERO, allocate_money, cash_bound, difference, nodes, ready,
-    spending_limits, validate_intent, validate_rules,
-)
+from autorepeater.order_intent import OrderIntent, validate_intent
+from autorepeater.order_plan import OrderPlan, ready, validate_rules
 from autorepeater.purchase_plan import purchase_intents
 from autorepeater.reporting import print_order_money
-from autorepeater.strategy_allocation import proportional_split
 from autorepeater.strategy_plan import (
-    exact_product, exact_sum, validate_map, validate_plan,
+    ZERO, difference, exact_product, exact_sum, validate_map, validate_plan,
 )
 
 LOGGER = logging.getLogger('tinkoffBot')
@@ -158,43 +155,17 @@ def _fresh(account_id: str, data: ExecutionData, uids: Sequence[str], *, valuati
 def _fresh_money(plan: OrderPlan, ownership: dict[tuple[int, ...], dict[str, Decimal]],
                  snapshot: ExecutionSnapshot, rules: dict[str, TradeRules],
                  receipts: Sequence[ExecutionReceipt]) -> dict[tuple[int, ...], Decimal]:
-    # pylint: disable=too-many-locals
-    limits = spending_limits(plan.strategy, ownership, plan.marks)
-    amount = cash_bound(plan.strategy, snapshot, rules)
-    money = {path: min(limit, plan.money[path]) for path, limit in limits.items()}
-    initial = allocate_money(min(amount, exact_sum(money.values())), money)
-    remaining = difference(amount, exact_sum(initial.values()))
-    gaps = {path: difference(limit, initial[path]) for path, limit in limits.items()}
-    sale_credits = dict.fromkeys(limits, ZERO)
-    by_path = {node.path: node for node in nodes(plan.strategy)}
-    shared_pool = bool(plan.sells)
-    for intent, receipt in zip(plan.sells, receipts):
-        origins = sorted(intent.pieces)
-        scopes = {origin: _sale_paths(origin, by_path, limits) for origin in origins}
-        common_scope = all(scope == set(limits) for scope in scopes.values())
-        shared_pool = shared_pool and common_scope
-        if 'rub' not in receipt.cash:
-            # Account availability cannot identify proceeds of isolated sales.
-            # It can fund a common pool only when every seller may fund every leaf.
-            if not common_scope:
-                LOGGER.info('Defer scoped purchases: sale cash attribution unavailable UID %s',
-                            intent.uid)
-            continue
-        parts = proportional_split(receipt.cash['rub'],
-                                   [intent.pieces[origin] for origin in origins])
-        for origin, part in zip(origins, parts):
-            scoped = {path: max(ZERO, difference(gap, sale_credits[path]))
-                      if path in scopes[origin] else ZERO for path, gap in gaps.items()}
-            for path, credit in allocate_money(part, scoped).items():
-                sale_credits[path] = exact_sum((sale_credits[path], credit))
-    extra = allocate_money(remaining, sale_credits)
-    if shared_pool and any('rub' not in receipt.cash for receipt in receipts):
-        residual = allocate_money(difference(remaining, exact_sum(extra.values())), {
-            path: difference(gap, extra[path]) for path, gap in gaps.items()})
-        extra = {path: exact_sum((extra[path], residual[path])) for path in limits}
-    if receipts and exact_sum(extra.values()) == 0:
+    sales = tuple((intent.pieces, receipt.cash.get('rub'))
+                  for intent, receipt in zip(plan.sells, receipts))
+    money, restricted, no_credit = allocate_rub_after_sales(
+        plan.strategy, ownership, plan.marks, plan.money,
+        cash_bound(snapshot, rules), sales)
+    for index in restricted:
+        LOGGER.info('Defer scoped purchases: sale cash attribution unavailable UID %s',
+                    plan.sells[index].uid)
+    if no_credit:
         LOGGER.info('Defer scoped purchases: fresh availability has no permitted funded lot')
-    return {path: exact_sum((initial[path], extra[path])) for path in limits}
+    return money
 
 
 def _positions_match(snapshot: ExecutionSnapshot,

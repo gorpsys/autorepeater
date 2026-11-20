@@ -11,8 +11,7 @@ from t_tech.invest.services import Services
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError
 from autorepeater.cash_facts import MoneyAmount, OrderAmounts
 from autorepeater.logging_config import logger as LOGGER
-from autorepeater.order_plan import OrderIntent
-from autorepeater.purchase_plan import validate_intent
+from autorepeater.order_intent import OrderIntent, validate_intent
 from autorepeater.tinvest_requests import call_api
 
 

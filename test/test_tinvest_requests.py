@@ -16,7 +16,7 @@ from t_tech.invest.logging import Metadata
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.execution import OrderExecutionError
 from autorepeater import grpc_deadline
-from autorepeater.order_plan import OrderIntent
+from autorepeater.order_intent import OrderIntent
 from autorepeater.tinvest_execution_data import _read
 from autorepeater.tinvest_requests import call_api
 

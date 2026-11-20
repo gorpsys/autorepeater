@@ -8,7 +8,8 @@ from autorepeater.portfolio import TargetPortfolio, validate_target
 from autorepeater.strategy_data import InstrumentType, PortfolioEntry
 from autorepeater.strategy_plan import (
     AllocationProfile, StrategyContext, StrategyDecision, StrategyPlan, TradeMode,
-    exact_sum, validate_context, validate_decision, validate_plan, validate_profile,
+    allocate_floor, difference, exact_sum, leaves, nodes, validate_context,
+    validate_decision, validate_plan, validate_profile,
 )
 
 
@@ -84,6 +85,24 @@ def test_profile_sum_is_exact():
     assert exact_sum([D('1e80'), D('1e-80'), -D('1e80')]) == D('1e-80')
     assert exact_sum([]) == 0
     assert getcontext().prec == 28
+
+
+def test_occurrence_traversal_preserves_preorder():
+    """Shared traversal visits internal occurrences and keeps terminal order."""
+    leaf = replace(plan(), path=(0, 0))
+    branch = replace(plan(), path=(0,), children=(leaf,))
+    sibling = replace(plan(), path=(1,))
+    root = replace(plan(), children=(branch, sibling))
+
+    assert tuple(nodes(root)) == (root, branch, leaf, sibling)
+    assert tuple(leaves(root).items()) == (((0, 0), leaf), ((1,), sibling))
+
+
+def test_exact_difference_and_floor_keep_residual():
+    """The shared monetary helpers respect fractional pieces beyond Decimal precision."""
+    amount = D('9999999999999999999999999999.999')
+    assert difference(amount, D(10**28)) == D('-.001')
+    assert allocate_floor(amount, D(1)) == 10**28 - 1
 
 
 @pytest.mark.parametrize('changes', [

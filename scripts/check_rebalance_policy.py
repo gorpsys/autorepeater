@@ -21,17 +21,20 @@ from autorepeater.composite_strategy import (
     CompositeSnapshot, CompositeStrategy, PreparedCompositeComponent, PreparedCompositeSource,
 )
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError, execute_plan
-from autorepeater.execution_data import AccountReadiness, ExecutionSnapshot, TradeRules
+from autorepeater.execution_data import (
+    AccountReadiness, ExecutionData, ExecutionSnapshot, TradeRules,
+)
+from autorepeater.fx_funding import FundingInputs
 from autorepeater.index_config import (
     AllocationDriftRange, IndexConfig, IndexInstrument, load_index_config,
 )
 from autorepeater.index_strategy import IndexQuote, IndexStrategy
-from autorepeater.order_plan import build_order_plan
+from autorepeater.order_plan import OrderPlan, build_order_plan
+from autorepeater.pass_planning import finalize_strategy_plan, prepare_strategy_context
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.rebalance_policy import allocation_drift
-from autorepeater.repeater import destination_positions, plan_ownership
 from autorepeater.strategy_allocation import build_marks, recovered_capital
-from autorepeater.strategy_contract import PreparedStrategy
+from autorepeater.strategy_contract import PreparedStrategy, Strategy
 from autorepeater.strategy_data import InstrumentType, PortfolioEntry, PortfolioSnapshot
 from autorepeater.strategy_plan import StrategyContext, TradeMode, exact_sum
 
@@ -251,22 +254,16 @@ class ModelExecution:
         return self.receipts[order_id]
 
 
-def model_plan(strategy, snapshot, model):
+def model_plan(strategy: Strategy, snapshot: object, model: ExecutionData, *,
+               funding: FundingInputs | None = None) -> OrderPlan:
     """Build a real policy and bounded lot plan on an offline model state."""
     state = model.get_destination('MODEL')
-    positions = destination_positions(state)
     profile = strategy.allocation_profile(snapshot)
-    marks = build_marks(positions, (profile,))
-    recognized = tuple(item for item in positions if profile.exposures.get(item.uid, ZERO) > 0)
-    unassigned = {item.uid: item.quantity for item in positions
-                  if profile.exposures.get(item.uid, ZERO) == 0}
-    inputs = StrategyContext((), state.budget, recovered_capital(recognized, profile, marks),
-                             False, recognized, marks)
+    inputs, unassigned = prepare_strategy_context(profile, state)
     plan = strategy.build_plan(snapshot, inputs)
-    plan = replace(plan, unassigned={**plan.unassigned, **unassigned})
-    ownership = plan_ownership(plan)
-    rules = model.get_trade_rules('MODEL', sorted(inputs.marks))
-    return build_order_plan(plan, state, ownership, inputs.marks, rules)
+    plan, ownership, uids = finalize_strategy_plan(plan, inputs, unassigned, state)
+    rules = model.get_trade_rules('MODEL', uids)
+    return build_order_plan(plan, state, ownership, inputs.marks, rules, funding=funding)
 
 
 def _index_replay(strategy, snapshot, budget, manifest, rng):  # pylint: disable=too-many-locals

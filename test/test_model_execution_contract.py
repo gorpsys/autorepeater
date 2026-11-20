@@ -15,7 +15,7 @@ from autorepeater.execution import OrderExecutionError, OrderExecutor
 from autorepeater.execution_data import AccountReadiness, ExecutionData
 from autorepeater.fx import FxSnapshot
 from autorepeater.order_execution import TInvestOrderExecutor
-from autorepeater.order_plan import OrderIntent
+from autorepeater.order_intent import OrderIntent
 from autorepeater.valuation import SecurityData, Valuation
 from scripts.check_rebalance_policy import ModelExecution
 

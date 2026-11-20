@@ -1,15 +1,19 @@
 """Physical lot bounds preserve fractional owners and isolated money."""
 from dataclasses import replace
+from datetime import datetime, timezone
 from decimal import Decimal as D
 
 import pytest
 
-from autorepeater.execution_data import ExecutionSnapshot, TradeRules
+from autorepeater import order_plan, purchase_plan
+from autorepeater.execution_data import ActiveOrder, ExecutionSnapshot, TradeRules
+from autorepeater.fx import FxSnapshot
+from autorepeater.fx_funding import FundingInputs
+from autorepeater.order_intent import OrderIntent, take_pieces, validate_intent
+from autorepeater.order_plan import build_order_plan
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_data import PortfolioSnapshot
 from autorepeater.strategy_plan import StrategyDecision, StrategyPlan, TradeMode, exact_sum
-from autorepeater.order_plan import build_order_plan
-from autorepeater.order_plan import OrderIntent, take_pieces, validate_intent
 
 
 def leaf(path=(), target=None, budget='100', floor='0', sell=False):
@@ -68,8 +72,8 @@ def test_fractional_sellers_form_one_physical_lot():
                             {'X': D(1), 'Y': D(1)}, rules('X', 'Y', lot=10))
     assert len(plan.sells) == 1
     intent = plan.sells[0]
-    assert intent.lots == 1
-    assert intent.pieces == {(0,): D('7.5'), (1,): D('2.5')}
+    assert isinstance(intent, OrderIntent)
+    assert intent == OrderIntent('X', 'SELL', 1, 10, {(0,): D('7.5'), (1,): D('2.5')})
     assert exact_sum(intent.pieces.values()) == D(intent.lots * intent.lot_size)
 
 
@@ -93,12 +97,116 @@ def test_unassigned_sale_and_dust_are_separate_from_buy_only():
 
 @pytest.mark.parametrize('change', [{'limits_ready': False}, {'active_orders': ('active',)}])
 def test_unready_defers_everything(change, caplog):
-    """unready defers everything."""
+    """Unready planning logs account blockers in the existing format."""
     caplog.set_level('INFO', logger='tinkoffBot')
-    result = build_order_plan(leaf(sell=True), replace(destination({'X': D(20)}), **change),
+    snapshot = replace(destination({'X': D(20)}), **change)
+    result = build_order_plan(leaf(sell=True), snapshot,
                               {(): {'X': D(20)}}, {'X': D(1)}, rules('X'))
     assert not result.sells and not result.buys
-    assert 'defer' in caplog.text.lower()
+    assert caplog.messages == [
+        'Defer execution: active orders or unavailable/blocked limits; stage=planning '
+        f'limits_ready={snapshot.limits_ready} active_orders={len(snapshot.active_orders)} '
+        'available_cash={rub: 100.0}']
+    assert caplog.records[0].levelname == 'INFO'
+
+
+@pytest.mark.parametrize('snapshot, expected', [
+    (destination(), True),
+    (replace(destination(), limits_ready=False), False),
+    (replace(destination(), active_orders=(ActiveOrder('id', 'X', 'NEW', 1, 0),)), False),
+])
+def test_ready_uses_shared_predicate_once(snapshot, expected, caplog, monkeypatch):
+    """The facade reports and returns the single evaluation of the common predicate."""
+    caplog.set_level('INFO', logger='tinkoffBot')
+    assert order_plan.order_snapshot_ready(snapshot) is expected
+    calls = []
+
+    def predicate(value):
+        calls.append(value)
+        return not expected
+
+    monkeypatch.setattr(order_plan, 'order_snapshot_ready', predicate)
+    assert order_plan.ready(snapshot, stage='refresh') is not expected
+    assert calls == [snapshot]
+    if expected:
+        assert caplog.messages == [
+            'Defer execution: active orders or unavailable/blocked limits; '
+            'stage=refresh limits_ready=True active_orders=0 available_cash={rub: 100.0}']
+    else:
+        assert not caplog.records
+
+
+@pytest.mark.parametrize('module, function', [
+    (order_plan, '_sale_capacities'), (purchase_plan, '_candidate'),
+])
+def test_sell_deferral_is_logged_before_later_calculation_fails(
+        module, function, caplog, monkeypatch):
+    """A failure in another UID or BUY cannot discard the earlier SELL diagnosis."""
+    caplog.set_level('INFO', logger='tinkoffBot')
+    diagnosis = 'Defer SELL UID A: currency or API/BESTPRICE unavailable'
+    expected = ValueError('later calculation failure')
+
+    def fail(*_args, **_kwargs):
+        assert caplog.messages == [diagnosis]
+        raise expected
+
+    # A is unavailable and must be handled before B despite the input order.
+    quantities = {'B': D(1), 'A': D(1)}
+    monkeypatch.setattr(module, function, fail)
+    with pytest.raises(ValueError, match='later calculation failure') as error:
+        build_order_plan(leaf(target={'B': D(1)}, sell=True), destination(quantities),
+                         {(): quantities}, {'A': D(1), 'B': D(1)}, rules('B'))
+    assert error.value is expected
+    assert caplog.messages == [diagnosis]
+
+
+def test_funding_validation_follows_sell_and_empty_buy_deferrals(caplog):
+    """Invalid FX rules are rejected after the domestic preview reports its results."""
+    caplog.set_level('INFO', logger='tinkoffBot')
+    funding = FundingInputs(fx_rules={'cny-rub': replace(rules('cny-rub')['cny-rub'], lot=True)})
+    with pytest.raises(ValueError, match=r'trade rules\[cny-rub\]: invalid lot'):
+        build_order_plan(leaf(sell=True), destination({'X': D(20)}), {(): {'X': D(20)}},
+                         {'X': D(1)}, {}, funding=funding)
+    assert caplog.messages == [
+        'Defer SELL UID X: currency or API/BESTPRICE unavailable',
+        'Defer purchases: no funded executable underweight lot']
+
+
+def test_physical_calculations_use_only_loaded_inputs(monkeypatch):
+    """Pure steps preserve ownership and defer reporting to the caller."""
+    tree = parent((leaf((0,), {'Y': D(2)}),), unassigned={'X': D('3.5')})
+    snapshot = replace(destination({'X': D('3.5')}),
+                       fx_snapshot=FxSnapshot({}, datetime(2026, 10, 15, tzinfo=timezone.utc)))
+    initial = {(0,): {}}
+    marks = {'X': D(1), 'Y': D(1)}
+    own = {**rules('X', lot=2), **rules('Y')}
+    sell = OrderIntent('X', 'SELL', 1, 2, {(): D(2)})
+    buy = OrderIntent('Y', 'BUY', 2, 1, {(0,): D(2)})
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError('unexpected effect in physical calculation')
+
+    with monkeypatch.context() as guard:
+        guard.setattr('builtins.open', fail)
+        guard.setattr('io.open', fail)
+        guard.setattr('socket.socket.connect', fail)
+        guard.setattr('logging.Logger._log', fail)
+        ownership, money = order_plan.prepare_order_preview(tree, snapshot, initial, marks, own)
+        steps = list(order_plan.iter_sale_steps(tree, snapshot, ownership, own))
+        buys = purchase_plan.calculate_purchase_intents(
+            tree, snapshot, ownership, marks, own, money)
+        assert not purchase_plan.calculate_purchase_intents(
+            tree, snapshot, ownership, marks, own, {(0,): D(0)})
+        plan = order_plan.finish_order_plan(tree, snapshot, marks, own,
+                                            (ownership, money, (sell,), buys),
+                                            funding=FundingInputs())
+    assert initial == {(0,): {}}
+    assert ownership == {(0,): {}, (): {'X': D('3.5')}} and money == {(0,): D(100)}
+    assert steps == [('X', sell, 'residual')]
+    assert plan.sells == (sell,) and plan.buys == (buy,)
+    assert plan.marks == marks and plan.marks is not marks
+    assert plan.rules == own and plan.rules is not own
+    assert plan.funding is not None and not plan.funding.exchanges
 
 
 def test_all_targets_validated_before_unassigned_sale():
@@ -162,21 +270,31 @@ def test_insufficient_owner_capacity_is_error():
 
 
 @pytest.mark.parametrize('cap,free,expected', [(10, '9.9', 0), (0, '10', 0), (1, '20', 1)])
-def test_sale_intersects_own_cap_and_free_physical_quantity(cap, free, expected):
-    """sale intersects own cap and free physical quantity."""
+def test_sale_intersects_own_cap_and_free_physical_quantity(cap, free, expected, caplog):
+    """A constrained sale reports one residual whether zero or some lots fit."""
+    caplog.set_level('INFO', logger='tinkoffBot')
     snapshot = replace(destination({'X': D(20)}), available_quantities={'X': D(free)})
     result = build_order_plan(leaf(target={'Y': D(1)}, sell=True), snapshot,
                               {(): {'X': D(20)}}, {'X': D(1), 'Y': D(1)},
                               rules('X', 'Y', lot=10, sell=cap))
     assert sum(item.lots for item in result.sells) == expected
+    assert caplog.messages == [
+        'Defer SELL residual UID X: physical lot/ownership/own cap',
+        'Defer purchases: no funded executable underweight lot']
+    assert all(record.levelname == 'INFO' for record in caplog.records)
 
 
 @pytest.mark.parametrize('rule', [None, replace(rules('X')['X'], bestprice_order_available=False)])
-def test_unavailable_sale_metadata_defers(rule):
-    """unavailable sale metadata defers."""
+def test_unavailable_sale_metadata_defers(rule, caplog):
+    """An unavailable sale logs once before the empty purchase queue."""
+    caplog.set_level('INFO', logger='tinkoffBot')
     result = build_order_plan(leaf(sell=True), destination({'X': D(20)}),
                               {(): {'X': D(20)}}, {'X': D(1)}, {'X': rule} if rule else {})
     assert not result.sells
+    assert caplog.messages == [
+        'Defer SELL UID X: currency or API/BESTPRICE unavailable',
+        'Defer purchases: no funded executable underweight lot']
+    assert all(record.levelname == 'INFO' for record in caplog.records)
 
 
 def test_zero_position_mark_is_allowed_but_nonzero_requires_positive_mark():
