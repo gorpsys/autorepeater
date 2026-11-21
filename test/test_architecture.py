@@ -20,7 +20,7 @@ NEUTRAL = {'constants', 'money', 'portfolio', 'reporting', 'logging_config',
            'strategy_budget', 'composite_config', 'config_catalog',
            'strategy_plan', 'strategy_allocation', 'rebalance_policy',
            'execution_data', 'execution', 'order_intent', 'order_plan', 'pass_planning',
-           'purchase_plan'}
+           'purchase_plan', 'cash_pools'}
 ADAPTERS = {'autorepeater.' + name for name in (
     'tinvest_strategy_data', 'tinvest_execution_data', 'tinvest_fx_data',
     'tinvest_security_data', 'order_execution', 'tinvest_requests',
@@ -255,7 +255,7 @@ def test_checker_rejects_forbidden_imports(module, source, dependency):
 
 @pytest.mark.parametrize('module', ['strategy_plan', 'strategy_allocation', 'execution',
                                     'execution_data', 'order_intent', 'order_plan',
-                                    'pass_planning', 'purchase_plan'])
+                                    'pass_planning', 'purchase_plan', 'cash_pools'])
 @pytest.mark.parametrize('dependency', ['t_tech.invest', 'grpc', 'autorepeater.strategies',
                                         'autorepeater.account_strategy',
                                         'autorepeater.index_strategy',

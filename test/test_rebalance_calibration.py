@@ -239,7 +239,7 @@ def test_pass_pair_aggregates_compatible_duplicates_in_input_order(
 def test_pass_pair_rejects_inconsistent_destination_facts(pass_case, conflict, message):
     """Metadata conflicts fail early; physical discrepancies use the port quantities."""
     case = pass_case
-    rows = (calibration.entry('X', D(1), D(100)),
+    rows = (replace(calibration.entry('X', D(1), D(100)), rub_price=D(110)),
             calibration.entry('X', D(2), D(101 if conflict else 100)))
     state = replace(destination({'X': D(4)}, cash='0'), budget=D(1000),
                     portfolio=PortfolioSnapshot(rows))
