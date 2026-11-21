@@ -19,11 +19,13 @@ from autorepeater.index_config import load_index_configs, select_index_config
 from autorepeater.index_strategy import IndexQuote
 from autorepeater.account_strategy import PreparedAccountSource
 from autorepeater.account_config import AccountConfig
+from autorepeater.execution import ExecutionOutcome, ExecutionState
 from autorepeater.strategy_contract import AlgorithmDefinition, UnsupportedSourceError
 from scripts import check_imoex_strategy as calibration
 import main as cli
 
 pytestmark = pytest.mark.usefixtures('named_accounts')
+NOOP = ExecutionOutcome(ExecutionState.NOOP, 'finished', 'no_execution')
 
 
 @pytest.fixture(autouse=True)
@@ -305,6 +307,7 @@ def test_launch_prepares_and_warns_once(documents, tmp_path, monkeypatch, caplog
             patch.object(serverless, 'configure_yc_logging'), \
             patch.object(runner_module, 'print_all_portfolio'), \
             patch.object(runner_module.Runner, '_create_repeater', autospec=True) as engine:
+        engine.return_value.sync_accounts.return_value = NOOP
         if entrypoint == 'cli':
             cli.main()
         elif entrypoint == 'cloud':
@@ -493,6 +496,7 @@ def test_cloud_query_algorithm_priority(monkeypatch):
     monkeypatch.setenv('t_token', 'legacy-token')
     with patch.object(serverless, 'Runner') as runner, \
             patch.object(serverless, 'configure_yc_logging'):
+        runner.return_value.run_sync.return_value = NOOP
         result = serverless.handler({'queryStringParameters': {
             'algoritm': 'ACCOUNT', 'src': '00123'}}, None)
     prepared = runner.call_args.kwargs['prepared_strategy']
@@ -528,6 +532,7 @@ def test_cloud_defaults_to_balanced(monkeypatch, event):
                          wraps=index_config.read_index_document) as read, \
             patch.object(composite_config, 'read_composite_document',
                          wraps=composite_config.read_composite_document) as composite_read:
+        runner.return_value.run_sync.return_value = NOOP
         result = serverless.handler(event, None)
     prepared = runner.call_args.kwargs['prepared_strategy']
     strategy = strategies.create_strategy(prepared)
@@ -591,6 +596,7 @@ def test_cloud_destination_is_an_opaque_string(monkeypatch, dst):
     monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
     with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
             patch.object(serverless, 'configure_yc_logging'):
+        runner.return_value.run_sync.return_value = NOOP
         serverless.handler({'queryStringParameters': {'dst': dst}}, None)
     assert runner.call_args.kwargs['dst'] == dst
     runner.return_value.run_sync.assert_called_once_with()
@@ -616,7 +622,9 @@ def test_cloud_timer_event_keeps_destination_defaults(monkeypatch, destination, 
         monkeypatch.setenv('DST_ACCOUNT', destination)
     with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
             patch.object(serverless, 'configure_yc_logging'):
-        serverless.handler(event, None)
+        runner.return_value.run_sync.return_value = NOOP
+        result = serverless.handler(event, None)
+    assert result['headers']['X-Execution-Outcome'] == 'NOOP'
     prepared = runner.call_args.kwargs['prepared_strategy']
     assert prepared.prepared_source.name == 'BALANCED'
     assert runner.call_args.kwargs['dst'] == (destination or serverless.DEFAULT_DST_ACCOUNT)
@@ -641,6 +649,7 @@ def test_cloud_http_event_keeps_destination_selection(monkeypatch, query):
     monkeypatch.setenv('INVEST_TOKEN', 'synthetic-token')
     with patch.object(serverless, 'Runner', autospec=True, spec_set=True) as runner, \
             patch.object(serverless, 'configure_yc_logging'):
+        runner.return_value.run_sync.return_value = NOOP
         serverless.handler(event, None)
     assert runner.call_args.kwargs['dst'] == ('00123' if query else 'configured-account')
     runner.return_value.run_sync.assert_called_once_with()
@@ -665,6 +674,7 @@ def test_cloud_partial_index_selection(monkeypatch, location, source):
                 serverless.handler({'queryStringParameters': query}, None)
             runner.assert_not_called()
             return
+        runner.return_value.run_sync.return_value = NOOP
         serverless.handler({'queryStringParameters': query}, None)
     assert runner.call_args.kwargs['prepared_strategy'].prepared_source.name == 'BALANCED'
     runner.return_value.run_sync.assert_called_once_with()
@@ -680,6 +690,7 @@ def test_cloud_explicit_previous_default(monkeypatch, location):
         monkeypatch.setenv('SRC_ACCOUNT', 'TMON')
     with patch.object(serverless, 'Runner') as runner, \
             patch.object(serverless, 'configure_yc_logging'):
+        runner.return_value.run_sync.return_value = NOOP
         serverless.handler({'queryStringParameters': query}, None)
     strategy = strategies.create_strategy(runner.call_args.kwargs['prepared_strategy'])
     assert strategy.config.name == 'TMON'

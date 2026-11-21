@@ -11,7 +11,8 @@ from autorepeater.cash_pools import (
     spending_limits, split_cash,
 )
 from autorepeater.execution import (
-    ExecutionReceipt, _fresh, _positions_match, _submit,
+    ExecutionOutcome, _PassReceipts, _buy_snapshot_blocker, _finished_outcome, _fresh,
+    _positions_match, _record_confirmed_receipts, _submit,
 )
 from autorepeater.execution_data import ExecutionData
 from autorepeater.fx import FxSnapshot, select_direct_pair, validate_pair_uids
@@ -154,21 +155,23 @@ class ExecutionMarket:
         return True
 
     def execute(self, account_id: str, plan: OrderPlan, data: ExecutionData, executor,
-                value: Valuation) -> tuple[ExecutionReceipt, ...]:
+                value: Valuation) -> ExecutionOutcome:
         """Preflight the whole tree, then stop on uncertainty without resubmission/rollback."""
-        if plan.funding is None:
-            raise ValueError('native execution requires a funding plan')
-        validate_plan(plan.strategy)
-        for intent in (*plan.sells, *plan.buys, *plan.funding.demands,
-                       *(purchase.intent for purchase in plan.funding.purchases)):
-            validate_intent(intent)
-        if not ready(plan.snapshot):
-            return ()
-        if not plan.sells and not plan.funding.demands:
-            # Valuation freshness remains independent of trading availability.
-            self._fresh_inputs(account_id, value, sorted(plan.rules), trading=False)
-            return ()
-        return _ExecutionPass(self, account_id, plan, data, executor, value).run()
+        with _record_confirmed_receipts() as pass_receipts:
+            if plan.funding is None:
+                raise ValueError('native execution requires a funding plan')
+            validate_plan(plan.strategy)
+            for intent in (*plan.sells, *plan.buys, *plan.funding.demands,
+                           *(purchase.intent for purchase in plan.funding.purchases)):
+                validate_intent(intent)
+            if not ready(plan.snapshot):
+                return ExecutionOutcome.stopped('before_sales', 'snapshot_not_ready')
+            if not plan.sells and not plan.funding.demands:
+                # Valuation freshness remains independent of trading availability.
+                self._fresh_inputs(account_id, value, sorted(plan.rules), trading=False)
+                return _finished_outcome(plan, plan.ownership, plan.rules, (), native=True)
+            return _ExecutionPass(
+                self, account_id, plan, data, executor, value, pass_receipts).run()
 
 
 @dataclass
@@ -180,6 +183,7 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
     data: ExecutionData
     executor: object
     value: Valuation
+    pass_receipts: _PassReceipts
     terminal_reason: str = field(init=False, default='preflight_or_sales_rejected')
 
     def __post_init__(self):
@@ -189,7 +193,7 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
         self.snapshot, self.own = self.plan.snapshot, self.plan.rules
         self.fx, self.inputs = self.market._fresh_inputs(  # pylint: disable=protected-access
             self.account_id, self.value, self.uids)
-        self.receipts = []
+        self.receipts = self.pass_receipts.accepted
         self.submitted = set()
         self.fx_policy = self.inputs.fx_policy
 
@@ -229,28 +233,31 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
                 return False
             sleep(min(SETTLEMENT_RETRY_INTERVAL, remaining))
 
-    def run(self):
+    def run(self) -> ExecutionOutcome:
         """All-currency preflight precedes even the first independent RUB sale."""
         try:
-            if not self._preflight() or not self._sales():
-                return tuple(self.receipts)
+            if not self._preflight():
+                return self._stopped('before_sales', 'fx_trading_unavailable')
+            if (outcome := self._sales()) is not None:
+                return outcome
             self.ledger.limits = spending_limits(
                 self.plan.strategy, self.ledger.ownership, self.plan.marks)
-            while self._can_continue():
+            while True:
+                if (outcome := self._buy_blocker()) is not None:
+                    return outcome
                 funding = self._funding()
                 if not funding.purchases:
                     self.terminal_reason = 'no_funded_purchase'
                     if funding.demands:
                         logger.info('Defer remaining purchases: native cash/FX lot/own caps/budget')
-                    break
+                    return self._finished()
                 self.terminal_reason = 'submission_or_refresh_failed'
-                continued = (self._exchange(funding.exchanges[0]) if funding.exchanges
-                             else self._buy(funding))
-                if not continued:
-                    break
+                outcome = (self._exchange(funding.exchanges[0]) if funding.exchanges
+                           else self._buy(funding))
+                if outcome is not None:
+                    return outcome
                 self.terminal_reason = 'readiness_positions_cash_or_preflight'
                 self._market_refresh()
-            return tuple(self.receipts)
         finally:
             remaining = [safe_symbol(uid) for uid, target in sorted(
                 self.plan.strategy.target.quantities.items()) if uid not in self.submitted
@@ -260,25 +267,45 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
                         'omitted_count=%d', self.terminal_reason, remaining[:20],
                         max(0, len(remaining) - 20))
 
-    def _can_continue(self):
-        return (ready(self.snapshot) and _positions_match(self.snapshot, self.ledger.ownership)
-                and self.ledger.fits(self.snapshot) and self._preflight())
+    def _stopped(self, stage: str, reason: str) -> ExecutionOutcome:
+        return ExecutionOutcome.stopped(stage, reason, self.receipts)
 
-    def _sales(self):
+    def _finished(self) -> ExecutionOutcome:
+        return _finished_outcome(  # pylint: disable=protected-access
+            self.plan, self.ledger.ownership, self.own, self.receipts, native=True)
+
+    def _buy_blocker(self) -> ExecutionOutcome | None:
+        reason = _buy_snapshot_blocker(  # pylint: disable=protected-access
+            self.snapshot, self.ledger.ownership, log_stage='planning')
+        if reason is not None:
+            return self._stopped('before_buys', reason)
+        if not self.ledger.fits(self.snapshot):
+            return self._stopped('before_buys', 'cash_unavailable')
+        if not self._preflight():
+            return self._stopped('before_buys', 'fx_trading_unavailable')
+        return None
+
+    def _sales(self) -> ExecutionOutcome | None:
         for intent in self.plan.sells:
-            if not self._preflight() or not _sale_allowed(
-                    intent, self.snapshot, self.own, self.plan.rules):
-                return False
-            receipt = _submit(self.account_id, intent, self.executor)
+            if not self._preflight():
+                return self._stopped('sales', 'fx_trading_unavailable')
+            if not _sale_allowed(intent, self.snapshot, self.own, self.plan.rules):
+                return self._stopped('sales', 'sale_unavailable')
+            receipt = _submit(self.account_id, intent, self.executor,
+                              pass_receipts=self.pass_receipts)
             self.receipts.append(receipt)
             for path, pieces in intent.pieces.items():
                 self.ledger.ownership[path][intent.uid] = difference(
                     self.ledger.ownership[path][intent.uid], pieces)
-            if not self._settled() or not _sale_fee(self.ledger, intent, receipt):
-                return False
+            if not self._settled():
+                return self._stopped('after_sales', 'settlement_timeout')
+            if not _sale_fee(self.ledger, intent, receipt):
+                return self._stopped('after_sales', 'cash_attribution_unavailable')
             self._market_refresh()
-        return not self.plan.sells or _credit_sales(
-            self.plan, self.ledger, self.receipts, self.snapshot)
+        if self.plan.sells and not _credit_sales(
+                self.plan, self.ledger, self.receipts, self.snapshot):
+            return self._stopped('after_sales', 'cash_unavailable')
+        return None
 
     def _funding(self):
         marks = {uid: self.fx.to_rub(price).amount
@@ -292,39 +319,46 @@ class _ExecutionPass:  # pylint: disable=too-many-instance-attributes
             self.ledger.ownership, marks, own, self.ledger.limits, inputs,
             capacity_marks=self.plan.marks)
 
-    def _exchange(self, exchange):
+    def _exchange(self, exchange) -> ExecutionOutcome | None:
         intent = OrderIntent(exchange.uid, exchange.side, exchange.lots,
                              exchange.lot_size, dict(exchange.base_contributions))
         self.fx.validate_fresh(self.market.clock())
-        receipt = _submit(self.account_id, intent, self.executor, wait=True)
+        receipt = _submit(self.account_id, intent, self.executor, wait=True,
+                          pass_receipts=self.pass_receipts)
         self.receipts.append(receipt)
         self.fx_policy = self.fx_policy.after_fill(intent.uid, intent.side)
         if not _exchange_cash(self.ledger, exchange, receipt, self.fx):
             self.terminal_reason = 'fx_cash_attribution_unavailable'
             logger.info('Defer FX dependencies: cash attribution unavailable')
             self._settled()
-            return False
+            return self._stopped('after_exchange', 'cash_attribution_unavailable')
         currency = next(code for code, quote in self.fx.quotes.items()
                         if quote.pair.uid == intent.uid) if intent.side == 'BUY' else 'rub'
         self.terminal_reason = 'fx_settlement_unconfirmed'
-        return self._settled(currency)
+        if not self._settled(currency):
+            return self._stopped('after_exchange', 'settlement_timeout')
+        return None
 
-    def _buy(self, funding):
+    def _buy(self, funding) -> ExecutionOutcome | None:
         intent = funding.purchases[0].intent
         self.fx.validate_fresh(self.market.clock())
-        receipt = _submit(self.account_id, intent, self.executor)
+        receipt = _submit(self.account_id, intent, self.executor, pass_receipts=self.pass_receipts)
         self.receipts.append(receipt)
         self.submitted.add(intent.uid)
         if not _purchase_cash(self.ledger, intent, receipt, self.plan.marks,
                               currency_code(self.own[intent.uid].currency)):
             self.terminal_reason = 'purchase_cash_rejected'
-            return False
+            return self._stopped('after_buy', 'purchase_cash_rejected')
         for path, pieces in intent.pieces.items():
             self.ledger.ownership[path][intent.uid] = exact_sum((
                 self.ledger.ownership[path].get(intent.uid, ZERO), pieces))
         self.terminal_reason = ('purchase_settlement_unconfirmed' if len(funding.purchases) > 1
                                 else 'no_further_funded_purchase')
-        return len(funding.purchases) > 1 and self._settled()
+        if len(funding.purchases) == 1:
+            return self._finished()
+        if not self._settled():
+            return self._stopped('after_buy', 'settlement_timeout')
+        return None
 
 
 def _split_amount(amount, pieces):

@@ -1,7 +1,9 @@
 """Neutral receipts and one-pass execution, without SDK dependencies."""
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
+from enum import StrEnum
 import logging
 from time import monotonic, sleep
 from typing import Protocol
@@ -14,7 +16,7 @@ from autorepeater.execution_data import (
 from autorepeater.money import format_decimal, format_decimal_map
 from autorepeater.order_intent import OrderIntent, validate_intent
 from autorepeater.order_plan import OrderPlan, ready, validate_rules
-from autorepeater.purchase_plan import purchase_intents
+from autorepeater.purchase_plan import has_buy_delta, purchase_intents
 from autorepeater.reporting import print_order_money
 from autorepeater.strategy_plan import (
     ZERO, difference, exact_product, exact_sum, validate_map, validate_plan,
@@ -31,6 +33,7 @@ class OrderExecutionError(Exception):
     def __init__(self, message: str, *, request_id: str | None = None) -> None:
         super().__init__(message)
         self.request_id = request_id
+        self.confirmed_receipts: tuple[ExecutionReceipt, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,66 @@ class ExecutionReceipt:  # pylint: disable=too-many-instance-attributes
     lots_executed: int
     cash: dict[str, Decimal]
     amounts: OrderAmounts | None = field(default=None, compare=False)
+
+
+def confirmed_receipts_from_error(error: BaseException) -> tuple[ExecutionReceipt, ...] | None:
+    """Read a typed snapshot of accepted fills from a supported pass error."""
+    if not isinstance(error, (OrderExecutionError, TimeoutError)):
+        return None
+    receipts = error.__dict__.get('confirmed_receipts')
+    if isinstance(receipts, tuple) and all(isinstance(item, ExecutionReceipt) for item in receipts):
+        return receipts
+    return None
+
+
+@dataclass
+class _PassReceipts:
+    """Accepted fills and the raw timeout, if any, from this pass's submission."""
+
+    accepted: list[ExecutionReceipt] = field(default_factory=list)
+    submit_timeout: TimeoutError | None = None
+
+
+@contextmanager
+def _record_confirmed_receipts() -> Iterator[_PassReceipts]:
+    receipts = _PassReceipts()
+    try:
+        yield receipts
+    except OrderExecutionError as error:
+        error.confirmed_receipts = tuple(receipts.accepted) or None
+        raise
+    except TimeoutError as error:
+        if error is receipts.submit_timeout:
+            error.__dict__['confirmed_receipts'] = tuple(receipts.accepted) or None
+        elif 'confirmed_receipts' in error.__dict__:
+            error.__dict__['confirmed_receipts'] = None
+        raise
+
+
+class ExecutionState(StrEnum):
+    """Observable state of a completed execution call."""
+
+    NOOP = 'NOOP'
+    DEFERRED = 'DEFERRED'
+    FINISHED = 'FINISHED'
+    PARTIAL = 'PARTIAL'
+
+
+@dataclass(frozen=True)
+class ExecutionOutcome:
+    """Safe terminal facts and accepted fills in execution order."""
+
+    state: ExecutionState
+    stage: str
+    reason: str
+    receipts: tuple[ExecutionReceipt, ...] = ()
+
+    @classmethod
+    def stopped(cls, stage: str, reason: str,
+                receipts: Sequence[ExecutionReceipt] = ()) -> 'ExecutionOutcome':
+        """A guard stops an empty pass or one that already had confirmed effects."""
+        state = ExecutionState.PARTIAL if receipts else ExecutionState.DEFERRED
+        return cls(state, stage, reason, tuple(receipts))
 
 
 class OrderExecutor(Protocol):  # pylint: disable=too-few-public-methods
@@ -101,13 +164,17 @@ def _wait_for_order(account_id: str, intent: OrderIntent, executor: OrderExecuto
 
 
 def _submit(account_id: str, intent: OrderIntent, executor: OrderExecutor, *,
-            wait: bool = False) -> ExecutionReceipt:
+            wait: bool = False, pass_receipts: _PassReceipts | None = None) -> ExecutionReceipt:
     LOGGER.info('Submitting order: account=%s uid=%s side=%s lots=%d',
                 account_id, intent.uid, intent.side, intent.lots)
     try:
         receipt = executor.submit_order(account_id, intent)
     except OrderExecutionError:
         LOGGER.error('Stopping pass: unknown order result UID %s side %s', intent.uid, intent.side)
+        raise
+    except TimeoutError as error:
+        if pass_receipts is not None:
+            pass_receipts.submit_timeout = error
         raise
     if (wait or intent.side == 'SELL') and _receipt_matches(receipt, intent):
         receipt = _wait_for_order(account_id, intent, executor, receipt)
@@ -213,41 +280,68 @@ def _wait_for_settlement(account_id: str, data: ExecutionData, uids: Sequence[st
     return snapshot, rules
 
 
-def _execution_result(plan: OrderPlan, receipts: Sequence[ExecutionReceipt], stage: str
-                      ) -> tuple[ExecutionReceipt, ...]:
-    sells = sum(receipt.side == 'SELL' for receipt in receipts)
+def _finished_outcome(plan: OrderPlan, ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                      rules: dict[str, TradeRules], receipts: Sequence[ExecutionReceipt], *,
+                      native: bool = False) -> ExecutionOutcome:
+    # On a normal exit, accepted security sales precede all other fills.
+    sold = {intent.uid: Decimal(receipt.lots_executed * intent.lot_size)
+            for intent, receipt in zip(plan.sells, receipts)}
+    sell_deltas = plan.initial_sell_deltas(native=native)
+    if (any(delta > sold.get(uid, ZERO) for uid, delta in sell_deltas.items())
+            or has_buy_delta(plan.strategy, ownership, rules, native=native)):
+        return ExecutionOutcome(ExecutionState.PARTIAL, 'finished', 'remaining_trade_delta',
+                                tuple(receipts))
+    if receipts:
+        return ExecutionOutcome(ExecutionState.FINISHED, 'finished', 'queue_completed',
+                                tuple(receipts))
+    return ExecutionOutcome(ExecutionState.NOOP, 'finished', 'no_execution')
+
+
+def _execution_result(plan: OrderPlan, outcome: ExecutionOutcome, *,
+                      log_stage: str | None = None) -> ExecutionOutcome:
+    sells = sum(receipt.side == 'SELL' for receipt in outcome.receipts)
     LOGGER.info('Execution result: stage=%s confirmed_sells=%d confirmed_buys=%d '
-                'planned_sells=%d planned_buys=%d', stage, sells, len(receipts) - sells,
-                len(plan.sells), len(plan.buys))
-    return tuple(receipts)
+                'planned_sells=%d planned_buys=%d', log_stage or outcome.stage, sells,
+                len(outcome.receipts) - sells, len(plan.sells), len(plan.buys))
+    return outcome
 
 
 def execute_plan(account_id: str, plan: OrderPlan, data: ExecutionData,
-                 executor: OrderExecutor) -> tuple[ExecutionReceipt, ...]:
-    # pylint: disable=too-many-locals
+                 executor: OrderExecutor) -> ExecutionOutcome:
     """Sales confirmed individually; fresh positions/caps constrain a new BUY plan."""
+    with _record_confirmed_receipts() as pass_receipts:
+        return _execute_plan(account_id, plan, data, executor, pass_receipts)
+
+
+def _execute_plan(account_id: str, plan: OrderPlan, data: ExecutionData,
+                  executor: OrderExecutor, pass_receipts: _PassReceipts) -> ExecutionOutcome:
+    # pylint: disable=too-many-locals
     validate_plan(plan.strategy)
     for intent in (*plan.sells, *plan.buys):
         validate_intent(intent)
     if not ready(plan.snapshot, stage='before_sales'):
-        return _execution_result(plan, (), 'before_sales')
-    receipts = []
+        outcome = ExecutionOutcome.stopped('before_sales', 'snapshot_not_ready')
+        return _execution_result(plan, outcome)
+    receipts = pass_receipts.accepted
     ownership = {path: dict(values) for path, values in plan.ownership.items()}
     for intent in plan.sells:
-        receipts.append(_submit(account_id, intent, executor))
+        receipts.append(_submit(account_id, intent, executor, pass_receipts=pass_receipts))
         for path, quantity in intent.pieces.items():
             ownership[path][intent.uid] = difference(ownership[path][intent.uid], quantity)
     uids = sorted(set(plan.rules) | set(plan.strategy.target.quantities))
     snapshot, rules = ((plan.snapshot, plan.rules) if not plan.sells
                        else _wait_for_settlement(account_id, data, uids, ownership, 'after_sales'))
-    if not ready(snapshot, stage='before_buys') or not _positions_match(snapshot, ownership):
-        return _execution_result(plan, receipts, 'before_buys')
+    reason = _buy_snapshot_blocker(snapshot, ownership)
+    if reason is not None:
+        outcome = (ExecutionOutcome.stopped('after_sales', 'settlement_timeout', receipts)
+                   if plan.sells else ExecutionOutcome.stopped('before_buys', reason))
+        return _execution_result(plan, outcome, log_stage='before_buys')
     money = _fresh_money(plan, ownership, snapshot, rules, receipts)
     buys = purchase_intents(plan.strategy, snapshot, ownership, plan.marks, rules, money)
     submitted = set()
     while buys:
         intent = buys[0]
-        receipts.append(_submit(account_id, intent, executor))
+        receipts.append(_submit(account_id, intent, executor, pass_receipts=pass_receipts))
         submitted.add(intent.uid)
         for path, quantity in intent.pieces.items():
             ownership[path][intent.uid] = exact_sum((
@@ -258,7 +352,20 @@ def execute_plan(account_id: str, plan: OrderPlan, data: ExecutionData,
             break
         snapshot, rules = _wait_for_settlement(account_id, data, uids, ownership, 'after_buy')
         if not ready(snapshot, stage='between_buys') or not _positions_match(snapshot, ownership):
-            return _execution_result(plan, receipts, 'between_buys')
-        rules = {uid: rule for uid, rule in rules.items() if uid not in submitted}
-        buys = purchase_intents(plan.strategy, snapshot, ownership, plan.marks, rules, money)
-    return _execution_result(plan, receipts, 'finished')
+            return _execution_result(
+                plan, ExecutionOutcome.stopped('after_buy', 'settlement_timeout', receipts),
+                log_stage='between_buys')
+        remaining_rules = {uid: rule for uid, rule in rules.items() if uid not in submitted}
+        buys = purchase_intents(
+            plan.strategy, snapshot, ownership, plan.marks, remaining_rules, money)
+    return _execution_result(plan, _finished_outcome(plan, ownership, rules, receipts))
+
+
+def _buy_snapshot_blocker(snapshot: ExecutionSnapshot,
+                          ownership: dict[tuple[int, ...], dict[str, Decimal]], *,
+                          log_stage: str = 'before_buys') -> str | None:
+    if not ready(snapshot, stage=log_stage):
+        return 'snapshot_not_ready'
+    if not _positions_match(snapshot, ownership):
+        return 'positions_mismatch'
+    return None

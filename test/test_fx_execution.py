@@ -120,9 +120,11 @@ def test_fx_fill_refreshes_real_native_caps_before_dependent_buy():
         '1' if order.uid == 'cny-rub' else '.5',
         'rub' if order.uid == 'cny-rub' else 'cny')
     result = broker.execute('dst', plan, data, executor, value)
-    assert [item.uid for item in result] == ['cny-rub', 'C']
+    assert (result.state, result.stage, result.reason) == (
+        'FINISHED', 'finished', 'queue_completed')
+    assert [item.uid for item in result.receipts] == ['cny-rub', 'C']
     assert [args.args[1].lots for args in executor.submit_order.call_args_list] == [65, 1]
-    assert all(not item.cash for item in result)
+    assert all(not item.cash for item in result.receipts)
     data.get_destination.assert_called_with('dst', valuation=value)
     data.get_trade_rules.assert_called_with('dst', ['C'])
 
@@ -161,11 +163,16 @@ def test_closed_currency_preflight_prevents_other_composite_rub_sale():
     tree = parent((leaf((0,), {'R': D(1)}, budget='500', sell=True),
                    leaf((1,), {'C': D(1)}, budget='1000', floor='100')))
     broker, value, plan, data, executor, fx, _ = setup_plan(
-        tree, own={**rules('R'), **rules('C', currency='cny', buy=0)},
-        holdings={'R': D(2)}, owners={(0,): {'R': D(2)}, (1,): {}})
+        tree, own={**rules('R', 'S'), **rules('C', currency='cny', buy=0)},
+        holdings={'R': D(2), 'S': D('.5')}, owners={(0,): {'R': D(2), 'S': D('.5')}, (1,): {}})
+    assert [intent.uid for intent in plan.sells] == ['R']
+    assert plan.sell_deltas['S'] == D('.5')
     fx.get_trade_rules.side_effect = lambda account, pair: replace(
         rules(pair.uid)[pair.uid], bestprice_order_available=False)
-    assert not broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value)
+    assert (result.state, result.stage, result.reason) == (
+        'DEFERRED', 'before_sales', 'fx_trading_unavailable')
+    assert not result.receipts
     executor.submit_order.assert_not_called()
 
 
@@ -196,7 +203,7 @@ def test_two_buys_can_spend_commission_reserve_without_second_floor(currency, pr
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda account, order: receipt(
         order, str(principal/rate), str(D(5)/rate), currency)
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['A', 'B']
     assert executor.submit_order.call_count == 2
     if currency == 'rub':
@@ -270,7 +277,7 @@ def test_purchase_failure_logs_owner_bounds_and_remaining_uids(caplog):
         own=rules('A', 'GOLD'))
     executor.submit_order.side_effect = lambda account, order: receipt(order, '995', '6')
     with caplog.at_level(logging.INFO, logger='tinkoffBot'):
-        assert len(broker.execute('dst', plan, data, executor, value)) == 1
+        assert len(broker.execute('dst', plan, data, executor, value).receipts) == 1
     assert 'reason=owner_native_cash_exceeded' in caplog.text
     assert 'capacity_rub=900.0' in caplog.text
     assert 'planning_cost_rub=450.0' in caplog.text
@@ -330,7 +337,7 @@ def test_refreshed_decline_cannot_increase_fixed_mark_lots_before_submit(change,
         return receipt(intent, str(exact_product(D(intent.lots * lot), native)), '0', currency)
 
     executor.submit_order.side_effect = submit
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert len(result) == 1
     executor.submit_order.assert_called_once()
     assert executor.submit_order.call_args.args[1].lots == 1
@@ -359,7 +366,7 @@ def test_fx_exchange_funds_only_fixed_capacity_quantity_and_its_reserve(change):
         return receipt(intent, str(native), '0', 'cny')
 
     executor.submit_order.side_effect = submit
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.lots_executed) for item in result] == [('cny-rub', 42), ('A', 1)]
     assert executor.submit_order.call_count == 2
     assert data.get_destination.call_count == 1
@@ -430,7 +437,7 @@ def test_fresh_native_caps_after_fx_can_defer_without_rollback(change):
         plan.snapshot, available_cash={'rub': D(172), 'cny': D(69)})
     data.get_trade_rules.return_value = {'C': replace(rules('C', currency='cny')['C'], **change)}
     executor.submit_order.side_effect = lambda account, order: receipt(order, '828')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['cny-rub']
     executor.submit_order.assert_called_once()
 
@@ -453,7 +460,7 @@ def test_delayed_fx_cash_waits_only_with_reads(settlement_clock):
     executor.submit_order.side_effect = lambda account, order: receipt(
         order, '828' if order.uid == 'cny-rub' else '60',
         currency='rub' if order.uid == 'cny-rub' else 'cny')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['cny-rub', 'C']
     assert settlement_clock.sleep.call_args_list == [call(2), call(2)]
     assert settlement_clock.now == 4
@@ -479,7 +486,10 @@ def test_fx_cash_timeout_defers_dependent_buy(settlement_clock):
     data.get_destination.side_effect = unavailable
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(order, '828')
-    assert len(broker.execute('dst', plan, data, executor, value)) == 1
+    outcome = broker.execute('dst', plan, data, executor, value)
+    assert (outcome.state, outcome.stage, outcome.reason) == (
+        'PARTIAL', 'after_exchange', 'settlement_timeout')
+    assert [item.uid for item in outcome.receipts] == ['cny-rub']
     executor.submit_order.assert_called_once_with('dst', OrderIntent(
         exchange.uid, exchange.side, exchange.lots, exchange.lot_size,
         dict(exchange.base_contributions)))
@@ -499,7 +509,7 @@ def test_incomplete_fx_cash_never_becomes_exact_receipt_or_isolated_credit():
     data.get_destination.return_value = replace(
         plan.snapshot, available_cash={'rub': D(172), 'cny': D(69)})
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=1)
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert len(result) == 1 and result[0].cash == {}
     executor.submit_order.assert_called_once()
     data.get_destination.assert_called_once_with('dst', valuation=value)
@@ -516,7 +526,7 @@ def test_reverse_exchange_finances_only_rub_paper():
     data.get_trade_rules.return_value = rules('R', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(
         order, '552' if order.uid == 'cny-rub' else '450', '1' if order.side == 'SELL' else '5')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [('cny-rub', 'SELL'), ('R', 'BUY')]
     assert executor.submit_order.call_args_list[0].args[1].lots == 46
     assert executor.submit_order.call_count == 2
@@ -532,7 +542,7 @@ def test_rate_increase_after_fx_does_not_expand_original_security_ceiling():
     fx.get_quote.side_effect = [original, replace(original, bid=D(16), ask=D(16)),
                                 replace(original, bid=D(16), ask=D(16))]
     executor.submit_order.side_effect = lambda account, order: receipt(order, '828')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['cny-rub']
     executor.submit_order.assert_called_once()
 
@@ -556,7 +566,8 @@ def test_shared_later_sale_cannot_launder_earlier_unknown_isolated_proceeds():
     assert value.fx is plan.snapshot.fx_snapshot and broker is not None
 
 
-def test_confirmed_security_sell_then_fx_then_buy_uses_fresh_balances():
+@pytest.mark.parametrize('failure_type', [None, OrderExecutionError, TimeoutError])
+def test_confirmed_security_sell_then_fx_then_buy_uses_fresh_balances(failure_type):
     """Single-owner confirmed availability can fund FX without operation history."""
     broker, value, plan, data, executor, _, _ = setup_plan(
         leaf(target={'C': D(1)}, budget='1500', floor='150', sell=True),
@@ -575,13 +586,31 @@ def test_confirmed_security_sell_then_fx_then_buy_uses_fresh_balances():
     data.get_trade_rules.side_effect = [
         {**rules('R'), **rules('C', currency='cny', buy=0)},
         {**rules('R'), **rules('C', currency='cny', buy=1)}]
-    executor.submit_order.side_effect = lambda account, order: receipt(
-        order, str(order.lots*450) if order.uid == 'R' else str(order.lots*12)
-        if order.uid == 'cny-rub' else '60', '1',
-        'cny' if order.uid == 'C' else 'rub')
-    result = broker.execute('dst', plan, data, executor, value)
-    assert [(item.uid, item.side) for item in result] == [
-        ('R', 'SELL'), ('cny-rub', 'BUY'), ('C', 'BUY')]
+    failure = failure_type('offline buy failure') if failure_type else None
+    accepted = []
+
+    def submit(_account, order):
+        if failure is not None and order.uid == 'C':
+            raise failure
+        total = {'R': order.lots * 450, 'cny-rub': order.lots * 12, 'C': 60}[order.uid]
+        fill = receipt(order, str(total), '1', 'cny' if order.uid == 'C' else 'rub')
+        accepted.append(fill)
+        return fill
+
+    executor.submit_order.side_effect = submit
+    if failure is not None:
+        with pytest.raises(failure_type) as caught:
+            broker.execute('dst', plan, data, executor, value)
+        assert caught.value is failure
+        assert execution_module.confirmed_receipts_from_error(failure) == tuple(accepted)
+        expected = [('R', 'SELL'), ('cny-rub', 'BUY')]
+    else:
+        assert broker.execute('dst', plan, data, executor, value).receipts == tuple(accepted)
+        expected = [('R', 'SELL'), ('cny-rub', 'BUY'), ('C', 'BUY')]
+    assert [(item.uid, item.side) for item in accepted] == expected
+    assert [args.args[1].uid for args in executor.submit_order.call_args_list] == [
+        'R', 'cny-rub', 'C']
+    executor.get_order_state.assert_not_called()
     assert executor.submit_order.call_args_list[1].args[1].lots == 67
     assert data.get_trade_rules.call_count == 2
 
@@ -597,28 +626,42 @@ def test_closed_currency_blocks_sale_without_fx_or_buy_from_native_balance(selli
     assert not plan.funding.exchanges
     fx.get_trade_rules.side_effect = lambda account, pair: replace(
         rules(pair.uid)[pair.uid], api_trade_available=False)
-    assert not broker.execute('dst', plan, data, executor, value)
+    assert not broker.execute('dst', plan, data, executor, value).receipts
     executor.submit_order.assert_not_called()
 
 
-def test_foreign_noop_does_not_require_open_currency_trading():
-    """Foreign capital still has a valuation rate, but an empty queue grants no FX."""
+@pytest.mark.parametrize('changed_pair', [False, True])
+def test_foreign_noop_refreshes_valuation_without_reading_currency_trading(changed_pair):
+    """An empty queue refreshes valuation while currency trading stays untouched."""
     broker, value, plan, data, executor, fx, _ = setup_plan(
         holdings={'C': D(1)}, cash={'cny': D(20)}, own=rules('C', currency='cny'))
     assert not plan.sells and not plan.funding.demands
+    quote = value.fx.quotes['cny']
+    fx.get_quote.reset_mock()
     fx.get_trade_rules.reset_mock()
     fx.get_trade_rules.side_effect = AssertionError('no-op must not read currency trading')
-    assert not broker.execute('dst', plan, data, executor, value)
-    executor.submit_order.assert_not_called()
+    if changed_pair:
+        fx.get_quote.side_effect = lambda pair: replace(quote, pair=replace(pair, uid='other'))
+        with pytest.raises(ValueError, match='execution FX pair changed during pass'):
+            broker.execute('dst', plan, data, executor, value)
+    else:
+        outcome = broker.execute('dst', plan, data, executor, value)
+        assert (outcome.state, outcome.stage, outcome.reason) == (
+            'NOOP', 'finished', 'no_execution')
+        assert not outcome.receipts
+    fx.get_quote.assert_called_once_with(quote.pair)
     fx.get_trade_rules.assert_not_called()
+    assert not data.mock_calls
+    assert not executor.mock_calls
 
 
-def test_closed_currency_after_sale_stops_remaining_plan_without_rollback():
-    """A market that closes after a confirmed effect defers all remaining orders."""
+def test_sell_fill_with_closed_fx_leaves_unfunded_buy_delta():
+    """Closing FX after SELL leaves the residual BUY without funding."""
     broker, value, plan, data, executor, fx, _ = setup_plan(
         leaf(target={'C': D(1)}, budget='1500', floor='150', sell=True),
         cash={'rub': D(150)}, own={**rules('R'), **rules('C', currency='cny', buy=0)},
         holdings={'R': D(3)})
+    assert not plan.funding.demands
     data.get_destination.return_value = replace(
         plan.snapshot, quantities={}, available_quantities={}, available_cash={'rub': D(1499)})
     data.get_trade_rules.return_value = plan.rules
@@ -626,7 +669,10 @@ def test_closed_currency_after_sale_stops_remaining_plan_without_rollback():
     fx.get_trade_rules.side_effect = lambda account, pair: replace(
         rules(pair.uid)[pair.uid], api_trade_available=not executor.submit_order.called)
     result = broker.execute('dst', plan, data, executor, value)
-    assert [(item.uid, item.side) for item in result] == [('R', 'SELL')]
+    assert (result.state, result.stage, result.reason) == (
+        'PARTIAL', 'finished', 'remaining_trade_delta')
+    assert [(item.uid, item.side) for item in result.receipts] == [('R', 'SELL')]
+    executor.submit_order.assert_called_once_with('dst', plan.sells[0])
 
 
 @pytest.mark.parametrize('change', [{'limits_ready': False}, {'active_orders': ('active',)},
@@ -639,7 +685,7 @@ def test_post_fx_blocking_or_position_drift_defers_without_retry(change, monkeyp
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(order, '828')
     monkeypatch.setattr('autorepeater.execution_market.SETTLEMENT_TIMEOUT', 0)
-    assert len(broker.execute('dst', plan, data, executor, value)) == 1
+    assert len(broker.execute('dst', plan, data, executor, value).receipts) == 1
     executor.submit_order.assert_called_once()
 
 
@@ -661,7 +707,7 @@ def test_reverse_rub_surplus_cannot_fund_new_foreign_demand_in_same_pass():
     data.get_trade_rules.return_value = {**rules('R', buy=1), **rules('U', currency='usd', buy=0)}
     executor.submit_order.side_effect = lambda account, order: receipt(
         order, '552' if order.uid == 'cny-rub' else '450')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [('cny-rub', 'SELL'), ('R', 'BUY')]
 
 
@@ -671,7 +717,9 @@ def test_wrong_buy_monetary_currency_defers_following_orders_without_guessing_fx
         leaf(target={'A': D(1), 'B': D(1)}, budget='1000', floor='100'), own=rules('A', 'B'))
     executor.submit_order.side_effect = lambda account, order: receipt(order, '450', currency='usd')
     result = broker.execute('dst', plan, data, executor, value)
-    assert [item.uid for item in result] == ['A']
+    assert (result.state, result.stage, result.reason) == (
+        'PARTIAL', 'after_buy', 'purchase_cash_rejected')
+    assert [item.uid for item in result.receipts] == ['A']
     executor.submit_order.assert_called_once()
 
 
@@ -697,7 +745,7 @@ def test_pending_fx_fill_then_buy_uses_polled_facts_and_one_request(status, sett
             exchange, '828')
 
     executor.get_order_state.side_effect = pending
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['cny-rub', 'C']
     assert executor.get_order_state.call_args_list == [call('dst', 'broker-cny-rub')] * 2
     assert executor.submit_order.call_count == 2
@@ -719,7 +767,7 @@ def test_composite_preflight_unions_two_foreign_leaves_before_rub_buy():
              **rules('U', currency='usd', buy=0)})
     fx.get_trade_rules.side_effect = lambda account, pair: replace(
         rules(pair.uid)[pair.uid], bestprice_order_available=pair.base_currency != 'usd')
-    assert not broker.execute('dst', plan, data, executor, value)
+    assert not broker.execute('dst', plan, data, executor, value).receipts
     executor.submit_order.assert_not_called()
     assert {call.args[1].base_currency for call in fx.get_trade_rules.call_args_list} == {
         'cny', 'usd'}
@@ -738,7 +786,7 @@ def test_unknown_scoped_sale_defers_neighbor_but_keeps_preexisting_owner_money()
         plan.snapshot, quantities={}, available_quantities={}, available_cash={'rub': D(1449)})
     data.get_trade_rules.return_value = plan.rules
     executor.submit_order.side_effect = lambda account, order: receipt(order, '450', '1')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [('A', 'SELL'), ('R', 'BUY')]
     assert executor.submit_order.call_args_list[1].args[1].pieces == {(0,): D(1)}
     assert all(not item.cash for item in result)
@@ -750,7 +798,10 @@ def test_initial_unreadiness_never_submits_or_reads_fx_execution(change):
     broker, value, plan, data, executor, fx, _ = setup_plan()
     plan = replace(plan, snapshot=replace(plan.snapshot, **change))
     fx.get_quote.reset_mock()
-    assert not broker.execute('dst', plan, data, executor, value)
+    outcome = broker.execute('dst', plan, data, executor, value)
+    assert (outcome.state, outcome.stage, outcome.reason) == (
+        'DEFERRED', 'before_sales', 'snapshot_not_ready')
+    assert not outcome.receipts
     executor.submit_order.assert_not_called()
     fx.get_quote.assert_not_called()
 
@@ -777,7 +828,7 @@ def test_fx_cash_bound_cannot_spend_more_than_owner_or_synthesize_free_currency(
         plan.snapshot, available_cash={'rub': D(0), 'cny': D(69)})
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=1)
     executor.submit_order.side_effect = lambda account, order: receipt(order, total, fee)
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert len(result) == 1
     executor.submit_order.assert_called_once()
     data.get_destination.assert_called_once_with('dst', valuation=value)
@@ -794,7 +845,7 @@ def test_second_buy_remains_bounded_by_actual_cash_and_own_money(cash, cap):
     data.get_trade_rules.return_value = {
         uid: replace(rule, buy_money_amount=D(cap)) for uid, rule in plan.rules.items()}
     executor.submit_order.side_effect = lambda account, order: receipt(order, '450', '5')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['A']
 
 
@@ -818,7 +869,7 @@ def test_quote_expiring_during_caps_read_is_refreshed_before_first_effect():
     executor.submit_order.side_effect = lambda account, order: receipt(
         order, '828' if order.uid == 'cny-rub' else '60',
         currency='rub' if order.uid == 'cny-rub' else 'cny')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['cny-rub', 'C']
     assert fx.get_quote.call_count == 4  # discovery, initial, expired refresh, after FX
 
@@ -846,7 +897,7 @@ def test_shared_fx_has_exact_owner_units_and_single_dependent_order():
     executor.submit_order.side_effect = lambda account, order: receipt(
         order, '780' if order.uid == 'cny-rub' else '60', '1',
         'rub' if order.uid == 'cny-rub' else 'cny')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['cny-rub', 'C']
     exchange, purchase = [call.args[1] for call in executor.submit_order.call_args_list]
     assert exchange.pieces == {(0,): D('32.5'), (1,): D('32.5')}
@@ -863,6 +914,6 @@ def test_rub_settlement_ignores_closed_foreign_trading_even_with_usd_valuation()
     fx.get_trade_rules.side_effect = lambda account, pair: replace(
         rules(pair.uid)[pair.uid], api_trade_available=False, bestprice_order_available=False)
     executor.submit_order.side_effect = lambda account, order: receipt(order, '450', '5')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [('R', 'BUY')]
     assert value.fx.rate('usd') == D(90)

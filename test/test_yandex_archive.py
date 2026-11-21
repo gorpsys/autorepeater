@@ -707,18 +707,22 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
     import main
     from autorepeater import reporting, runner, serverless
     from autorepeater.composite_strategy import CompositeSnapshot, CompositeStrategy
+    from autorepeater.execution import ExecutionOutcome, ExecutionState
     from autorepeater.index_strategy import IndexQuote
     from autorepeater.strategy_data import InstrumentType, PortfolioEntry
     from autorepeater.strategy_plan import StrategyContext
     from autorepeater.strategies import create_strategy, prepare_strategy
     assert all(Path(m.__file__).resolve() == extracted / f'{m.__name__}.py' for m in (handler, main))
+    no_execution = ExecutionOutcome(ExecutionState.NOOP, 'finished', 'no_execution')
     with patch.object(runner.TInvestOrderExecutor, 'submit_order',
                       side_effect=AssertionError('trading forbidden')) as trade:
         # Exercise the actual handler and its saved prepared default, with no SDK lifecycle.
         with patch.object(serverless, 'Runner', autospec=True) as launch:
+            launch.return_value.run_sync.return_value = no_execution
             result = handler.handler({'queryStringParameters': {
                 'dst': 'destination', 'token': 'test-token'}}, None)
             assert result['body'] == 'Success sync, BALANCED destination!'
+            assert result['headers']['X-Execution-Outcome'] == 'NOOP'
             launch.assert_called_once()
             assert launch.call_args.kwargs['dst'] == 'destination'
             assert launch.call_args.kwargs['token'] == 'test-token'
@@ -774,10 +778,12 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                 assert len(index_warnings.call_args_list) == 2
                 assert 'invalid-foreign.json' in index_warnings.call_args_list[0].args[0]
                 assert 'malformed.json' in index_warnings.call_args_list[1].args[0]
+                launch.return_value.run_sync.return_value = no_execution
                 result = handler.handler({'queryStringParameters': {
                     'algoritm': 'COMPOSITE', 'src': 'ARCHIVE_ROOT',
                     'dst': 'destination', 'token': 'test-token'}}, None)
                 assert result['body'] == 'Success sync, ARCHIVE_ROOT destination!'
+                assert result['headers']['X-Execution-Outcome'] == 'NOOP'
                 launch.assert_called_once_with(
                     token='test-token', prepared_strategy=prepared, dst='destination')
                 assert launch.return_value.method_calls == [call.run_sync()]
@@ -961,6 +967,7 @@ with patch('socket.socket.connect', side_effect=AssertionError('network forbidde
         result = handler.handler({'queryStringParameters': {
             'algoritm': 'ARCHIVE_INDEPENDENT', 'src': 'independent-source', 'dst': 'dst'}}, None)
         assert result['body'] == 'Success sync, independent-source dst!'
+        assert result['headers']['X-Execution-Outcome'] == 'FINISHED'
         executor.submit_order.assert_called_once()
         assert executor.submit_order.call_args.args[1].lots == 10
     assert data.get_portfolio.call_count == 2

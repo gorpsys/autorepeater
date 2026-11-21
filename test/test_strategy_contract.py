@@ -472,8 +472,10 @@ def test_independent_algorithm_launches(entrypoint, invalid_config, launch, monk
         else:
             result = invoke()
             if entrypoint in ('query', 'environment'):
+                # The 49-piece target leaves one piece after sixteen three-piece lots.
                 assert result == {
-                    'statusCode': 200, 'headers': {'Content-Type': 'text/plain'},
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'text/plain', 'X-Execution-Outcome': 'PARTIAL'},
                     'isBase64Encoded': False, 'body': 'Success sync, quote:uid dst!',
                 }
         paths.assert_not_called()
@@ -549,7 +551,7 @@ def test_runner_display_and_diagnostics_keep_sdk_calls_and_intents(mode, level, 
     assert client.orders.get_max_lots.call_count == (3 if mode == 'run' else 1)
     assert destination.positions[-1].quantity.units == 48
     client.orders.cancel_order.assert_not_called()
-    assert sum(message.startswith('Intent UID uid side=BUY lots=16 ')
+    assert sum(message.startswith('Preview BUY uid=uid lots=16 ')
                for message in caplog.messages) == 1
     responses = [record for record in caplog.records
                  if record.message.startswith('SDK response:')]

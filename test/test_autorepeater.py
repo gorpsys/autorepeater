@@ -64,6 +64,7 @@ from autorepeater.tinvest_strategy_data import portfolio_entry
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.portfolio import validate_target
 from autorepeater.repeater import AutoRepeater
+from autorepeater.execution import ExecutionOutcome, ExecutionState
 from autorepeater.execution_data import AccountReadiness, ExecutionData, ExecutionSnapshot
 from autorepeater.order_execution import TInvestOrderExecutor
 from autorepeater.tinvest_execution_data import TInvestExecutionData
@@ -1403,6 +1404,8 @@ def test_cloud_entrypoint(event, environment, expected, invest_environment):
     src, dst, token = expected
     with patch.object(serverless, 'Runner', autospec=True) as runner_class, \
             patch.object(serverless, 'configure_yc_logging', autospec=True) as configure:
+        runner_class.return_value.run_sync.return_value = ExecutionOutcome(
+            ExecutionState.NOOP, 'finished', 'no_execution')
         result = cloud_entrypoint.handler(event, None)
 
         configure.assert_called_once_with()
@@ -1411,7 +1414,7 @@ def test_cloud_entrypoint(event, environment, expected, invest_environment):
         assert runner_class.return_value.method_calls == [call.run_sync()]
         assert result == {
             'statusCode': 200,
-            'headers': {'Content-Type': 'text/plain'},
+            'headers': {'Content-Type': 'text/plain', 'X-Execution-Outcome': 'NOOP'},
             'isBase64Encoded': False,
             'body': f'Success sync, {src} {dst}!',
         }
@@ -1498,6 +1501,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
     import handler
     import main
     from autorepeater import index_config, reporting, runner
+    from autorepeater.execution import ExecutionOutcome, ExecutionState
     from autorepeater.index_config import load_index_config
     from autorepeater.index_strategy import IndexQuote, IndexStrategy, build_index_target
     from autorepeater.composite_strategy import CompositeSnapshot, CompositeStrategy
@@ -1535,6 +1539,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
         assert single.config.reserve == Decimal(reserve)
 
     launches = []
+    no_execution = ExecutionOutcome(ExecutionState.NOOP, 'finished', 'no_execution')
     def capture_launch(application):
         data = create_autospec(StrategyData, instance=True, spec_set=True)
         execution = Mock(spec_set=[])
@@ -1560,7 +1565,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
             assert engine.strategy is strategy and engine.data is data
             assert application.dst == 'destination'
             assert data.mock_calls == execution.mock_calls == []
-            return
+            return no_execution
         config = application.strategy.config
         snapshot = {item.ticker: IndexQuote('uid-' + item.ticker, Decimal('10'), 1)
                     for item in config.instruments}
@@ -1573,6 +1578,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
         assert engine.data is data
         assert data.mock_calls == []
         assert execution.mock_calls == []
+        return no_execution
 
     configs = extracted / 'autorepeater/configs'
     def assert_one_preparation(reads, warnings):
@@ -1610,6 +1616,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                     assert_one_preparation(reads, warnings)
                 assert result['statusCode'] == 200
                 assert result['body'] == f'Success sync, {name} destination!'
+                assert result['headers']['X-Execution-Outcome'] == 'NOOP'
                 assert launches[-1] == (name, reserve, False)
         assert len(launches) == 6
         assert local.call_count == 2
@@ -1660,6 +1667,7 @@ with patch('t_tech.invest.Client', side_effect=AssertionError('SDK client forbid
                 assert all('unrelated-broken.json' in item.args[0]
                            for item in warnings.call_args_list)
             assert result['body'] == 'Success sync, BALANCED destination!'
+            assert result['headers']['X-Execution-Outcome'] == 'NOOP'
             assert launches[-1] == ('BALANCED', None, False)
         for environment in [{'ALGORITM': 'INDEX'}, {'SRC_ACCOUNT': 'TMON'}]:
             os.environ.clear()

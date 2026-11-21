@@ -1,4 +1,5 @@
 """Readiness precedes every financial read and ends with one fresh destination."""
+from contextlib import nullcontext
 from dataclasses import replace
 from decimal import Decimal as D
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from test.test_account_currency import position
 from test.test_composite_strategy import make_composite
 from test.test_fx_execution import runtime
 from test.test_fx_runtime import fixture_sdk_runtime, launch, money
+from test.test_order_execution import receipt, sale_plan
 from test.test_order_plan import destination, leaf, rules
 from test.test_strategy_contract import contract_case
 from unittest.mock import Mock, call, create_autospec, patch
@@ -15,6 +17,7 @@ from grpc import StatusCode
 from t_tech.invest import RequestError, schemas as sdk
 
 import handler as cloud
+from autorepeater import execution as execution_module
 from autorepeater import grpc_deadline, repeater, runner, serverless, tinvest_requests
 from autorepeater.cash_facts import SecurityQuote, SecurityQuoteUnit
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError, OrderExecutor
@@ -101,7 +104,11 @@ def test_ready_immediately_reads_destination_before_source(case, clock):
     for name, port in [('execution', case.execution), ('data', case.data),
                        ('strategy', case.strategy)]:
         calls.attach_mock(port, name)
-    assert case.engine.sync_accounts('dst') == ()
+    with patch.object(repeater, 'execute_plan', autospec=True) as run:
+        result = case.engine.sync_accounts('dst')
+    run.assert_not_called()
+    assert (result.state, result.stage, result.reason) == ('NOOP', 'planning', 'no_execution')
+    assert not result.receipts
     assert clock.sleeps == []
     context = case.strategy.build_plan.call_args.args[1]
     assert context.marks == {'X': D(1), 'PROFILE_ONLY': D(2)}
@@ -197,7 +204,7 @@ def test_ready_response_must_arrive_by_deadline(case, clock, duration, accepted)
 
     case.execution.get_readiness.side_effect = probe
     if accepted:
-        assert case.engine.sync_accounts('dst') == ()
+        assert case.engine.sync_accounts('dst').receipts == ()
     else:
         with pytest.raises(repeater.AccountNotReadyError):
             case.engine.sync_accounts('dst')
@@ -249,6 +256,39 @@ def test_read_errors_are_not_readiness_timeouts(case, clock, error):
     assert_no_planning(case)
 
 
+@pytest.mark.parametrize('stage', ['readiness', 'valuation'])
+@pytest.mark.parametrize('error_type', [OrderExecutionError, TimeoutError])
+def test_reused_error_during_preparation_clears_previous_fills(case, stage, error_type):
+    """A reused exception from before the next executor call has no current fills."""
+    plan = sale_plan()
+    filled = receipt(plan.sells[0])
+    error = error_type('offline failure')
+    case.engine.set_debug(False)
+    case.executor.submit_order.side_effect = [filled, error]
+    with patch.object(repeater, 'build_prepared_order_plan', autospec=True, return_value=plan):
+        with pytest.raises(error_type) as caught:
+            case.engine.sync_accounts('dst')
+    assert caught.value is error
+    assert execution_module.confirmed_receipts_from_error(error) == (filled,)
+
+    valuation = None
+    raise_on_validation = nullcontext()
+    if stage == 'readiness':
+        case.execution.get_readiness.side_effect = error
+    else:
+        market, _, _ = runtime()
+        valuation = market.valuation()
+        case.execution.get_destination.return_value = replace(
+            destination(), fx_snapshot=valuation.fx)
+        raise_on_validation = patch.object(valuation, 'validate_fresh', autospec=True,
+                                           side_effect=error)
+    with raise_on_validation, pytest.raises(error_type) as caught:
+        case.engine.sync_accounts('dst', valuation=valuation)
+    assert caught.value is error
+    assert execution_module.confirmed_receipts_from_error(error) is None
+    assert case.executor.mock_calls == [call.submit_order('dst', order) for order in plan.sells]
+
+
 @pytest.mark.parametrize('change', [
     {'limits_ready': False},
     {'active_orders': (ActiveOrder('old', 'X', 'NEW', 1, 0),)},
@@ -279,7 +319,7 @@ def test_financial_read_after_ready_has_no_readiness_budget(case, clock):
         return destination()
 
     case.execution.get_destination.side_effect = fresh
-    assert case.engine.sync_accounts('dst') == ()
+    assert case.engine.sync_accounts('dst').receipts == ()
     assert clock.now == 165
     case.execution.get_destination.assert_called_once_with('dst')
     case.strategy.load_snapshot.assert_called_once_with(case.data)

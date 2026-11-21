@@ -106,7 +106,7 @@ def test_runtime_allows_second_reverse_source_before_dependent_rub_buy():
     """First reverse proceeds forbid foreign BUY, but cannot forbid another native SELL."""
     plan = reverse_case()
     broker, value, data, executor, _, _, cash, events = reverse_runtime(plan)
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [
         ('cny-rub', 'SELL'), ('usd-rub', 'SELL'), ('R', 'BUY')]
     assert cash == {'cny': D(0), 'usd': D(0), 'rub': D(60)}
@@ -129,7 +129,7 @@ def test_runtime_uses_only_sufficient_usd_source_leaving_cny_untouched():
     """25 CNY must not be submitted as30, nor sold ahead of a sufficient USD source."""
     plan = reverse_case('25', '10')
     broker, value, data, executor, _, _, cash, _ = reverse_runtime(plan)
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [('usd-rub', 'SELL'), ('R', 'BUY')]
     assert cash == {'cny': D(25), 'usd': D(5), 'rub': D(0)}
 
@@ -179,7 +179,7 @@ def test_exact_capacity_runs_through_real_executor_without_fx():
     data = create_autospec(ExecutionData, instance=True, spec_set=True)
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda account, order: receipt(order, '100')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in result] == ['R']
     assert executor.submit_order.call_args.args[1].pieces == pieces
 
@@ -212,7 +212,7 @@ def test_composite_index_runtime_preserves_fully_funded_shared_lot():
     executor.submit_order.side_effect = lambda account, order: receipt(order, str(order.lots * 100))
     with patch('autorepeater.repeater.reporting.print_rebalance_plan') as report:
         result = AutoRepeater(strategy, strategy_data, data, executor, market=broker).sync_accounts(
-            'dst')
+            'dst').receipts
     plan = report.call_args.args[0]
     assert plan.strategy.target.quantities == {'R': D(3)}
     assert plan.buys[0].lots == 2
@@ -326,7 +326,7 @@ def test_second_reverse_source_requires_fresh_own_money_caps_and_readiness(block
             sell_max_lots=0 if block == 'margin' and pair.base_currency == 'usd'
             and 'cny-rub' in events else 1000,
             api_trade_available=not (block == 'closed' and 'cny-rub' in events))
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [('cny-rub', 'SELL')]
     executor.submit_order.assert_called_once()
 
@@ -385,7 +385,7 @@ def test_two_reverse_fills_and_buy_can_pay_fees_from_existing_reserve():
     """510 total/floor60: three fees leave57, with neither a second floor nor FX restock."""
     plan = reverse_case(tree=leaf(target={'R': D(1)}, budget='510', floor='60'))
     broker, value, data, executor, _, _, cash, _ = reverse_runtime(plan, fee='1')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [
         ('cny-rub', 'SELL'), ('usd-rub', 'SELL'), ('R', 'BUY')]
     assert cash == {'cny': D(0), 'usd': D(0), 'rub': D(57)}
@@ -399,7 +399,7 @@ def test_first_reverse_fill_without_monetary_bound_defers_all_dependencies():
     executor.submit_order.side_effect = lambda account, order: receipt(order)
     data.get_destination.side_effect = lambda *_args, **_kwargs: replace(
         plan.snapshot, available_cash={'cny': D(0), 'usd': D(3), 'rub': D(240)})
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert [(item.uid, item.side) for item in result] == [('cny-rub', 'SELL')]
     assert result[0].cash == {}
     executor.submit_order.assert_called_once()
@@ -526,7 +526,7 @@ def test_runtime_reverse_lot_surplus_cannot_bridge_even_when_a_usd_lot_is_afford
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda account, order: receipt(
         order, '1200' if order.side == 'SELL' else '450')
-    result = broker.execute('dst', plan, data, executor, value)
+    result = broker.execute('dst', plan, data, executor, value).receipts
     assert value.fx.quotes['usd'].lot_quote.quote_amount('BUY', 1).amount == 90
     assert D(1200 - 450) > 90
     assert [(item.uid, item.side) for item in result] == [('cny-rub', 'SELL'), ('R', 'BUY')]

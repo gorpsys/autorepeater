@@ -9,6 +9,7 @@ from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from t_tech.invest.sandbox.client import SandboxClient
 from t_tech.invest.services import Services
 
+from autorepeater.execution import ExecutionOutcome
 from autorepeater.logging_config import configure_local_logging
 from autorepeater.grpc_deadline import UnaryDeadlineInterceptor
 from autorepeater.repeater import AutoRepeater
@@ -78,14 +79,14 @@ class Runner:
             else:
                 print_missing_destination('run')
 
-    def run_sync(self) -> None:
+    def run_sync(self) -> ExecutionOutcome | None:
         """Run one finite sync with the explicitly selected SDK endpoint."""
         with self._create_client() as client:
             autorepeater = self._create_repeater(client)
             if self.dst:
-                autorepeater.sync_accounts(self.dst)
-            else:
-                print_missing_destination('run_sync')
+                return autorepeater.sync_accounts(self.dst)
+            print_missing_destination('run_sync')
+        return None
 
     def _create_client(self) -> Client:
         """Keep every service on one endpoint with finite unary deadlines."""

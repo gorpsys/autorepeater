@@ -72,7 +72,7 @@ def enable_market(case, fx):
 
 def compare_passes(case, *, valuation=None, funding=None):
     """Compare the complete physical plans without sending orders."""
-    assert case.engine.sync_accounts('MODEL', valuation=valuation) == ()
+    assert case.engine.sync_accounts('MODEL', valuation=valuation).receipts == ()
     case.output.assert_called_once()
     working, debug = case.output.call_args.args
     assert debug is True
@@ -392,6 +392,7 @@ def test_index_repeats_monthly_tail_and_price_paths(inputs):
     assert rejected and all('positive quantity' in row['main_error'] for row in rejected)
     rows = [row for row in rows if 'main_error' not in row]
     assert all(row['repeat_equal'] for row in rows)
+    assert all(row['monthly_metrics']['order_count'] > 0 for row in rows)
     assert all(row['post_trade_repeat_orders'] == 0 for row in rows)
     assert all(row['monthly_deposit'] == D(2000) for row in rows)
     assert all(row['cash_nonnegative'] for row in rows)
@@ -439,13 +440,20 @@ def test_composite_filled_replay_and_unchanged_second_run():
                                        {'a': D(10), 'b': D(10)}, {'a': 1, 'b': 1}, D(0))
     plan = calibration.model_plan(root, snapshot, model)
     assert not plan.buys
-    calibration.execute_plan('MODEL', plan, model, model)
+    assert not model.orders and not model.receipts
+    outcome = calibration.execute_plan('MODEL', plan, model, model)
+    assert outcome.state.value == 'FINISHED'
+    assert outcome.receipts == (model.receipts['1'], model.receipts['2'])
+    assert [
+        (fill.uid, fill.side, fill.status, fill.lots_executed) for fill in outcome.receipts
+    ] == [('a', 'SELL', 'FILL', 2000), ('b', 'BUY', 'FILL', 1000)]
     assert model.orders == [('a', 'SELL', 2000, 1), ('b', 'BUY', 1000, 1)]
     assert model.quantities == {'a': D(6000), 'b': D(3000)}
     assert model.cash == D(10000)
     again = calibration.model_plan(root, snapshot, model)
-    calibration.execute_plan('MODEL', again, model, model)
     assert not again.sells and not again.buys
+    repeat = calibration.execute_plan('MODEL', again, model, model)
+    assert repeat.state.value == 'NOOP' and not repeat.receipts
     assert len(model.orders) == 2
 
 
