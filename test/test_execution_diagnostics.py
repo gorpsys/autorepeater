@@ -17,7 +17,10 @@ from grpc import StatusCode
 from t_tech.invest import RequestError
 from t_tech.invest.logging import Metadata
 
-from autorepeater import logging_config, reporting, runner as runner_module, serverless, strategies
+from autorepeater import (
+    logging_config, order_plan, purchase_plan, reporting, runner as runner_module,
+    serverless, strategies,
+)
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_data import InstrumentType, PortfolioEntry, PositionEvent
@@ -72,6 +75,18 @@ def test_unavailable_bestprice_is_info_skip(runtime, caplog):
     assert any('SKIP' in message for message in caplog.messages)
     assert any('BESTPRICE=False' in message for message in caplog.messages)
     executor.submit_order.assert_not_called()
+
+
+def test_executable_preview_calculates_each_order_queue_once():
+    """Logging facades consume both executable calculations without repeating them."""
+    with (patch.object(order_plan, 'iter_sale_steps', wraps=order_plan.iter_sale_steps) as sells,
+          patch.object(purchase_plan, 'calculate_purchase_intents',
+                       wraps=purchase_plan.calculate_purchase_intents) as buys):
+        plan = build_order_plan(leaf(), destination(), {(): {}},
+                                {'X': Decimal(1)}, rules('X'))
+    sells.assert_called_once()
+    buys.assert_called_once()
+    assert not plan.sells and len(plan.buys) == 1
 
 
 @pytest.mark.parametrize('algoritm, src', [('COMPOSITE', 'BALANCED'), ('INDEX', 'IMOEX')])

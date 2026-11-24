@@ -1,11 +1,14 @@
 """Neutral financial models and validation, independent from the working engine."""
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from enum import StrEnum
 
 from autorepeater.portfolio import TargetPortfolio, validate_target
 from autorepeater.strategy_data import InstrumentType, PortfolioEntry
+
+
+ZERO = Decimal(0)
 
 
 class TradeMode(StrEnum):
@@ -56,6 +59,18 @@ class StrategyPlan:  # pylint: disable=too-many-instance-attributes
     positions: tuple[PortfolioEntry, ...] = ()
 
 
+def nodes(plan: StrategyPlan) -> Iterator[StrategyPlan]:
+    """Visit occurrences in preorder, including internal nodes with unassigned money."""
+    yield plan
+    for child in plan.children:
+        yield from nodes(child)
+
+
+def leaves(plan: StrategyPlan) -> dict[tuple[int, ...], StrategyPlan]:
+    """Terminal targets retain their own spending limits."""
+    return {node.path: node for node in nodes(plan) if not node.children}
+
+
 def finite_decimal(value: object, field: str, minimum: Decimal = Decimal(0),
                    positive: bool = False) -> Decimal:
     """Validate without coercion or epsilon at a financial boundary."""
@@ -88,6 +103,18 @@ def exact_product(left: Decimal, right: Decimal) -> Decimal:
     with localcontext() as context:
         context.prec = max(28, len(left.as_tuple().digits) + len(right.as_tuple().digits))
         return left * right
+
+
+def difference(left: Decimal, right: Decimal) -> Decimal:
+    """Subtract finite values without losing a previously corrected residual."""
+    return exact_sum((left, right.copy_negate()))
+
+
+def allocate_floor(amount: Decimal, divisor: Decimal) -> int:
+    """Integral ratio without precision-28 rounding up a monetary/piece cap."""
+    numerator, denominator = amount.as_integer_ratio()
+    div_numerator, div_denominator = divisor.as_integer_ratio()
+    return (numerator * div_denominator) // (denominator * div_numerator)
 
 
 def validate_path(path: object) -> None:

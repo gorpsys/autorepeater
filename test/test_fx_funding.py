@@ -5,7 +5,7 @@ from decimal import Decimal as D
 from test.test_order_plan import destination, leaf, parent, rules
 
 import pytest
-from autorepeater import fx_funding
+from autorepeater import cash_pools, fx_funding, order_plan
 from autorepeater.cash_facts import MoneyAmount, SecurityQuote, SecurityQuoteUnit
 from autorepeater.cash_pools import (
     CashPools, CashProceeds, cash_headroom, credit_cash_pools, initial_cash_pools,
@@ -78,6 +78,15 @@ def test_foreign_reserve_keeps_half_in_rub_without_increasing_total():
     assert result.reserve_shares[()]['rub'] == D(50)
     assert result.reserve_shares[()]['cny'] == D('4.166666666666666666666666666')
     assert result.projected_cash.amount((), 'rub') >= 50
+
+
+def test_native_headroom_includes_reserve_outside_security_spending_limit():
+    """The shared RUB spending cap does not replace native money ownership."""
+    tree = leaf(target={'C': D(1)}, budget='1000', floor='100')
+    ownership = {(): {'C': D(1)}}
+    marks = {'C': D(720)}
+    assert cash_pools.spending_limits(tree, ownership, marks) == {(): D(180)}
+    assert cash_headroom(tree, ownership, marks) == {(): D(280)}
 
 
 def test_shared_fx_leaves_each_owner_room_for_observed_commission():
@@ -157,6 +166,29 @@ def test_reserve_shortage_without_purchase_demand_does_not_start_fx():
                               fx_rules=rules('cny-rub'))).funding
     assert not result.demands and not result.purchases and not result.exchanges
     assert result.projected_cash == result.cash
+
+
+@pytest.mark.parametrize('native', [False, True])
+def test_native_input_allows_foreign_sale_even_without_fx_exchange(native, caplog):
+    """Native selection is based on FundingInputs, independent of exchange output."""
+    caplog.set_level('INFO', logger='tinkoffBot')
+    quantities = {'X': D(1), 'Y': D(1)}
+    snapshot = replace(destination(quantities, cash='0'), fx_snapshot=market())
+    inputs = FundingInputs(native_prices={'X': MoneyAmount('cny', D(1))})
+    result = build_order_plan(
+        leaf(target={'Y': D(1)}, sell=True), snapshot, {(): quantities},
+        {'X': D(12), 'Y': D(1)}, {**rules('X', currency='cny'), **rules('Y')},
+        funding=inputs if native else None)
+    empty_buy = 'Defer purchases: no funded executable underweight lot'
+    assert not result.buys
+    if native:
+        assert [(intent.uid, intent.lots) for intent in result.sells] == [('X', 1)]
+        assert result.funding is not None and not result.funding.exchanges
+        assert caplog.messages == [empty_buy]
+    else:
+        assert not result.sells and result.funding is None
+        assert caplog.messages == [
+            'Defer SELL UID X: currency or API/BESTPRICE unavailable', empty_buy]
 
 
 @pytest.mark.parametrize('side', ['BUY', 'SELL'])
@@ -536,12 +568,31 @@ def test_two_pure_buys_pay_fee_from_reserve_without_repeated_floor():
 
 
 @pytest.mark.parametrize('changes', [{'limits_ready': False}, {'active_orders': ('active',)}])
-def test_funding_readiness_blocks_all_projected_effects_but_retains_demand(changes):
+def test_funding_readiness_blocks_all_projected_effects_but_retains_demand(changes, monkeypatch):
     """Currency intentions cannot bypass the existing account readiness gate."""
     snapshot = replace(destination(), fx_snapshot=market(), **changes)
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError('blocked snapshot must skip executable preview')
+
+    monkeypatch.setattr(order_plan, 'sale_intents', fail)
+    monkeypatch.setattr(order_plan, 'purchase_intents', fail)
     result = build_order_plan(leaf(), snapshot, {(): {}}, {'X': D(1)}, rules('X'),
-                              funding=FundingInputs()).funding
-    assert result.demands and not result.purchases and not result.exchanges
+                              funding=FundingInputs())
+    assert not result.sells and not result.buys
+    assert result.funding.demands and not result.funding.purchases and not result.funding.exchanges
+
+
+def test_unready_funding_still_validates_supplied_fx_rules(caplog):
+    """A blocked snapshot does not bypass an invalid conditional funding boundary."""
+    caplog.set_level('INFO', logger='tinkoffBot')
+    snapshot = replace(destination(), limits_ready=False, fx_snapshot=market())
+    inputs = FundingInputs(fx_rules={'cny-rub': replace(rules('cny-rub')['cny-rub'], lot=True)})
+    with pytest.raises(ValueError, match=r'trade rules\[cny-rub\]: invalid lot'):
+        build_order_plan(leaf(), snapshot, {(): {}}, {'X': D(1)}, rules('X'), funding=inputs)
+    assert caplog.messages == [
+        'Defer execution: active orders or unavailable/blocked limits; '
+        'stage=planning limits_ready=False active_orders=0 available_cash={rub: 100.0}']
 
 
 def test_native_prices_cannot_be_guessed_from_broker_rub_marks():

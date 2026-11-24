@@ -18,8 +18,8 @@ from autorepeater.execution import ExecutionReceipt, OrderExecutionError, OrderE
 from autorepeater.execution_data import ExecutionData
 from autorepeater.execution_market import ExecutionMarket, _Ledger, _credit_sales, _purchase_cash
 from autorepeater.fx_data import FxData
+from autorepeater.order_intent import OrderIntent
 from autorepeater.order_plan import build_order_plan
-from autorepeater.order_plan import OrderIntent
 from autorepeater.strategy_plan import exact_product, exact_sum
 from autorepeater.valuation import SecurityData
 

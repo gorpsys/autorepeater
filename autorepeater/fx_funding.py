@@ -13,12 +13,12 @@ from autorepeater.cash_pools import (
 from autorepeater.execution_data import ExecutionSnapshot, TradeRules
 from autorepeater.fx import FxSnapshot
 from autorepeater.fx_data import FxLotQuote, fx_ratio
-from autorepeater.purchase_plan import (
-    OrderIntent, ZERO, allocate_floor, difference, funding_candidates, leaves,
-    take_pieces, validate_intent,
-)
+from autorepeater.order_intent import OrderIntent, take_pieces, validate_intent
+from autorepeater.purchase_plan import funding_candidates
 from autorepeater.strategy_allocation import proportional_split
-from autorepeater.strategy_plan import StrategyPlan, exact_product, exact_sum, finite_decimal
+from autorepeater.strategy_plan import (
+    ZERO, StrategyPlan, allocate_floor, difference, exact_product, exact_sum,
+    finite_decimal, leaves)
 
 
 def _freeze_costs(values):

@@ -95,18 +95,22 @@ def assert_no_planning(case):
 def test_ready_immediately_reads_destination_before_source(case, clock):
     """The ready path has no delay and retains complete debug plan validation."""
     calls = Mock()
+    profile = case.strategy.allocation_profile.return_value
+    case.strategy.allocation_profile.return_value = replace(
+        profile, prices={**profile.prices, 'PROFILE_ONLY': D(2)})
     for name, port in [('execution', case.execution), ('data', case.data),
                        ('strategy', case.strategy)]:
         calls.attach_mock(port, name)
     assert case.engine.sync_accounts('dst') == ()
     assert clock.sleeps == []
+    context = case.strategy.build_plan.call_args.args[1]
+    assert context.marks == {'X': D(1), 'PROFILE_ONLY': D(2)}
     assert calls.mock_calls == [
         call.execution.get_readiness('dst', timeout=30.0),
         call.data.begin_snapshot(), call.execution.get_destination('dst'),
         call.strategy.load_snapshot(case.data),
         call.strategy.allocation_profile(case.strategy.load_snapshot.return_value),
-        call.strategy.build_plan(case.strategy.load_snapshot.return_value,
-                                 case.strategy.build_plan.call_args.args[1]),
+        call.strategy.build_plan(case.strategy.load_snapshot.return_value, context),
         call.execution.get_trade_rules('dst', ['X']),
     ]
     assert not case.executor.mock_calls

@@ -18,7 +18,8 @@ from autorepeater import execution as execution_module
 from autorepeater.execution import ExecutionReceipt, OrderExecutionError, execute_plan
 from autorepeater.execution_data import ExecutionData, ExecutionSnapshot, TradeRules
 from autorepeater.order_execution import TInvestOrderExecutor
-from autorepeater.order_plan import OrderIntent, build_order_plan
+from autorepeater.order_intent import OrderIntent
+from autorepeater.order_plan import build_order_plan
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_data import PortfolioSnapshot
 from autorepeater.strategy_plan import StrategyDecision, StrategyPlan, TradeMode
