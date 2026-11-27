@@ -379,9 +379,12 @@ def print_rebalance_plan(plan: OrderPlan, debug: bool) -> None:
                     'buy_money=%s buy_lots=%s sell_lots=%s', uid, rule.lot, rule.currency,
                     rule.api_trade_available, rule.bestprice_order_available,
                     format_decimal(rule.buy_money_amount), rule.buy_max_lots, rule.sell_max_lots)
-    for intent in (*plan.sells, *plan.buys):
+    for intent in plan.sells:
         logger.info('Intent UID %s side=%s lots=%s pieces=%s',
                     intent.uid, intent.side, intent.lots, _decimal_map(intent.pieces))
+    for intent in plan.buys:
+        logger.info('Preview BUY uid=%s lots=%s pieces=%s',
+                    intent.uid, intent.lots, _decimal_map(intent.pieces))
     if plan.funding is not None:
         _print_funding(plan)
         logger.info('Execution funding: funded_buys=%d exchanges=%d',

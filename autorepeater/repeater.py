@@ -3,14 +3,17 @@ from dataclasses import replace
 from time import monotonic, sleep
 
 from autorepeater.execution import (
-    ExecutionReceipt, OrderExecutionError, OrderExecutor, execute_plan,
+    ExecutionOutcome, ExecutionState, OrderExecutionError, OrderExecutor,
+    _record_confirmed_receipts, execute_plan,
 )
 from autorepeater.execution_data import (
     AccountReadiness, ExecutionData, ExecutionDataError, ExecutionSnapshot,
 )
 from autorepeater.execution_market import ExecutionMarket
 from autorepeater.logging_config import logger
-from autorepeater.order_plan import build_prepared_order_plan, prepare_order_preview, ready
+from autorepeater.order_plan import (
+    OrderPlan, build_prepared_order_plan, prepare_order_preview, ready,
+)
 from autorepeater.pass_planning import finalize_strategy_plan, prepare_strategy_context
 from autorepeater.strategy_contract import Strategy, validate_event_accounts, validate_strategy
 from autorepeater.strategy_data import DataAccessError, StrategyData
@@ -82,8 +85,25 @@ class AutoRepeater:
         return destination
 
     def sync_accounts(self, dst_account_id: str, *,
-                      valuation: Valuation | None = None) -> tuple[ExecutionReceipt, ...]:
+                      valuation: Valuation | None = None) -> ExecutionOutcome:
         """Validate every main target before reading rules or sending any order."""
+        with _record_confirmed_receipts():
+            orders, valuation = self._prepare_orders(dst_account_id, valuation)
+            reporting.print_rebalance_plan(orders, self.debug)
+            if self.debug:
+                return ExecutionOutcome(ExecutionState.NOOP, 'planning', 'no_execution')
+            if self.market is None and valuation is not None:
+                valuation.validate_fresh()
+                if any(rule.currency.lower() != 'rub' for rule in orders.rules.values()):
+                    raise ValueError(
+                        'FX financing is not supported until FX execution is integrated')
+        if self.market is not None and valuation is not None:
+            return self.market.execute(dst_account_id, orders, self.execution_data,
+                                       self.executor, valuation)
+        return execute_plan(dst_account_id, orders, self.execution_data, self.executor)
+
+    def _prepare_orders(self, dst_account_id: str, valuation: Valuation | None
+                        ) -> tuple[OrderPlan, Valuation | None]:
         try:
             self._wait_for_readiness(dst_account_id)
             self.data.begin_snapshot()
@@ -113,17 +133,7 @@ class AutoRepeater:
         except ValueError as error:
             logger.error('Rebalance rejected for destination %s: %s', dst_account_id, error)
             raise
-        reporting.print_rebalance_plan(orders, self.debug)
-        if self.debug:
-            return ()
-        if self.market is not None and valuation is not None:
-            return self.market.execute(dst_account_id, orders, self.execution_data,
-                                       self.executor, valuation)
-        if valuation is not None:
-            valuation.validate_fresh()
-            if any(rule.currency.lower() != 'rub' for rule in rules.values()):
-                raise ValueError('FX financing is not supported until FX execution is integrated')
-        return execute_plan(dst_account_id, orders, self.execution_data, self.executor)
+        return orders, valuation
 
     def _local_pass(self, dst: str) -> None:
         try:

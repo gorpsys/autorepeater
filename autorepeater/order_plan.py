@@ -21,7 +21,11 @@ PreparedOrderPreview = tuple[
 
 @dataclass(frozen=True)
 class OrderPlan:  # pylint: disable=too-many-instance-attributes
-    """One pass, including fixed ownership and initial spending permissions."""
+    """One pass, including fixed ownership and initial spending permissions.
+
+    ``buys`` previews purchases on the initial snapshot. Execution recalculates
+    purchases from refreshed positions, cash and limits.
+    """
     strategy: StrategyPlan
     snapshot: ExecutionSnapshot
     ownership: dict[tuple[int, ...], dict[str, Decimal]]
@@ -31,6 +35,15 @@ class OrderPlan:  # pylint: disable=too-many-instance-attributes
     sells: tuple[OrderIntent, ...]
     buys: tuple[OrderIntent, ...]
     funding: FundingPlan | None = None
+    sell_deltas: dict[str, Decimal] | None = None
+
+    def initial_sell_deltas(self, *, native: bool) -> dict[str, Decimal]:
+        """Recover pre-limit deltas when a caller constructs the plan directly."""
+        if self.sell_deltas is not None:
+            return self.sell_deltas
+        inputs = _sale_inputs(
+            self.strategy, self.snapshot, self.ownership, self.rules, native=native)
+        return {uid: delta for uid, _, delta, _, _ in inputs if delta > ZERO}
 
 
 def order_snapshot_ready(snapshot: ExecutionSnapshot) -> bool:
@@ -134,22 +147,47 @@ def _sale_capacities(strategy: StrategyPlan,
     return capacities, deltas
 
 
+def _sale_inputs(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                 ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                 rules: dict[str, TradeRules], *, native: bool
+                 ) -> Iterator[tuple[str, TradeRules | None, Decimal,
+                                     dict[tuple[int, ...], Decimal],
+                                     dict[tuple[int, ...], Decimal]]]:
+    """Find eligible excess and owner bounds before lot and broker limits."""
+    for uid, current in sorted(snapshot.quantities.items()):
+        rule = rules.get(uid)
+        if (rule is None or rule.currency != 'rub' and not native or not rule.api_trade_available
+                or not rule.bestprice_order_available):
+            yield uid, None, ZERO, {}, {}
+            continue
+        excess = max(ZERO, difference(current, strategy.target.quantities.get(uid, ZERO)))
+        capacities, deltas = _sale_capacities(strategy, ownership, uid)
+        yield uid, rule, min(excess, exact_sum(deltas.values())), capacities, deltas
+
+
 def iter_sale_steps(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
                     rules: dict[str, TradeRules], *, native: bool = False
                     ) -> Iterator[tuple[str, OrderIntent | None,
                                         Literal['unavailable', 'residual'] | None]]:
+    """Yield each sale intent and its deferral in UID order."""
+    for uid, intent, reason, _ in _iter_sale_steps(
+            strategy, snapshot, ownership, rules, native=native):
+        yield uid, intent, reason
+
+
+def _iter_sale_steps(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                     ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                     rules: dict[str, TradeRules], *, native: bool
+                     ) -> Iterator[tuple[str, OrderIntent | None,
+                                         Literal['unavailable', 'residual'] | None, Decimal]]:
     # pylint: disable=too-many-locals
-    """Net and round each UID in order, yielding its intent and any deferral."""
-    for uid, current in sorted(snapshot.quantities.items()):
-        rule = rules.get(uid)
-        if (rule is None or rule.currency != 'rub' and not native or not rule.api_trade_available
-                or not rule.bestprice_order_available):
-            yield uid, None, 'unavailable'
+    """Retain the pre-limit delta with each executable step for the full plan."""
+    for uid, rule, delta, capacities, deltas in _sale_inputs(
+            strategy, snapshot, ownership, rules, native=native):
+        if rule is None:
+            yield uid, None, 'unavailable', ZERO
             continue
-        excess = max(ZERO, difference(current, strategy.target.quantities.get(uid, ZERO)))
-        capacities, deltas = _sale_capacities(strategy, ownership, uid)
-        delta = min(excess, exact_sum(deltas.values()))
         with localcontext() as context:
             context.prec = max(28, len(delta.as_tuple().digits) + 4)
             rounded = int((delta / rule.lot).to_integral_value(rounding=ROUND_HALF_EVEN))
@@ -170,20 +208,31 @@ def iter_sale_steps(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                     pieces[path] = exact_sum((pieces.get(path, ZERO), quantity))
             intent = OrderIntent(uid, 'SELL', lots, rule.lot, pieces)
             validate_intent(intent)
-        yield uid, intent, 'residual' if delta != Decimal(lots * rule.lot) else None
+        yield uid, intent, 'residual' if delta != Decimal(lots * rule.lot) else None, delta
 
 
 def sale_intents(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                  ownership: dict[tuple[int, ...], dict[str, Decimal]],
                  rules: dict[str, TradeRules], *, native: bool = False) -> tuple[OrderIntent, ...]:
     """Report each UID's deferral before calculating the next UID."""
+    return _sale_preview(strategy, snapshot, ownership, rules, native=native)[0]
+
+
+def _sale_preview(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
+                  ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                  rules: dict[str, TradeRules], *, native: bool
+                  ) -> tuple[tuple[OrderIntent, ...], dict[str, Decimal]]:
     result = []
-    for uid, intent, reason in iter_sale_steps(strategy, snapshot, ownership, rules, native=native):
+    deltas = {}
+    for uid, intent, reason, delta in _iter_sale_steps(
+            strategy, snapshot, ownership, rules, native=native):
         if reason is not None:
             reporting.print_sale_deferral(uid, reason)
         if intent is not None:
             result.append(intent)
-    return tuple(result)
+        if delta > ZERO:
+            deltas[uid] = delta
+    return tuple(result), deltas
 
 
 def prepare_order_preview(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
@@ -208,7 +257,8 @@ def finish_order_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
                       preview: tuple[dict[tuple[int, ...], dict[str, Decimal]],
                                      dict[tuple[int, ...], Decimal],
                                      tuple[OrderIntent, ...], tuple[OrderIntent, ...]], *,
-                      funding: FundingInputs | None = None) -> OrderPlan:
+                      funding: FundingInputs | None = None,
+                      sell_deltas: dict[str, Decimal] | None = None) -> OrderPlan:
     # pylint: disable=too-many-arguments
     """Attach optional conditional funding after the executable preview."""
     ownership, money, sells, buys = preview
@@ -218,7 +268,7 @@ def finish_order_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
         funding_plan = build_funding_plan(strategy, snapshot, ownership, marks, rules,
                                           spending_limits(strategy, ownership, marks), funding)
     return OrderPlan(strategy, snapshot, ownership, dict(marks), dict(rules), money,
-                     sells, buys, funding_plan)
+                     sells, buys, funding_plan, sell_deltas)
 
 
 def build_order_plan(strategy: StrategyPlan, snapshot: ExecutionSnapshot,
@@ -238,9 +288,11 @@ def build_prepared_order_plan(strategy: StrategyPlan, snapshot: ExecutionSnapsho
     # pylint: disable=too-many-arguments
     """Build and report intents from the result of prepare_order_preview."""
     ownership, money = prepared
-    sells, buys = (), ()
+    sells, buys, sell_deltas = (), (), {}
     if ready(snapshot, stage='planning'):
-        sells = sale_intents(strategy, snapshot, ownership, rules, native=funding is not None)
+        sells, sell_deltas = _sale_preview(
+            strategy, snapshot, ownership, rules, native=funding is not None)
         buys = purchase_intents(strategy, snapshot, ownership, marks, rules, money)
-    return finish_order_plan(strategy, snapshot, marks, rules, (ownership, money, sells, buys),
-                             funding=funding)
+    return finish_order_plan(strategy, snapshot, marks, rules,
+                             (ownership, money, sells, buys), funding=funding,
+                             sell_deltas=sell_deltas)

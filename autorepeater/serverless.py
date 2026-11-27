@@ -1,7 +1,7 @@
 """Yandex Cloud Functions entrypoint."""
 import os
 
-from autorepeater.logging_config import configure_yc_logging
+from autorepeater.logging_config import configure_yc_logging, logger
 from autorepeater.reporting import print_launch
 from autorepeater.runner import Runner
 from autorepeater.strategies import prepare_strategy
@@ -60,12 +60,17 @@ def handler(event, context):
         token=invest_token,
         prepared_strategy=prepared,
         dst=dst)
-    runner.run_sync()
+    outcome = runner.run_sync()
+    if outcome is None:
+        raise RuntimeError('cloud sync returned no execution outcome')
+    logger.info('Pass outcome: state=%s stage=%s reason=%s confirmed_orders=%d',
+                outcome.state.value, outcome.stage, outcome.reason, len(outcome.receipts))
 
     return {
         'statusCode': 200,
         'headers': {
             'Content-Type': 'text/plain',
+            'X-Execution-Outcome': outcome.state.value,
         },
         'isBase64Encoded': False,
         'body': f'Success sync, {prepared.source_display} {dst}!',

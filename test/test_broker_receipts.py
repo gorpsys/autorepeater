@@ -427,7 +427,7 @@ def test_matching_pending_sale_polls_broker_id_then_buys(status, executed, clock
                      order_id='buy-broker-id'),
     ]
     orders.get_order_state.return_value = sdk_response('get_order_state')
-    result = execute_plan('dst', plan, data, executor)
+    result = execute_plan('dst', plan, data, executor).receipts
     assert [(item.uid, item.side, item.order_id) for item in result] == [
         ('expected-uid', 'SELL', 'broker-id'), ('buy-uid', 'BUY', 'buy-broker-id')]
     assert orders.mock_calls == [expected_call('submit_order'), expected_call('get_order_state'),

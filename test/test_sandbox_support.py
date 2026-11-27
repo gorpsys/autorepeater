@@ -3,6 +3,7 @@ import inspect
 import json
 import logging
 from decimal import Decimal
+from test.test_fx_execution import receipt as native_receipt, setup_plan
 from types import SimpleNamespace
 from unittest.mock import create_autospec
 
@@ -487,6 +488,45 @@ def test_order_journal_retains_structured_native_terminal_reason():
         journal.emit(logging.LogRecord('tinkoffBot', logging.INFO, '', 0, template, args, None))
     assert len(journal.events) == 1
     assert 'private' not in json.dumps(journal.events)
+
+
+def test_order_journal_keeps_native_fill_and_stop_separate_from_pass_outcome(caplog):
+    """An accepted FX fill and its old terminal reason still enter machine evidence."""
+    market, valuation, plan, data, executor, _, _ = setup_plan()
+    data.get_destination.return_value = plan.snapshot
+    data.get_trade_rules.return_value = plan.rules
+    executor.submit_order.side_effect = lambda _account, intent: native_receipt(intent)
+    with caplog.at_level(logging.INFO, logger='tinkoffBot'):
+        outcome = market.execute('dst', plan, data, executor, valuation)
+
+    native_end, = [record for record in caplog.records
+                   if record.msg.startswith('Native execution end:')]
+    assert native_end.msg == ('Native execution end: terminal_reason=%s remaining_buy_uids=%s '
+                              'omitted_count=%d')
+    assert native_end.args == ('fx_cash_attribution_unavailable', ['C'], 0)
+    journal = sandbox_support.OrderJournal()
+    for record in caplog.records:
+        journal.emit(record)
+    assert [event['event'] for event in journal.events] == [
+        'submit', 'confirm', 'native_execution_end']
+    fill, = outcome.receipts
+    assert (fill.uid, fill.side, fill.status) == ('cny-rub', 'BUY', 'FILL')
+    assert journal.events[1]['message'] == (
+        'Confirmed order: uid=cny-rub side=BUY order_id=broker-cny-rub status=FILL '
+        f'requested={fill.lots_requested} executed={fill.lots_executed}')
+    assert journal.events[2] == {
+        'event': 'native_execution_end', 'time': native_end.created,
+        'terminal_reason': 'fx_cash_attribution_unavailable', 'remaining_buy_uids': ['C'],
+        'omitted_count': 0,
+    }
+    assert (outcome.state.value, outcome.stage, outcome.reason) == (
+        'PARTIAL', 'after_exchange', 'cash_attribution_unavailable')
+    evidence = list(journal.events)
+    journal.emit(logging.LogRecord(
+        'tinkoffBot', logging.INFO, '', 0,
+        'Pass outcome: state=%s stage=%s reason=%s confirmed_orders=%d',
+        (outcome.state.value, outcome.stage, outcome.reason, len(outcome.receipts)), None))
+    assert journal.events == evidence
 
 
 def test_allowlisted_dump_reconstructs_cash_positions_and_operations(

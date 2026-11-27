@@ -15,7 +15,7 @@ from t_tech.invest.exceptions import RequestError
 from t_tech.invest import MoneyValue, OrderState, PostOrderResponse
 from t_tech.invest.services import OrdersService
 
-from autorepeater import cash_pools
+from autorepeater import cash_pools, reporting
 from autorepeater.execution_data import ExecutionData, ExecutionDataError
 from autorepeater.execution import (
     ExecutionReceipt, OrderExecutionError, OrderExecutor, execute_plan,
@@ -143,7 +143,11 @@ def test_fresh_money_and_caps_replan_no_fake_proceeds(caplog):
     data = Mock()
     data.get_destination.return_value = destination(cash='3')
     data.get_trade_rules.return_value = rules('X', 'Y', 'Z', buy=2)
-    result = execute_plan('offline', sale_plan(), data, executor)
+    plan = sale_plan()
+    reporting.print_rebalance_plan(plan, debug=False)
+    assert any(message.startswith('Intent UID X side=SELL lots=10 ')
+               for message in caplog.messages)
+    result = execute_plan('offline', plan, data, executor).receipts
     assert [(item.uid, item.side, item.lots_requested) for item in result] == [
         ('X', 'SELL', 10), ('Z', 'SELL', 10), ('Y', 'BUY', 2)]
     data.get_destination.assert_called_once_with('offline')
@@ -162,7 +166,7 @@ def test_fresh_active_order_defers_buys(caplog):
     executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
     data = Mock()
     data.get_destination.return_value = replace(destination(), active_orders=('old',))
-    assert len(execute_plan('offline', sale_plan(), data, executor)) == 2
+    assert len(execute_plan('offline', sale_plan(), data, executor).receipts) == 2
     assert 'stage=before_buys limits_ready=True active_orders=1' in caplog.text
     assert 'stage=before_buys confirmed_sells=2 confirmed_buys=0' in caplog.text
     assert 'side=BUY' not in caplog.text
@@ -184,7 +188,7 @@ def test_sale_settlement_waits_for_readiness_and_matching_positions(clock, guard
     data.get_destination.side_effect = [transient, destination(cash='30')]
     data.get_trade_rules.return_value = rules('X', 'Y', 'Z')
     with caplog.at_level('INFO', logger='tinkoffBot'):
-        result = execute_plan('offline', sale_plan(), data, executor)
+        result = execute_plan('offline', sale_plan(), data, executor).receipts
     assert [item.side for item in result] == ['SELL', 'SELL', 'BUY']
     assert executor.submit_order.call_count == 3
     executor.get_order_state.assert_not_called()
@@ -209,7 +213,9 @@ def test_sale_settlement_timeout_never_funds_buys(clock, caplog, blocked):
           patch.object(execution_module, 'allocate_rub_after_sales', autospec=True) as allocate):
         result = execute_plan('offline', sale_plan(), data, executor)
     allocate.assert_not_called()
-    assert [item.side for item in result] == ['SELL', 'SELL']
+    assert (result.state, result.stage, result.reason) == (
+        'PARTIAL', 'after_sales', 'settlement_timeout')
+    assert [item.side for item in result.receipts] == ['SELL', 'SELL']
     assert data.get_destination.call_count == 3
     assert clock.call_args_list == [call(2), call(2), call(1)]
     assert 'Execution settlement timeout' in caplog.text
@@ -234,7 +240,7 @@ def test_first_filled_buy_waits_before_next_purchase(clock, guard, caplog):
         transient, first, destination({'A': D(2), 'B': D(2)}, cash='6')]
     data.get_trade_rules.return_value = rules('A', 'B', 'C')
     with caplog.at_level('INFO', logger='tinkoffBot'):
-        result = execute_plan('offline', plan, data, executor)
+        result = execute_plan('offline', plan, data, executor).receipts
     assert [(item.uid, item.side) for item in result] == [
         ('A', 'BUY'), ('B', 'BUY'), ('C', 'BUY')]
     assert executor.submit_order.call_count == 3
@@ -249,13 +255,15 @@ def test_buy_settlement_timeout_preserves_one_confirmed_buy(clock, caplog):
     """A permanently blocked post-BUY state cannot cause a duplicate or a second purchase."""
     plan = build_order_plan(leaf(target={'A': D(2), 'B': D(2)}), destination(),
                             {(): {}}, {'A': D(1), 'B': D(1)}, rules('A', 'B'))
-    executor = Mock()
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
-    data = Mock()
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
     data.get_destination.return_value = replace(destination({'A': D(2)}), limits_ready=False)
     with caplog.at_level('INFO', logger='tinkoffBot'):
         result = execute_plan('offline', plan, data, executor)
-    assert [(item.uid, item.side) for item in result] == [('A', 'BUY')]
+    assert (result.state, result.stage, result.reason) == (
+        'PARTIAL', 'after_buy', 'settlement_timeout')
+    assert [(item.uid, item.side) for item in result.receipts] == [('A', 'BUY')]
     executor.submit_order.assert_called_once()
     assert data.get_destination.call_count == 3
     assert clock.call_args_list == [call(2), call(2), call(1)]
@@ -280,7 +288,7 @@ def test_pending_sale_polls_same_order_until_fill(clock, initial_status, caplog)
     data.get_destination.return_value = destination(cash='30')
     data.get_trade_rules.return_value = rules('X', 'Y', 'Z')
     with caplog.at_level('INFO', logger='tinkoffBot'):
-        result = execute_plan('offline', plan, data, executor)
+        result = execute_plan('offline', plan, data, executor).receipts
     assert [item.side for item in result] == ['SELL', 'SELL', 'BUY']
     assert executor.submit_order.call_count == 3
     assert executor.get_order_state.call_args_list == [
@@ -421,13 +429,15 @@ def test_next_purchase_uses_fresh_reduced_cash_and_caps():
     """next purchase uses fresh reduced cash and caps."""
     plan = build_order_plan(leaf(target={'A': D(2), 'B': D(2)}), destination(),
                             {(): {}}, {'A': D(1), 'B': D(1)}, rules('A', 'B'))
-    executor = Mock()
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
-    data = Mock()
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
     data.get_destination.return_value = destination({'A': D(2)}, cash='1')
     data.get_trade_rules.return_value = rules('A', 'B', buy=1)
     result = execute_plan('offline', plan, data, executor)
-    assert [(item.uid, item.lots_requested) for item in result] == [('A', 2), ('B', 1)]
+    assert (result.state, result.stage, result.reason) == (
+        'PARTIAL', 'finished', 'remaining_trade_delta')
+    assert [(item.uid, item.lots_requested) for item in result.receipts] == [('A', 2), ('B', 1)]
 
 
 def test_scoped_sale_cannot_unlock_neighbor_money_without_permission():
@@ -443,7 +453,7 @@ def test_scoped_sale_cannot_unlock_neighbor_money_without_permission():
     data = Mock()
     data.get_destination.return_value = destination(cash='20')
     data.get_trade_rules.return_value = rules('X', 'A', 'B')
-    result = execute_plan('offline', plan, data, executor)
+    result = execute_plan('offline', plan, data, executor).receipts
     assert [(item.uid, item.side) for item in result] == [('X', 'SELL'), ('A', 'BUY')]
 
 
@@ -480,16 +490,20 @@ def test_malformed_sdk_response_cannot_confirm_sale(response):
 
 
 def test_fresh_read_transport_stops_after_already_filled_sales():
-    """fresh read transport stops after already filled sales."""
-    executor = Mock()
+    """A failed refresh preserves its cause and preceding accepted sales in order."""
+    plan = sale_plan()
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
-    data = Mock()
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
     error = ExecutionDataError('offline refresh')
     data.get_destination.side_effect = error
     with pytest.raises(OrderExecutionError) as raised:
-        execute_plan('offline', sale_plan(), data, executor)
+        execute_plan('offline', plan, data, executor)
     assert raised.value.__cause__ is error
-    assert executor.submit_order.call_count == 2
+    assert execution_module.confirmed_receipts_from_error(raised.value) == tuple(
+        receipt(intent) for intent in plan.sells)
+    assert executor.mock_calls == [call.submit_order('offline', order) for order in plan.sells]
+    assert data.mock_calls == [call.get_destination('offline')]
 
 
 @pytest.mark.parametrize('fresh', [destination({'A': D(2)}, cash='0'),
@@ -504,15 +518,19 @@ def test_next_buy_defers_if_money_or_readiness_changes(fresh):
     data = Mock()
     data.get_destination.return_value = fresh
     data.get_trade_rules.return_value = rules('A', 'B')
-    assert len(execute_plan('offline', plan, data, executor)) == 1
+    assert len(execute_plan('offline', plan, data, executor).receipts) == 1
 
 
 def test_initial_active_old_order_stops_next_independent_pass():
     """initial active old order stops next independent pass."""
     plan = replace(sale_plan(), snapshot=replace(destination(), active_orders=('old',)))
-    executor = Mock()
-    assert not execute_plan('offline', plan, Mock(), executor)
-    executor.submit_order.assert_not_called()
+    executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
+    data = create_autospec(ExecutionData, instance=True, spec_set=True)
+    result = execute_plan('offline', plan, data, executor)
+    assert (result.state, result.stage, result.reason) == (
+        'DEFERRED', 'before_sales', 'snapshot_not_ready')
+    assert not result.receipts
+    assert not data.mock_calls and not executor.mock_calls
 
 
 def test_sale_position_attribution_remains_fixed_after_refresh():
@@ -529,7 +547,8 @@ def test_sale_position_attribution_remains_fixed_after_refresh():
     data = Mock()
     data.get_destination.return_value = destination({'X': D(10)}, cash='100')
     data.get_trade_rules.return_value = rules('X', 'Y', lot=10)
-    assert [(item.uid, item.side) for item in execute_plan('offline', plan, data, executor)] == [
+    receipts = execute_plan('offline', plan, data, executor).receipts
+    assert [(item.uid, item.side) for item in receipts] == [
         ('X', 'SELL'), ('Y', 'BUY')]
     assert executor.submit_order.call_args.args[1].pieces == {(0,): D(10)}
     assert executor.submit_order.call_args.args[1].lots == 1
@@ -549,7 +568,8 @@ def test_nested_redistribution_permission_not_erased_by_parent():
     data = Mock()
     data.get_destination.return_value = destination(cash='30')
     data.get_trade_rules.return_value = rules('X', 'A', 'B', 'C')
-    assert [(item.uid, item.side) for item in execute_plan('offline', plan, data, executor)] == [
+    receipts = execute_plan('offline', plan, data, executor).receipts
+    assert [(item.uid, item.side) for item in receipts] == [
         ('X', 'SELL'), ('A', 'BUY')]
 
 
@@ -560,7 +580,7 @@ def test_unsettled_positions_defer_and_do_not_reattribute_protected_owner():
     data = Mock()
     data.get_destination.return_value = destination({'X': D(10)}, cash='100')
     data.get_trade_rules.return_value = rules('X', 'Y', 'Z')
-    result = execute_plan('offline', sale_plan(), data, executor)
+    result = execute_plan('offline', sale_plan(), data, executor).receipts
     assert [item.side for item in result] == ['SELL', 'SELL']
 
 
@@ -577,7 +597,8 @@ def test_root_transfer_permission_allows_fresh_actual_money_to_sibling():
     data.get_destination.side_effect = [destination(cash='20'),
                                         destination({'A': D(10)}, cash='10')]
     data.get_trade_rules.return_value = rules('X', 'A', 'B')
-    assert [item.uid for item in execute_plan('offline', plan, data, executor)] == ['X', 'A', 'B']
+    receipts = execute_plan('offline', plan, data, executor).receipts
+    assert [item.uid for item in receipts] == ['X', 'A', 'B']
 
 
 def test_unassigned_fresh_money_uses_own_node_without_global_transfer_permission():
@@ -590,7 +611,8 @@ def test_unassigned_fresh_money_uses_own_node_without_global_transfer_permission
     data = Mock()
     data.get_destination.return_value = destination(cash='10')
     data.get_trade_rules.return_value = rules('X', 'Y')
-    assert [item.uid for item in execute_plan('offline', plan, data, executor)] == ['X', 'Y']
+    receipts = execute_plan('offline', plan, data, executor).receipts
+    assert [item.uid for item in receipts] == ['X', 'Y']
 
 
 @pytest.mark.parametrize('documented', [True, False])
@@ -610,7 +632,7 @@ def test_unequal_isolated_sales_preserve_cash_origins(documented, caplog):
                                         destination({'A': D(100), 'B': D(50)}, cash='50')]
     data.get_trade_rules.return_value = rules('A', 'B', 'X', 'Y')
     with caplog.at_level('INFO', logger='tinkoffBot'):
-        result = execute_plan('offline', plan, data, executor)
+        result = execute_plan('offline', plan, data, executor).receipts
     expected = [('X', 'SELL', 150), ('Y', 'SELL', 50)]
     if documented:
         expected += [('A', 'BUY', 100), ('B', 'BUY', 50)]
@@ -619,14 +641,14 @@ def test_unequal_isolated_sales_preserve_cash_origins(documented, caplog):
     assert [(item.uid, item.side, item.lots_requested) for item in result] == expected
 
 
-def test_refresh_replaces_entire_buy_queue_with_new_candidates():
-    """A reduced own lot cap frees money for a UID absent from the first queue."""
+def test_refresh_replaces_entire_buy_queue_with_new_candidates(caplog):
+    """Show the preview before submission and confirmed amounts after replanning."""
     limits = {uid: replace(rule, buy_money_amount=D(20))
               for uid, rule in rules('A', 'B', 'C').items()}
     plan = build_order_plan(leaf(target={'A': D(1), 'B': D(2), 'C': D(1)}),
                             destination(cash='20'), {(): {}},
                             {'A': D(10), 'B': D(5), 'C': D(1)}, limits)
-    assert [item.uid for item in plan.buys] == ['A', 'B']
+    assert [(item.uid, item.lots) for item in plan.buys] == [('A', 1), ('B', 2)]
     data = create_autospec(ExecutionData, instance=True, spec_set=True)
     data.get_destination.side_effect = [destination({'A': D(1)}, cash='10'),
                                         destination({'A': D(1), 'B': D(1)}, cash='5'),
@@ -634,8 +656,22 @@ def test_refresh_replaces_entire_buy_queue_with_new_candidates():
     data.get_trade_rules.return_value = {**limits, 'B': replace(limits['B'], buy_max_lots=1)}
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     executor.submit_order.side_effect = lambda _account, intent: receipt(intent)
-    assert [(item.uid, item.lots_requested) for item in execute_plan(
-        'offline', plan, data, executor)] == [('A', 1), ('B', 1), ('C', 1)]
+    with caplog.at_level('INFO', logger='tinkoffBot'):
+        reporting.print_rebalance_plan(plan, debug=False)
+        executor.submit_order.assert_not_called()
+        result = execute_plan('offline', plan, data, executor).receipts
+    assert [(item.uid, item.lots_requested) for item in result] == [('A', 1), ('B', 1), ('C', 1)]
+    assert [message for message in caplog.messages if message.startswith(
+        ('Preview BUY ', 'Submitting order:', 'Confirmed order:'))] == [
+            'Preview BUY uid=A lots=1 pieces={(): 1.0}',
+            'Preview BUY uid=B lots=2 pieces={(): 2.0}',
+            'Submitting order: account=offline uid=A side=BUY lots=1',
+            'Confirmed order: uid=A side=BUY order_id=id status=FILL requested=1 executed=1',
+            'Submitting order: account=offline uid=B side=BUY lots=1',
+            'Confirmed order: uid=B side=BUY order_id=id status=FILL requested=1 executed=1',
+            'Submitting order: account=offline uid=C side=BUY lots=1',
+            'Confirmed order: uid=C side=BUY order_id=id status=FILL requested=1 executed=1',
+        ]
 
 
 def test_unknown_common_sale_cannot_launder_isolated_sale_cash(caplog):
@@ -655,7 +691,7 @@ def test_unknown_common_sale_cannot_launder_isolated_sale_cash(caplog):
                                         destination({'A': D(100)}, cash='100')]
     data.get_trade_rules.return_value = rules('A', 'B', 'C', 'X', 'Z')
     with caplog.at_level('INFO', logger='tinkoffBot'):
-        result = execute_plan('offline', plan, data, executor)
+        result = execute_plan('offline', plan, data, executor).receipts
     assert [(item.uid, item.side) for item in result] == [('X', 'SELL'), ('Z', 'SELL')]
     assert any('Defer scoped purchases' in line for line in caplog.messages)
 
@@ -709,7 +745,7 @@ def test_flat_mixed_sale_scopes_require_proven_credits(
     data.get_destination.side_effect = fresh_destination
     data.get_trade_rules.return_value = limits
     with caplog.at_level('INFO', logger='tinkoffBot'):
-        result = execute_plan('offline', plan, data, executor)
+        result = execute_plan('offline', plan, data, executor).receipts
     expected = [(intent.uid, 'SELL', intent.lots) for intent in plan.sells]
     if credit == 'isolated':
         expected.append(('A', 'BUY', int(quantities['X'])))
@@ -744,7 +780,7 @@ def test_all_common_sale_scopes_preserve_unknown_fallback_and_proven_credits(
                                         destination({'A': amount}, cash=str(D(200) - amount))]
     data.get_trade_rules.return_value = limits
     assert [(item.uid, item.side, item.lots_requested) for item in execute_plan(
-        'offline', plan, data, executor)] == [
+        'offline', plan, data, executor).receipts] == [
             ('X', 'SELL', 150), ('Z', 'SELL', 50),
             ('A', 'BUY', int(amount)), ('B', 'BUY', int(amount))]
     assert executor.mock_calls == [
@@ -871,7 +907,7 @@ def test_rub_buy_without_sales_uses_the_initial_snapshot(clock):
     executor = create_autospec(OrderExecutor, instance=True, spec_set=True)
     intent, = plan.buys
     executor.submit_order.return_value = receipt(intent)
-    assert execute_plan('offline', plan, data, executor) == (receipt(intent),)
+    assert execute_plan('offline', plan, data, executor).receipts == (receipt(intent),)
     assert executor.mock_calls == [call.submit_order('offline', intent)]
     assert not data.mock_calls
     clock.assert_not_called()

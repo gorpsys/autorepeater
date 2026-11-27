@@ -85,7 +85,7 @@ def test_shared_uid_composite_uses_one_book_and_one_fx_before_any_effect(debug):
     repeater.set_debug(debug)
     with patch('autorepeater.repeater.reporting.print_rebalance_plan') as report:
         if debug:
-            assert not repeater.sync_accounts('dst', valuation=value)
+            assert not repeater.sync_accounts('dst', valuation=value).receipts
         else:
             with pytest.raises(ValueError, match='FX financing is not supported'):
                 repeater.sync_accounts('dst', valuation=value)

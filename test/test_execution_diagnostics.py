@@ -24,10 +24,12 @@ from autorepeater import (
 from autorepeater.logging_config import LOGGER_NAME
 from autorepeater.portfolio import TargetPortfolio
 from autorepeater.strategy_data import InstrumentType, PortfolioEntry, PositionEvent
-from autorepeater.execution import ExecutionReceipt, OrderExecutionError
+from autorepeater.execution import (
+    ExecutionOutcome, ExecutionReceipt, ExecutionState, OrderExecutionError,
+)
 from autorepeater.execution_data import ExecutionDataError
 from autorepeater.repeater import AutoRepeater
-from autorepeater.order_plan import build_order_plan
+from autorepeater.order_plan import _sale_inputs, build_order_plan
 
 __all__ = ['client_tinvest', 'fixture_runtime', 'fixture_launch']
 
@@ -46,7 +48,7 @@ def test_policy_money_rules_and_debug_are_info(runtime, caplog):
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         engine.sync_accounts('dst')
     for fragment in ('Target position', 'mode=BUY_ONLY', 'metric=None', 'cash_floor=0',
-                     'scoped_money', 'Rules UID stock', 'Intent UID stock', 'debug=True'):
+                     'scoped_money', 'Rules UID stock', 'Preview BUY uid=stock', 'debug=True'):
         assert any(fragment in message for message in caplog.messages)
     assert all(record.levelno == logging.INFO for record in caplog.records)
     executor.submit_order.assert_not_called()
@@ -63,6 +65,8 @@ def test_partial_result_is_error_and_stops(runtime, caplog):
         AutoRepeater(strategy, data, execution, executor).sync_accounts('dst')
     assert any(record.levelno == logging.ERROR and 'status NEW' in record.message
                for record in caplog.records)
+    assert 'Preview BUY uid=stock' in caplog.text
+    assert 'Confirmed order:' not in caplog.text
 
 
 def test_unavailable_bestprice_is_info_skip(runtime, caplog):
@@ -79,7 +83,7 @@ def test_unavailable_bestprice_is_info_skip(runtime, caplog):
 
 def test_executable_preview_calculates_each_order_queue_once():
     """Logging facades consume both executable calculations without repeating them."""
-    with (patch.object(order_plan, 'iter_sale_steps', wraps=order_plan.iter_sale_steps) as sells,
+    with (patch.object(order_plan, '_sale_inputs', wraps=_sale_inputs) as sells,
           patch.object(purchase_plan, 'calculate_purchase_intents',
                        wraps=purchase_plan.calculate_purchase_intents) as buys):
         plan = build_order_plan(leaf(), destination(), {(): {}},
@@ -96,6 +100,8 @@ def test_cloud_logs_resolved_selection_without_credentials(algoritm, src, caplog
     with patch.object(serverless, 'Runner', autospec=True) as runner, \
             patch.object(serverless, 'configure_yc_logging'), \
             caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+        runner.return_value.run_sync.return_value = ExecutionOutcome(
+            ExecutionState.NOOP, 'finished', 'no_execution')
         serverless.handler(
             {'queryStringParameters': {'algoritm': algoritm, 'src': src, 'dst': 'dst'}}, None)
     assert f'Launch: algoritm={algoritm} src={src} dst=dst' in caplog.messages
@@ -235,6 +241,7 @@ def test_runner_boundary_failure_retains_diagnostics_cause_and_stops(mode, level
     assert record.exc_info[1].__cause__ is error.__cause__
     assert 'outgoing-credential-only' not in caplog.text
     assert 'Intent UID' not in caplog.text
+    assert 'Preview BUY' not in caplog.text
     client.orders.post_order.assert_not_called()
     client.orders.cancel_order.assert_not_called()
     client.instruments.find_instrument.assert_not_called()

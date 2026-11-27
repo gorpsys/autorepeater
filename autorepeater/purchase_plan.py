@@ -10,6 +10,32 @@ from autorepeater.strategy_plan import (
 )
 
 
+def _buy_allowed(rule: TradeRules, *, native: bool) -> bool:
+    return ((native or rule.currency == 'rub')
+            and rule.api_trade_available and rule.bestprice_order_available)
+
+
+def _quantity_gap(target: Decimal, current: Decimal) -> Decimal:
+    return max(ZERO, difference(target, current))
+
+
+def has_buy_delta(strategy: StrategyPlan, ownership: dict[tuple[int, ...], dict[str, Decimal]],
+                  rules: dict[str, TradeRules], *, native: bool) -> bool:
+    """Use current ownership and permissions before money, lot and numeric limits."""
+    owners = leaves(strategy)
+    for uid, target in strategy.target.quantities.items():
+        rule = rules.get(uid)
+        if rule is None or not _buy_allowed(rule, native=native):
+            continue
+        total = exact_sum(positions.get(uid, ZERO) for positions in ownership.values())
+        if _quantity_gap(target, total) > ZERO and any(
+                _quantity_gap(node.target.quantities.get(uid, ZERO),
+                              ownership[path].get(uid, ZERO)) > ZERO
+                for path, node in owners.items()):
+            return True
+    return False
+
+
 def _candidate(uid: str, state: tuple[
         StrategyPlan, dict[tuple[int, ...], dict[str, Decimal]], dict[str, Decimal],
         dict[str, TradeRules], dict[tuple[int, ...], Decimal], dict[str, Decimal],
@@ -19,18 +45,16 @@ def _candidate(uid: str, state: tuple[
     # pylint: disable=too-many-locals
     strategy, ownership, marks, rules, money, quantities, used, remaining, spent = state
     rule = rules.get(uid)
-    if rule is None or (not conditional and rule.currency != 'rub'):
-        return None
-    if (strategy.target.quantities[uid] == 0 or not rule.api_trade_available
-            or not rule.bestprice_order_available):
+    if (rule is None or not _buy_allowed(rule, native=conditional)
+            or strategy.target.quantities[uid] == ZERO):
         return None
     price = marks[uid]
     cost = exact_product(price, Decimal(rule.lot))
-    aggregate = max(ZERO, difference(strategy.target.quantities[uid], quantities.get(uid, ZERO)))
+    aggregate = _quantity_gap(strategy.target.quantities[uid], quantities.get(uid, ZERO))
     capacities = {}
     for path, node in leaves(strategy).items():
-        gap = max(ZERO, difference(node.target.quantities.get(uid, ZERO),
-                                   ownership[path].get(uid, ZERO)))
+        gap = _quantity_gap(node.target.quantities.get(uid, ZERO),
+                            ownership[path].get(uid, ZERO))
         with localcontext() as context:
             context.rounding = ROUND_FLOOR
             context.prec = max(28, len(money[path].as_tuple().digits)

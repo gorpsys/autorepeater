@@ -134,6 +134,15 @@ may initiate a fresh pass. Programming errors are not caught as broker failures.
 The diagnostic boundary preserves the original exception identity, traceback and
 cause without changing fail-stop behavior.
 
+RUB and native execution attach `confirmed_receipts` to an `OrderExecutionError`
+or to a raw `TimeoutError` raised by `OrderExecutor.submit_order` after confirmed
+fills. `confirmed_receipts_from_error(error)` exposes that optional tuple in
+acceptance order. It includes only full fills previously verified in the current
+pass, including accepted FX fills. The exception instance, type, cause, traceback
+and request ID are preserved. A timeout outside submission or a failed preparation
+clears stale receipt context if an exception instance is reused. Normal completion
+separately returns an `ExecutionOutcome` with verified receipts.
+
 These are local DTO, adapter and lifecycle checks. They do not establish that
 every live response populates the schema, or constitute sandbox/production or
 cloud deployment acceptance; those checks require separate authorization.

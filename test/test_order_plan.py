@@ -77,13 +77,18 @@ def test_fractional_sellers_form_one_physical_lot():
     assert exact_sum(intent.pieces.values()) == D(intent.lots * intent.lot_size)
 
 
-def test_opposing_virtual_changes_do_not_trade():
-    """opposing virtual changes do not trade."""
+def opposing_virtual_changes_plan():
+    """A composite with opposing leaf changes and an unchanged total position."""
     tree = parent((leaf((0,), {'X': D(5)}, sell=True), leaf((1,), {'X': D(5)})))
-    result = build_order_plan(tree, destination({'X': D(10)}),
-                              {(0,): {'X': D(10)}, (1,): {}}, {'X': D(1)}, rules('X'))
-    assert not result.sells
-    assert not result.buys
+    return build_order_plan(tree, destination({'X': D(10)}),
+                            {(0,): {'X': D(10)}, (1,): {}}, {'X': D(1)}, rules('X'))
+
+
+def test_opposing_virtual_changes_do_not_trade():
+    """Equal account totals leave no trade delta despite opposite leaf changes."""
+    plan = opposing_virtual_changes_plan()
+    assert not plan.sells
+    assert not plan.buys
 
 
 def test_unassigned_sale_and_dust_are_separate_from_buy_only():
@@ -193,6 +198,7 @@ def test_physical_calculations_use_only_loaded_inputs(monkeypatch):
         guard.setattr('logging.Logger._log', fail)
         ownership, money = order_plan.prepare_order_preview(tree, snapshot, initial, marks, own)
         steps = list(order_plan.iter_sale_steps(tree, snapshot, ownership, own))
+        assert steps == [('X', sell, 'residual')]
         buys = purchase_plan.calculate_purchase_intents(
             tree, snapshot, ownership, marks, own, money)
         assert not purchase_plan.calculate_purchase_intents(
@@ -200,9 +206,9 @@ def test_physical_calculations_use_only_loaded_inputs(monkeypatch):
         plan = order_plan.finish_order_plan(tree, snapshot, marks, own,
                                             (ownership, money, (sell,), buys),
                                             funding=FundingInputs())
+        assert plan.initial_sell_deltas(native=True) == {'X': D('3.5')}
     assert initial == {(0,): {}}
     assert ownership == {(0,): {}, (): {'X': D('3.5')}} and money == {(0,): D(100)}
-    assert steps == [('X', sell, 'residual')]
     assert plan.sells == (sell,) and plan.buys == (buy,)
     assert plan.marks == marks and plan.marks is not marks
     assert plan.rules == own and plan.rules is not own

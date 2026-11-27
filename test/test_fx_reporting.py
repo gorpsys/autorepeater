@@ -173,7 +173,7 @@ def test_deferred_buy_after_fx_explains_fresh_caps_and_retains_fill(caplog):
     data.get_trade_rules.return_value = rules('C', currency='cny', buy=0)
     executor.submit_order.side_effect = lambda account, order: receipt(order, '828')
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        results = broker.execute('dst', plan, data, executor, value)
+        results = broker.execute('dst', plan, data, executor, value).receipts
     assert [item.uid for item in results] == ['cny-rub']
     assert any('Defer remaining purchases: native cash/FX lot/own caps/budget' in message
                for message in caplog.messages)
